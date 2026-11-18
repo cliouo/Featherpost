@@ -1,9 +1,8 @@
 name: macOS Release Gate
 
+# Tag-push trigger disabled to save GitHub Actions minutes; run manually from the Actions tab (select the tag ref).
 on:
-  push:
-    tags:
-      - 'v*'
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -37,7 +36,7 @@ jobs:
           set -euo pipefail
           version=${GITHUB_REF_NAME#v}
           printf '%s\n' "$version" | LC_ALL=C grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'
-          # brand.toml drift is gated by ci.yml's `brand` job on the same push; packaging
+          # brand.toml drift is gated by `scripts/sync-brand.sh --check` (ci.yml `brand` job, manual-only); packaging
           # additionally refuses *-bundle-id.txt that differ from brand.env (verify-bundle.sh).
           . packaging/macos/brand.env
           for pair in "App:app" "Agent:agent" "Menu:menu"; do
