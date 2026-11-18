@@ -1,0 +1,9 @@
+[package]
+name = "maild-brand"
+version = "0.1.0"
+edition = "2021"
+description = "Product brand constants generated from the repository's brand.toml"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[dependencies]

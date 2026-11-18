@@ -1,0 +1,24 @@
+[workspace]
+members = [
+    "crates/cordis",
+    "crates/maild-brand",
+    "crates/maild",
+    "crates/maild-client",
+    "crates/maild-paths",
+    "crates/maild-app",
+    "crates/maild-launcher",
+    "crates/maild-menu",
+    "crates/maild-ui",
+    "plugins/nodeseek-email",
+]
+resolver = "2"
+
+[workspace.package]
+license = "MIT OR Apache-2.0"
+
+# ADR-0041 决策 7：常驻守护进程的体积与指令缓存占用。thin LTO + 单 codegen unit 换更紧凑的
+# 机器码；只剥符号表（保留 unwind 信息，panic 回溯仍可用）。
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

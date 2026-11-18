@@ -1,0 +1,68 @@
+/* 纸面阅读工作台的 token（DESIGN.md §2/§3/§4）。组件只认变量，不写颜色。 */
+:root {
+  color-scheme: light;
+  --sidebar: oklch(94% 0.008 155);
+  --canvas: oklch(97% 0.004 155);
+  --surface: oklch(100% 0 0);
+  --ink: oklch(26% 0.018 155);
+  --muted: oklch(48% 0.015 155);
+  --accent: oklch(43% 0.085 165);
+  --selected: oklch(91% 0.035 165);
+  --line: oklch(89% 0.009 155);
+  --warning: oklch(47% 0.09 65);
+  --danger: oklch(47% 0.15 28);
+  --wash: oklch(96% 0.027 85);
+  --on-accent: #fff;
+  --r-sm: 6px;
+  --r-md: 8px;
+  --r-lg: 12px;
+  --nav-width: 216px;
+  --list-width: 344px;
+  --row-height: 90px;
+  --bar-height: 64px;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--ink);
+  background: var(--canvas);
+  -webkit-font-smoothing: antialiased;
+}
+:root[data-theme="dark"],
+:root:not([data-theme="light"]) {
+  /* 占位：下方媒体查询与显式 dark 各自覆盖 */
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --sidebar: oklch(19% 0.008 155);
+    --canvas: oklch(16% 0.006 155);
+    --surface: oklch(22% 0.008 155);
+    --ink: oklch(92% 0.008 155);
+    --muted: oklch(72% 0.012 155);
+    --accent: oklch(77% 0.08 165);
+    --selected: oklch(30% 0.04 165);
+    --line: oklch(33% 0.012 155);
+    --warning: oklch(81% 0.09 65);
+    --danger: oklch(78% 0.1 28);
+    --wash: oklch(26% 0.025 75);
+    --on-accent: #14281e;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --sidebar: oklch(19% 0.008 155);
+  --canvas: oklch(16% 0.006 155);
+  --surface: oklch(22% 0.008 155);
+  --ink: oklch(92% 0.008 155);
+  --muted: oklch(72% 0.012 155);
+  --accent: oklch(77% 0.08 165);
+  --selected: oklch(30% 0.04 165);
+  --line: oklch(33% 0.012 155);
+  --warning: oklch(81% 0.09 65);
+  --danger: oklch(78% 0.1 28);
+  --wash: oklch(26% 0.025 75);
+  --on-accent: #14281e;
+}
+:root[data-density="compact"] {
+  --row-height: 68px;
+}

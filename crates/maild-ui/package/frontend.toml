@@ -1,0 +1,27 @@
+# 默认前端的 frontend package manifest（ADR-0031 决策 6）。
+#
+# `id` / `name` 由 scripts/sync-brand.sh 从 brand.toml（ui_bundle_id / product_name）同步，勿手改。
+# 开发期 lifecycle = independent：你自己 `cargo run -p maild-ui`，daemon 只排队 intent。
+# 安装包内的副本由 packaging/macos/templates/ 下的 frontend manifest 模板生成：同一个 id、
+# 同一份路由与授权声明（maild 的 recovery 测试强制一致），只改为 on_demand + 指向
+# UI bundle（brand.toml 的 ui_bundle_name）的 [launch]（ADR-0039）。开发期手工安装：
+#
+#   <cli_ctl> plugin install --frontend crates/maild-ui/package
+schema_version = 2
+protocol_version = 1
+id = "dev.featherpost.ui"
+name = "Featherpost"
+version = "0.1.0"
+lifecycle = "independent"
+capabilities = ["inbox", "message", "compose", "settings", "background"]
+# ADR-0030 的授权词。每一个都对应「设置」里用户能看见的一段功能；少一个那段就是灰的，
+# 多一个就是没解释的权限——两边都不许。
+permissions = [
+  "drafts_read",
+  "drafts_write",
+  "mailbox_write",       # 已读/星标/归档/删除与离线队列裁决
+  "accounts_manage",     # 账户中心
+  "addresses_manage",    # 别名与一次性地址
+  "plugins_manage",      # 设置 → 扩展：安装/升级/回滚/启停受管包
+  "notifications_read",  # 设置 → 通知：系统授权状态
+]

@@ -1,0 +1,26 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Featherpost",
+  "version": "0.1.0",
+  "identifier": "dev.featherpost.ui",
+  "build": {
+    "devUrl": "http://127.0.0.1:1420",
+    "frontendDist": "../../packages/maild-ui/dist",
+    "beforeDevCommand": "pnpm --dir ../../packages/maild-ui dev",
+    "beforeBuildCommand": "pnpm --dir ../../packages/maild-ui build"
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "windows": [],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src ipc: http://ipc.localhost; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src featherpost-mail:"
+    }
+  },
+  "bundle": {
+    "active": false,
+    "icon": [
+      "icons/icon.png",
+      "icons/icon.ico"
+    ]
+  }
+}

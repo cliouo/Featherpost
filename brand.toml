@@ -1,0 +1,28 @@
+# Single source of truth for product branding, OS bundle identities, CLI names, and filesystem paths.
+# Edit this file and run `bash scripts/sync-brand.sh` to propagate changes across Rust, TypeScript,
+# Tauri, Cargo binary targets, and macOS packaging. CI enforces `bash scripts/sync-brand.sh --check`.
+
+product_name = "Featherpost"
+slug = "featherpost"
+env_prefix = "FEATHERPOST"
+
+cli_daemon = "featherpostd"
+cli_ctl = "featherpostctl"
+launcher_bin = "featherpost-launcher"
+agent_bin = "featherpost-agent"
+menu_bin = "featherpost-menu"
+ui_bin = "featherpost-ui"
+
+app_bundle_name = "Featherpost.app"
+agent_bundle_name = "Featherpost Agent.app"
+menu_bundle_name = "Featherpost Menu.app"
+ui_bundle_name = "Featherpost UI.app"
+icon_name = "Featherpost"
+
+app_bundle_id = "dev.featherpost.desktop"
+agent_bundle_id = "dev.featherpost.agent"
+menu_bundle_id = "dev.featherpost.menu"
+ui_bundle_id = "dev.featherpost.ui"
+
+uri_scheme = "featherpost-mail"
+keychain_service = "featherpost.account.credentials.v1"

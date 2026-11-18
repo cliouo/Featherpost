@@ -1,0 +1,14 @@
+node_modules/
+reference/
+.pnpm-store/
+dist/
+.tools/*
+!.tools/stalwart/
+.tools/stalwart/*
+!.tools/stalwart/README.md
+!.tools/stalwart/start.sh
+*.log
+.rustup/
+.cargo-home/
+target/
+.DS_Store

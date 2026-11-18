@@ -1,0 +1,11 @@
+# maild 示例配置（R3 loader 演示）
+# [plugins.<name>] 表逐项装配；enabled = false 跳过；<name>.config 反序列化为插件配置。
+
+[plugins.receive]
+[plugins.receive.config]
+server = "imap.mailpit.local:993"
+idle = true
+
+[plugins.otp]
+[plugins.otp.config]
+pattern = "\\d{6}"

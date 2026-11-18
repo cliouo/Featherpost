@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  brand:
+    name: Brand sync (brand.toml -> derived files)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check generated brand files are in sync with brand.toml
+        run: bash scripts/sync-brand.sh --check
+
+  rust:
+    name: Rust (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Test workspace
+        run: cargo test --workspace --all-targets --locked
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Test Tauri UI webview package
+        if: runner.os == 'macOS'
+        run: |
+          corepack enable
+          pnpm --dir packages/maild-ui install --frozen-lockfile
+          pnpm --dir packages/maild-ui exec tsc --noEmit -p tsconfig.json
+          pnpm --dir packages/maild-ui test
+      - name: Test macOS packaging scripts
+        if: runner.os == 'macOS'
+        run: |
+          bash -n packaging/macos/*.sh packaging/macos/tests/*.sh
+          packaging/macos/tests/test_bundle.sh
+          packaging/macos/tests/test_release.sh
+          packaging/macos/tests/test_lifecycle.sh
+      - name: Add universal2 Rust targets
+        if: runner.os == 'macOS'
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+      - name: Build and verify actual universal2 bundle
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Every artifact name comes from brand.env (generated from brand.toml).
+          . packaging/macos/brand.env
+          package_dir="$RUNNER_TEMP/$BRAND_SLUG-package"
+          app="$package_dir/$BRAND_APP_BUNDLE"
+          dmg="$package_dir/$BRAND_PRODUCT_NAME-preview.dmg"
+          mkdir -p "$package_dir"
+          chmod 0700 "$package_dir"
+          packaging/macos/build-universal.sh --output "$app"
+          packaging/macos/verify-bundle.sh "$app"
+          packaging/macos/build-preview-dmg.sh --app "$app" --output "$dmg"
+          hdiutil verify "$dmg"

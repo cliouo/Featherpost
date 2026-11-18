@@ -1,0 +1,9 @@
+schema_version = 1
+protocol_version = 1
+id = "app.maild.provider.nodeseek-email"
+name = "NodeSeek Email (Featherpost Community Adapter)"
+version = "0.1.6"
+lifecycle = "supervised"
+capabilities = ["transport_provider"]
+executable = "bin/nodeseek-email-provider"
+ui_executable = "bin/nodeseek-email-ui"

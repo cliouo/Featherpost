@@ -1,0 +1,61 @@
+[package]
+name = "maild-provider-nodeseek-email"
+version = "0.1.6"
+edition = "2021"
+description = "Community NodeSeek Email provider for maild"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[lib]
+name = "nodeseek_email"
+
+[[bin]]
+name = "nodeseek-email-provider"
+path = "src/bin/nodeseek-email-provider.rs"
+
+[[bin]]
+name = "nodeseek-email"
+path = "src/bin/nodeseek-email.rs"
+
+[[bin]]
+name = "nodeseek-email-ui"
+path = "src/bin/nodeseek-email-ui.rs"
+required-features = ["ui"]
+
+[features]
+default = []
+live-tests = []
+ui = ["dep:eframe", "dep:ttf-parser"]
+
+[dependencies]
+maild-brand = { path = "../../crates/maild-brand" }
+clap = { version = "4.6.6", features = ["derive"] }
+eframe = { version = "0.36.1", default-features = false, optional = true, features = [
+    "accesskit",
+    "default_fonts",
+    "glow",
+    "wayland",
+    "x11",
+] }
+httpdate = "1.0.3"
+libc = "0.2.183"
+maild-client = { path = "../../crates/maild-client" }
+maild-paths = { path = "../../crates/maild-paths" }
+reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls", "stream"] }
+rusqlite = { version = "0.37.0", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+time = { version = "0.3.55", features = ["parsing"] }
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "signal", "sync", "time"] }
+ttf-parser = { version = "0.25", optional = true }
+url = "2.5.8"
+zeroize = "1.9.0"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10"
+core-foundation-sys = "0.8.6"
+security-framework = "3.7.0"
+security-framework-sys = "2.17.0"
+
+[dev-dependencies]
+tempfile = "3.27.0"

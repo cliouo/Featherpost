@@ -1,0 +1,13 @@
+{
+  "name": "featherpost",
+  "private": true,
+  "license": "MIT OR Apache-2.0",
+  "description": "Featherpost workspace root: the default frontend webview lives in packages/maild-ui",
+  "scripts": {
+    "ui:dev": "pnpm --dir packages/maild-ui dev",
+    "ui:build": "pnpm --dir packages/maild-ui build",
+    "ui:test": "pnpm --dir packages/maild-ui test",
+    "ui:typecheck": "pnpm --dir packages/maild-ui typecheck"
+  },
+  "packageManager": "pnpm@11.21.0"
+}

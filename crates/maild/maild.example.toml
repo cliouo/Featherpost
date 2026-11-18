@@ -1,0 +1,110 @@
+# Featherpost 守护进程示例配置（R4.5）
+# 用法：featherpostd maild.example.toml（或复制为 featherpost.toml）
+# 产品名、命令名、文件名与环境变量均来自仓库根 brand.toml（下文示例按当前品牌 Featherpost 书写）。
+# 结构：`[plugins.*]` 全局插件 + `[[accounts]]` 每账户 receive（一条 IDLE 长连接）
+
+[plugins.filters]
+[plugins.filters.config]
+# 规则顺序执行，首条命中短路：drop=丢弃 / accept=白名单放行；全未命中则委托下游
+[[plugins.filters.config.rules]]
+field = "subject"   # subject | sender | body
+pattern = "广告"
+action = "drop"
+
+[plugins.store]
+[plugins.store.config]
+db_path = "featherpost.sqlite3" # 相对路径锚定平台 data 目录；空字符串 = 内存库
+
+[plugins.rules]
+[plugins.rules.config]
+show_sensitive = true   # false → 敏感通知（验证码等）一律静默
+silent_keywords = ["机密"]  # 标题命中 → 静默
+# quiet_hours = [{ start = "22:00", end = "07:00" }] # 多窗口取并集，允许跨午夜
+# timezone_offset_minutes = 480 # 固定 UTC 偏移；中国标准时间为 480
+# notify_new_mail = true     # 收件箱未读新邮件发系统通知（验证码信只发验证码通知；同账户 10 秒内超过 3 封合并提示）
+# muted_accounts = ["work"]  # 这些账户不发新邮件通知（最多 64 项）
+# persist = true             # 界面里改的规则写入同目录 rules_state.toml（0600、原子写），重启保留
+
+[plugins.frontend]
+[plugins.frontend.config]
+# 内核只保存 typed OpenIntent；启动参数/URL 不携带账户、UID、验证码或正文。
+default = "builtin-egui"
+# 第三方前端安装到 `featherpostd paths` 输出的 frontends/<id>/，通过受检 frontend.toml 声明；
+# 改 default 后重启 Agent。Menu 始终保留“使用内置界面打开…”恢复入口。
+
+# 仅完整 macOS bundle 可启用：Agent 监督独立的轻量菜单栏进程，菜单栏与 Agent 同生共死
+# （Agent 运行期间菜单栏进程无论因何退出都会在 restart_delay_secs 后重新拉起）。
+# 用户在菜单中“退出 Featherpost”会连同后台一并停止：Agent、外部插件、菜单栏与打开中的窗口。
+# [plugins.menu]
+# [plugins.menu.config]
+# restart_delay_secs = 5
+
+# 外部进程插件安装到 `featherpostd paths` 输出的 plugins/<id>/；只有显式 allowlist 的 supervised
+# package 会跟随 Agent 启动。independent package 仅登记，不由内核启动。
+# [plugins.external]
+# [plugins.external.config]
+# enabled = ["org.example.automation"]
+# restart_initial_secs = 2
+# restart_max_secs = 60
+# max_restarts = 8
+# healthy_reset_secs = 60
+
+[plugins.notify]
+[plugins.notify.config]
+# 裸 `cargo run ... --bin featherpostd` 的开发快速开始保留 dev-log；它只记固定投递 ID，不输出验证码正文。
+provider = "dev-log"
+# 安装完整 Featherpost.app 后改为 "macos"：只允许内嵌 Agent identity；裸 featherpostd/非 macOS
+# fail-closed，绝不回退脚本。授权必须由桌面“允许通知”或
+# featherpostctl request-notification-authorization 显式触发。
+
+[plugins.otp]
+[plugins.otp.config]
+pattern = "\\d{6}"
+title = "验证码"
+
+[plugins.transport]
+[plugins.transport.config]
+server = "127.0.0.1"
+port = 1025
+tls = "none"                 # "none"（默认，明文）| "starttls"（严格升级，不降级）
+accept_invalid_certs = false # 仅自签测试可设 true；生产保持 false，使用系统根证书/主机名校验
+# username = "u"     # 非空则 AUTH PLAIN
+# password = "p"
+
+[plugins.api]
+[plugins.api.config]
+transport = "stdio"    # stdin/stdout 行分隔 JSON-RPC 2.0；stdio/socket/pipe 支持服务端推送
+# 独立 CLI / 脚本改用本地 HTTP（只能绑定回环地址）：
+# transport = "http"
+# listen = "127.0.0.1:7394"
+# bearer_token = "用 featherpostctl generate-token 生成至少 32 字节的 token"
+# Unix 上 token 写入配置后必须：chmod 600 featherpost.toml
+# 也可不写 bearer_token，改用 FEATHERPOST_TOKEN 环境变量。
+# Unix 本地 IPC（父目录需预先创建并 chmod 700；stale socket 不会自动删除）：
+# transport = "unix"
+# listen = "featherpost.sock" # 相对路径锚定平台 runtime 目录；也可写绝对路径
+# Windows 本地 IPC（当前用户显式 ACL；Windows only）：
+# transport = "named_pipe"
+# listen = "\\\\.\\pipe\\featherpost"
+
+[plugins.scheduler]
+[plugins.scheduler.config]
+jitter_secs = 1       # 轮询任务附加 0..N 秒抖动；idle=true 的账户不会创建任务
+
+[[accounts]]
+account = "main"
+server = "127.0.0.1"
+port = 143
+username = "dev"
+password = "dev"
+mailbox = "INBOX"
+idle = true          # false → scheduler 轮询兜底（poll_secs 间隔）
+reconnect_secs = 5
+
+# 多账户：每加一个 [[accounts]] 块就多一条独立连接/独立事件 scope
+# [[accounts]]
+# account = "second"
+# server = "imap.other.example.com"
+# port = 143
+# username = "u2"
+# password = "p2"

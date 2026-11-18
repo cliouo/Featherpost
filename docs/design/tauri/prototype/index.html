@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Maild · UI/UX 交互设计</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23175945'/%3E%3Cpath d='M7 10h18v13H7z M7 10l9 7 9-7' fill='none' stroke='white' stroke-width='1.5'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <a class="skip" href="#workspace">跳到邮件工作区</a>
+  <header class="reviewbar" aria-label="设计评审工具，不属于产品界面">
+    <span class="review-label"><span class="review-dot"></span> MAILD <b>设计评审 / 01.1</b></span>
+    <nav aria-label="原型页面">
+      <button data-route="mail" class="review-active">收件箱</button>
+      <button data-route="compose">写邮件</button>
+      <button data-route="search">搜索</button>
+      <button data-route="settings">设置</button>
+      <button data-route="onboard">首次使用</button>
+    </nav>
+    <div class="review-controls">
+      <label class="sr-only" for="scenario">演示情景</label>
+      <select id="scenario">
+        <option value="normal">正常情景</option>
+        <option value="offline">邮箱离线</option>
+        <option value="daemon">后台未连接</option>
+        <option value="unknown">操作结果未知</option>
+        <option value="auth">账户认证失败</option>
+        <option value="indexing">搜索索引中</option>
+        <option value="empty">收件箱为空</option>
+        <option value="noresults">搜索无结果</option>
+        <option value="loading">内容加载中</option>
+        <option value="htmlerror">HTML 加载失败</option>
+        <option value="incompatible">版本不兼容</option>
+        <option value="sendfail">发送明确失败</option>
+        <option value="sendunknown">发送结果未知</option>
+      </select>
+      <button data-action="theme" id="theme-button" title="切换明暗主题" aria-label="切换明暗主题"></button>
+      <a href="../README.md" title="阅读设计说明">说明 ↗</a>
+    </div>
+  </header>
+  <div id="app"></div>
+  <dialog id="dialog"></dialog>
+  <div id="toast" role="status" aria-live="polite"></div>
+  <footer class="review-footer"><span>交互原型 · 全部为演示数据 · 不连接真实邮箱</span><span>HTML 原位阅读 / 可扩展工作台 <span class="footer-version">v1.1 · 2026.09</span></span></footer>
+  <script src="app.js"></script>
+  <script src="extensions.js"></script>
+</body>
+</html>

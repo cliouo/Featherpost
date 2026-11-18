@@ -1,0 +1,380 @@
+/* Compose uses the approved app tokens, with a paper-like field hierarchy. */
+.composer {
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+}
+.compose-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 28px;
+  min-height: var(--bar-height);
+  border-bottom: 1px solid var(--line);
+  flex-shrink: 0;
+}
+.compose-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  min-width: 0;
+}
+.compose-title h1 {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 0;
+}
+.compose-title > .icon {
+  color: var(--accent);
+}
+.compose-save {
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.compose-heading-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.compose-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 12px 36px 24px;
+}
+.compose-field {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  border-bottom: 1px solid var(--line);
+  padding: 8px 0;
+  min-width: 0;
+}
+.compose-field > label {
+  width: 58px;
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--muted);
+  padding-top: 9px;
+}
+.compose-control {
+  flex: 1;
+  min-width: 0;
+}
+.compose-control input,
+.compose-control select {
+  width: 100%;
+  min-height: 38px;
+  background: transparent;
+  border: 0;
+  border-radius: var(--r-sm);
+  color: var(--ink);
+  font: inherit;
+  padding: 7px 6px;
+}
+.compose-control option {
+  background: var(--surface);
+  color: var(--ink);
+}
+.compose-control input:focus-visible,
+.compose-control select:focus-visible,
+.compose-body textarea:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.compose-control [aria-invalid="true"] {
+  box-shadow: inset 0 -2px var(--danger);
+}
+.cc-toggle {
+  flex-shrink: 0;
+  font-size: 11px;
+}
+.field-error {
+  display: block;
+  font-size: 12px;
+  color: var(--danger);
+  padding: 3px 6px;
+}
+.compose-body {
+  padding: 20px 0 8px;
+  min-height: 220px;
+  display: flex;
+  flex-direction: column;
+}
+.compose-body textarea {
+  resize: vertical;
+  min-height: 280px;
+  flex: 1;
+  width: 100%;
+  font:
+    400 15px/1.8 -apple-system,
+    BlinkMacSystemFont,
+    "PingFang SC",
+    sans-serif;
+  background: transparent;
+  color: var(--ink);
+  border: 0;
+  border-radius: var(--r-sm);
+  padding: 6px;
+  box-sizing: border-box;
+}
+.compose-body textarea:disabled {
+  opacity: 1;
+}
+.compose-footer {
+  border-top: 1px solid var(--line);
+  min-height: 66px;
+  padding: 12px 28px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--canvas);
+  flex-shrink: 0;
+}
+.compose-inline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.compose-hint {
+  flex: 1;
+  font-size: 11px;
+  color: var(--muted);
+  text-align: right;
+}
+.compose-footer .primary-button {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-width: 94px;
+  justify-content: center;
+}
+.compose-notice {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-radius: var(--r-sm);
+  padding: 12px 14px;
+  margin: 8px 0 12px;
+  background: var(--canvas);
+  font-size: 12px;
+}
+.compose-notice.success {
+  background: var(--selected);
+  color: var(--accent);
+}
+.compose-notice.warn {
+  background: var(--wash);
+  color: var(--warning);
+}
+.compose-notice.error {
+  color: var(--danger);
+  background: var(--canvas);
+}
+.compose-notice .text-button {
+  font-size: 12px;
+  min-height: 32px;
+  padding: 4px 6px;
+}
+.compose-attachments {
+  list-style: none;
+  padding: 0;
+  margin: 12px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.compose-attachments li {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: var(--r-md);
+  background: var(--canvas);
+}
+.attachment-name {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  overflow-wrap: anywhere;
+}
+.attachment-name strong {
+  font-size: 12px;
+  font-weight: 550;
+}
+.attachment-name small {
+  font-size: 11px;
+  color: var(--muted);
+}
+.attachment-name progress {
+  width: 100%;
+  height: 4px;
+  accent-color: var(--accent);
+}
+/* Keep a scrollable slice of the original letter above inline replies. */
+.reader-stack:has(> .inline-composer:not(.collapsed)) > .reader-body {
+  flex-basis: 100px;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+.inline-composer {
+  height: auto;
+  max-height: 54%;
+  flex: 0 1 auto;
+  border-top: 2px solid var(--accent);
+}
+.inline-composer .compose-heading {
+  min-height: 46px;
+  padding: 9px 24px;
+}
+.inline-composer .compose-title h1 {
+  font-size: 14px;
+}
+.inline-composer .compose-scroll {
+  padding: 4px 24px 12px;
+}
+.inline-composer .compose-body {
+  min-height: 140px;
+  padding-top: 10px;
+}
+.inline-composer textarea {
+  min-height: 140px;
+}
+.inline-composer .compose-footer {
+  min-height: 54px;
+  padding: 8px 20px;
+}
+.inline-composer.collapsed {
+  flex-shrink: 0;
+}
+.drafts-page {
+  background: var(--surface);
+}
+.draft-list {
+  display: flex;
+  flex-direction: column;
+}
+.draft-row {
+  display: flex;
+  align-items: flex-start;
+  text-align: left;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--line);
+  padding: 18px 4px;
+  gap: 20px;
+  border-radius: 0;
+  width: 100%;
+}
+.draft-row > div {
+  min-width: 0;
+  flex: 1;
+}
+.draft-row strong {
+  display: block;
+  font-weight: 600;
+  font-size: 14px;
+}
+.draft-row span,
+.draft-row time {
+  font-size: 11px;
+  color: var(--muted);
+}
+.draft-row p {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin: 6px 0 0;
+}
+.visually-hidden {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+.skip-link {
+  position: fixed;
+  left: 12px;
+  top: -100px;
+  z-index: 100;
+}
+.skip-link:focus {
+  top: 12px;
+  background: var(--surface);
+  color: var(--accent);
+  padding: 10px;
+}
+@media (max-width: 1050px) {
+  .compose-scroll {
+    padding: 8px 22px 16px;
+  }
+  .compose-heading,
+  .compose-footer {
+    padding-inline: 20px;
+  }
+  .compose-hint {
+    display: none;
+  }
+  .compose-footer > .icon-button {
+    margin-left: auto;
+  }
+  .inline-composer .compose-heading-actions {
+    gap: 2px;
+  }
+}
+@media (max-width: 600px) {
+  .compose-heading {
+    padding: 10px 14px;
+    gap: 8px;
+  }
+  .compose-scroll {
+    padding: 8px 14px;
+  }
+  .compose-field {
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .compose-field > label {
+    width: 44px;
+  }
+  .compose-control {
+    min-width: 180px;
+  }
+  .cc-toggle {
+    margin-left: auto;
+    min-height: 30px;
+  }
+  .compose-heading-actions .text-button {
+    font-size: 11px;
+  }
+  .compose-save {
+    width: 100%;
+    font-size: 10px;
+  }
+  .compose-footer {
+    padding: 10px 14px;
+    flex-wrap: wrap;
+  }
+  .inline-composer {
+    max-height: 65%;
+  }
+  .inline-composer .compose-scroll {
+    padding-inline: 14px;
+  }
+  .compose-title h1 {
+    font-size: 16px;
+  }
+}
