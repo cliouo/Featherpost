@@ -278,6 +278,19 @@ impl Bridge {
         folder: String,
         query: String,
     ) -> Result<Vec<UiSummary>, UiError> {
+        self.mailbox_server_search(account, folder, query, None, None)
+            .await
+    }
+
+    /// 带可选 `since` / `until`（按 `sort_at` 秒级边界过滤）的服务器历史检索。
+    pub async fn mailbox_server_search(
+        &self,
+        account: String,
+        folder: String,
+        query: String,
+        since: Option<u64>,
+        until: Option<u64>,
+    ) -> Result<Vec<UiSummary>, UiError> {
         let query = query.trim().to_string();
         if account.is_empty() || folder.is_empty() || query.is_empty() {
             return Err(UiError::invalid("请选择账户与文件夹，并输入搜索内容。"));
@@ -285,12 +298,15 @@ impl Bridge {
         if query.len() > MAX_QUERY_BYTES || query.chars().any(char::is_control) {
             return Err(UiError::invalid("搜索内容过长或包含无效字符。"));
         }
-        let result: maild_client::SearchResult = self
-            .compose_call(
-                "searchMessages",
-                json!({ "account": account, "folder": folder, "query": query, "scope": "server" }),
-            )
-            .await?;
+        let mut params =
+            json!({ "account": account, "folder": folder, "query": query, "scope": "server" });
+        for (key, value) in [("since", since), ("until", until)] {
+            if let Some(value) = value {
+                params[key] = json!(value);
+            }
+        }
+        let result: maild_client::SearchResult =
+            self.compose_call("searchMessages", params).await?;
         Ok(result
             .messages
             .into_iter()

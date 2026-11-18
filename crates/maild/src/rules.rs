@@ -4,10 +4,11 @@
 //! R4.5 的 rules 提供三条基础策略：
 //! - 敏感内容总开关：`show_sensitive = false` → 敏感通知降级为 silent（预览策略）；
 //! - 关键词静默：subject 命中 `silent_keywords` → silent。
-//! - 时间静默：`quiet_hours` 按日周期窗口 → silent（scheduler 刷新当前窗口）。
+//! - 时间静默：`quiet_hours` 按日周期窗口 → silent（查询时即时计算，无后台轮询唤醒）。
 //!
 //! per-account 作用域天然由 `scoped(realm)` 事件语义提供（rules 挂在账户 scope
-//! 上即只对该账户生效）；时间窗口使用固定 UTC 偏移，不依赖时区数据库。
+//! 上即只对该账户生效）；时间窗口支持 `follow_system_timezone = true`（POSIX `localtime_r`
+//! 跟随系统时区与夏令时）或固定 `timezone_offset_minutes`，零外部时区库依赖。
 //!
 //! ADR-0043 additive 扩展：
 //! - `notify_new_mail` / `muted_accounts`：普适收件箱新邮件通知（[`mail_notify`]），
@@ -21,7 +22,6 @@ pub mod persistence;
 
 use std::any::TypeId;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -31,7 +31,6 @@ use serde::{Deserialize, Serialize};
 pub use persistence::{rules_state_path_for, RulesStatePath, RULES_STATE_FILE};
 
 use crate::events::{NotifyRoute, NotifyRouteEvent, QuietHoursQuery, QuietHoursRequest};
-use crate::scheduler::{InitialDelay, JitterPolicy, ScheduleError, ScheduleSpec, Scheduler};
 
 const MINUTES_PER_DAY: u16 = 24 * 60;
 
@@ -40,7 +39,7 @@ const MINUTES_PER_DAY: u16 = 24 * 60;
 pub struct QuietHoursConfig {
     /// 日周期开始时间，格式 `HH:MM`（含开始时刻）。
     pub start: String,
-    /// 日周期结束时间，格式 `HH:MM`（不含结束时刻）；允许跨午夜。
+    /// 日周期结束时间，格式 `HH:MM`（不含结束时刻；`24:00` 表示当日日末）；允许跨午夜。
     pub end: String,
 }
 
@@ -52,12 +51,16 @@ pub struct RulesConfig {
     /// 标题命中任一关键词 → 静默。
     #[serde(default)]
     pub silent_keywords: Vec<String>,
-    /// 静默时段。多个窗口取并集，按固定 UTC 偏移解释。
+    /// 静默时段。多个窗口取并集。
     #[serde(default)]
     pub quiet_hours: Vec<QuietHoursConfig>,
     /// 本地时间相对 UTC 的分钟偏移，例如中国标准时间为 480。
     #[serde(default)]
     pub timezone_offset_minutes: i32,
+    /// 静默时段跟随系统时区（含夏令时自动切换）；缺省 `false` 时按固定
+    /// `timezone_offset_minutes` 解释，不出现在 JSON 里。
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub follow_system_timezone: bool,
     /// 普适收件箱新邮件系统通知（ADR-0043）。缺省关闭；关闭时不出现在 JSON 里，
     /// 旧客户端看到的 `rules` 逐字节不变。
     #[serde(default, skip_serializing_if = "is_false")]
@@ -92,6 +95,7 @@ impl Default for RulesConfig {
             silent_keywords: Vec::new(),
             quiet_hours: Vec::new(),
             timezone_offset_minutes: 0,
+            follow_system_timezone: false,
             notify_new_mail: false,
             muted_accounts: Vec::new(),
             persist: false,
@@ -127,14 +131,12 @@ pub struct RulesSettings {
 
 struct RulesSettingsInner {
     state: RwLock<RulesState>,
-    scheduled: AtomicBool,
     /// 侧车路径：构造时给定，或经 [`RulesSettings::enable_persistence`] 运行时挂载一次。
     path: OnceLock<PathBuf>,
 }
 
 struct RulesState {
     config: RulesConfig,
-    active: bool,
     /// TOML 基线（持久模式下与 overlay 合成 `config`）。
     base: RulesConfig,
     /// 侧车里记录的用户覆盖（只含用户改过的字段）。
@@ -184,17 +186,14 @@ impl RulesSettings {
         path: Option<PathBuf>,
     ) -> Self {
         let config = overlay.apply_to(&base);
-        let active = is_quiet_at(&config, unix_now_secs());
         Self {
             inner: Arc::new(RulesSettingsInner {
                 state: RwLock::new(RulesState {
                     config,
-                    active,
                     base,
                     overlay,
                     persistence,
                 }),
-                scheduled: AtomicBool::new(false),
                 path: path.map(OnceLock::from).unwrap_or_default(),
             }),
         }
@@ -270,7 +269,6 @@ impl RulesSettings {
         let _ = self.inner.path.set(path);
         state.overlay = overlay;
         state.persistence = Persistence::Ready;
-        state.active = is_quiet_at(&next, unix_now_secs());
         state.config = next.clone();
         Ok(next)
     }
@@ -319,7 +317,6 @@ impl RulesSettings {
                 state.overlay = overlay;
             }
         }
-        state.active = is_quiet_at(&next, unix_now_secs());
         state.config = next.clone();
         Ok(next)
     }
@@ -327,25 +324,6 @@ impl RulesSettings {
     /// TOML 基线（不含侧车覆盖）。
     pub fn base(&self) -> RulesConfig {
         self.inner.state.read().unwrap().base.clone()
-    }
-
-    fn refresh(&self) {
-        let mut state = self.inner.state.write().unwrap();
-        state.active = is_quiet_at(&state.config, unix_now_secs());
-    }
-
-    fn mark_scheduled(&self) {
-        self.inner.scheduled.store(true, Ordering::Release);
-    }
-
-    fn is_quiet_at(&self, at_unix_secs: u64) -> bool {
-        let now = unix_now_secs();
-        let state = self.inner.state.read().unwrap();
-        if self.inner.scheduled.load(Ordering::Acquire) && at_unix_secs.abs_diff(now) <= 1 {
-            state.active
-        } else {
-            is_quiet_at(&state.config, at_unix_secs)
-        }
     }
 }
 
@@ -360,6 +338,8 @@ pub struct RulesPatch {
     pub quiet_hours: Option<Vec<QuietHoursConfig>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timezone_offset_minutes: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub follow_system_timezone: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notify_new_mail: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -382,6 +362,9 @@ impl RulesPatch {
             timezone_offset_minutes: other
                 .timezone_offset_minutes
                 .or(self.timezone_offset_minutes),
+            follow_system_timezone: other
+                .follow_system_timezone
+                .or(self.follow_system_timezone),
             notify_new_mail: other.notify_new_mail.or(self.notify_new_mail),
             muted_accounts: other
                 .muted_accounts
@@ -404,6 +387,9 @@ impl RulesPatch {
             timezone_offset_minutes: self
                 .timezone_offset_minutes
                 .unwrap_or(base.timezone_offset_minutes),
+            follow_system_timezone: self
+                .follow_system_timezone
+                .unwrap_or(base.follow_system_timezone),
             notify_new_mail: self.notify_new_mail.unwrap_or(base.notify_new_mail),
             muted_accounts: self
                 .muted_accounts
@@ -448,12 +434,12 @@ pub(crate) fn decide_at(
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct QuietWindow {
-    start: u16,
-    end: u16,
+pub struct QuietWindow {
+    pub start: u16,
+    pub end: u16,
 }
 
-fn parse_clock(value: &str) -> Result<u16, String> {
+fn parse_clock(value: &str, allow_24_end: bool) -> Result<u16, String> {
     let (hour, minute) = value
         .split_once(':')
         .ok_or_else(|| format!("时间必须是 HH:MM: {value}"))?;
@@ -465,19 +451,24 @@ fn parse_clock(value: &str) -> Result<u16, String> {
     if hour > 24 || minute >= 60 || (hour == 24 && minute != 0) {
         return Err(format!("时间超出范围: {value}"));
     }
-    Ok((hour * 60 + minute) % MINUTES_PER_DAY)
+    let total = hour * 60 + minute;
+    if total == MINUTES_PER_DAY && allow_24_end {
+        Ok(MINUTES_PER_DAY)
+    } else {
+        Ok(total % MINUTES_PER_DAY)
+    }
 }
 
-fn compile_windows(cfg: &RulesConfig) -> Result<Vec<QuietWindow>, String> {
+pub fn compile_windows(cfg: &RulesConfig) -> Result<Vec<QuietWindow>, String> {
     if !(-24 * 60..=24 * 60).contains(&cfg.timezone_offset_minutes) {
         return Err("timezone_offset_minutes 必须在 -1440..=1440 内".into());
     }
     cfg.quiet_hours
         .iter()
         .map(|window| {
-            let start = parse_clock(&window.start)?;
-            let end = parse_clock(&window.end)?;
-            if start == end {
+            let start = parse_clock(&window.start, false)?;
+            let end = parse_clock(&window.end, true)?;
+            if start == end || window.start == window.end {
                 return Err(format!(
                     "静默窗口 start 和 end 不能相同: {}-{}",
                     window.start, window.end
@@ -521,20 +512,31 @@ pub(crate) fn validate_config(cfg: &RulesConfig) -> Result<(), String> {
     compile_windows(cfg).map(|_| ())
 }
 
-fn is_quiet_at(cfg: &RulesConfig, at_unix_secs: u64) -> bool {
+pub fn is_quiet_at(cfg: &RulesConfig, at_unix_secs: u64) -> bool {
     let Ok(windows) = compile_windows(cfg) else {
         return false;
     };
+    if cfg.follow_system_timezone {
+        if let Some(parts) = crate::localtime::local_parts(at_unix_secs) {
+            let local_minutes = u16::from(parts.hour) * 60 + u16::from(parts.minute);
+            return is_quiet_at_minute(&windows, local_minutes);
+        }
+    }
     is_quiet_with_windows(&windows, cfg.timezone_offset_minutes, at_unix_secs)
 }
 
-fn is_quiet_with_windows(
+pub fn is_quiet_with_windows(
     windows: &[QuietWindow],
     timezone_offset_minutes: i32,
     at_unix_secs: u64,
 ) -> bool {
-    let local_secs = (at_unix_secs as i64).saturating_add(i64::from(timezone_offset_minutes) * 60);
+    let day_secs = (at_unix_secs % 86_400) as i64;
+    let local_secs = day_secs + i64::from(timezone_offset_minutes) * 60;
     let local_minutes = (local_secs.rem_euclid(86_400) / 60) as u16;
+    is_quiet_at_minute(windows, local_minutes)
+}
+
+fn is_quiet_at_minute(windows: &[QuietWindow], local_minutes: u16) -> bool {
     windows.iter().any(|window| {
         if window.start < window.end {
             local_minutes >= window.start && local_minutes < window.end
@@ -557,34 +559,25 @@ fn unix_now_secs() -> u64 {
 /// 否则取上下文里的 [`RulesStatePath`] 服务（装配方须在 load 前 provide）；两者都没有时
 /// 退回非持久模式。`persist = false` 时永远非持久，即使给了路径。
 pub struct RulesPlugin {
-    require_scheduler: bool,
     state_path: Option<PathBuf>,
 }
 
 impl RulesPlugin {
-    pub fn new(config: &RulesConfig) -> Self {
-        Self {
-            require_scheduler: !config.quiet_hours.is_empty(),
-            state_path: None,
-        }
+    pub fn new(_config: &RulesConfig) -> Self {
+        Self { state_path: None }
     }
 
     /// 显式指定 `rules_state.toml` 路径（仍受 `persist` 开关约束）。
-    pub fn with_state_path(config: &RulesConfig, path: PathBuf) -> Self {
+    pub fn with_state_path(_config: &RulesConfig, path: PathBuf) -> Self {
         Self {
             state_path: Some(path),
-            ..Self::new(config)
         }
     }
 }
 
 impl Plugin for RulesPlugin {
     fn inject(&self) -> Vec<TypeId> {
-        let mut inject = vec![TypeId::of::<RulesConfig>()];
-        if self.require_scheduler {
-            inject.push(TypeId::of::<Scheduler>());
-        }
-        inject
+        vec![TypeId::of::<RulesConfig>()]
     }
 
     fn apply(&self, ctx: &Context) -> Result<(), PluginError> {
@@ -613,34 +606,10 @@ impl Plugin for RulesPlugin {
             decide(&route, &settings_for_route.snapshot())
         });
 
-        let settings_for_query = settings.clone();
+        let settings_for_query = settings;
         ctx.on_bail_scoped::<QuietHoursQuery>(move |request: QuietHoursRequest| {
-            Some(settings_for_query.is_quiet_at(request.at_unix_secs))
+            Some(is_quiet_at(&settings_for_query.snapshot(), request.at_unix_secs))
         });
-
-        if !cfg.quiet_hours.is_empty() || !settings.snapshot().quiet_hours.is_empty() {
-            if let Some(scheduler) = ctx.get::<Scheduler>() {
-                let settings_for_tick = settings.clone();
-                let handle = scheduler
-                    .schedule_global(
-                        ScheduleSpec::Interval {
-                            every: std::time::Duration::from_secs(1),
-                            initial: InitialDelay::Immediate,
-                            jitter: JitterPolicy::None,
-                        },
-                        move |_| {
-                            let settings = settings_for_tick.clone();
-                            Box::pin(async move {
-                                settings.refresh();
-                                Ok::<(), ScheduleError>(())
-                            })
-                        },
-                    )
-                    .map_err(|error| format!("注册静默时段刷新任务失败: {error}"))?;
-                settings.mark_scheduled();
-                ctx.effect_sync(move || drop(handle));
-            }
-        }
         Ok(())
     }
 }
@@ -832,5 +801,133 @@ mod tests {
             ..RulesConfig::default()
         };
         assert!(compile_windows(&cfg).is_err());
+
+        for (start, end) in [
+            ("22:00", "22:00"),
+            ("00:00", "00:00"),
+            ("24:00", "00:00"),
+            ("24:00", "24:00"),
+        ] {
+            let same = RulesConfig {
+                quiet_hours: vec![QuietHoursConfig {
+                    start: start.into(),
+                    end: end.into(),
+                }],
+                ..RulesConfig::default()
+            };
+            assert!(compile_windows(&same).is_err(), "{start}-{end} must fail");
+        }
+    }
+
+    #[test]
+    fn full_day_and_midnight_end_windows_are_supported() {
+        let all_day = RulesConfig {
+            quiet_hours: vec![QuietHoursConfig {
+                start: "00:00".into(),
+                end: "24:00".into(),
+            }],
+            ..RulesConfig::default()
+        };
+        let windows = compile_windows(&all_day).expect("00:00-24:00 should be valid");
+        assert_eq!(windows, vec![QuietWindow { start: 0, end: 1440 }]);
+        for sample in [0_u64, 60, 43_200, 86_399, 1_767_225_600] {
+            assert!(is_quiet_at(&all_day, sample), "sample={sample}");
+        }
+
+        let late_evening = RulesConfig {
+            quiet_hours: vec![QuietHoursConfig {
+                start: "22:00".into(),
+                end: "24:00".into(),
+            }],
+            ..RulesConfig::default()
+        };
+        assert!(!is_quiet_at(&late_evening, 21 * 3600 + 59 * 60));
+        assert!(is_quiet_at(&late_evening, 22 * 3600));
+        assert!(is_quiet_at(&late_evening, 23 * 3600 + 59 * 60));
+        assert!(!is_quiet_at(&late_evening, 0));
+    }
+
+    #[test]
+    fn follow_system_timezone_persists_and_overrides_fixed_offset_on_unix() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(RULES_STATE_FILE);
+        let settings = RulesSettings::open_persistent(
+            RulesConfig {
+                persist: true,
+                ..RulesConfig::default()
+            },
+            path.clone(),
+        );
+        assert!(!settings.snapshot().follow_system_timezone);
+        assert!(
+            serde_json::to_value(RulesConfig::default())
+                .unwrap()
+                .get("follow_system_timezone")
+                .is_none(),
+            "default false stays omitted on wire"
+        );
+
+        let updated = settings
+            .try_patch(&RulesPatch {
+                follow_system_timezone: Some(true),
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(updated.follow_system_timezone);
+        assert_eq!(
+            serde_json::to_value(&updated).unwrap()["follow_system_timezone"],
+            true
+        );
+
+        let reopened = RulesSettings::open_persistent(
+            RulesConfig {
+                persist: true,
+                ..RulesConfig::default()
+            },
+            path,
+        );
+        assert!(reopened.snapshot().follow_system_timezone);
+
+        #[cfg(unix)]
+        {
+            let ts = 1_767_225_600_u64;
+            let parts = crate::localtime::local_parts(ts).expect("unix local_parts");
+            let local_minute = u16::from(parts.hour) * 60 + u16::from(parts.minute);
+            let window = QuietHoursConfig {
+                start: format!("{:02}:{:02}", local_minute / 60, local_minute % 60),
+                end: format!(
+                    "{:02}:{:02}",
+                    ((local_minute + 30) % MINUTES_PER_DAY) / 60,
+                    (local_minute + 30) % 60
+                ),
+            };
+            // Deliberately shift fixed offset 12 hours away from system local offset:
+            // follow_system_timezone = true must follow local_parts, not timezone_offset_minutes.
+            let shifted_offset =
+                ((parts.utc_offset_minutes + 720 + 1440).rem_euclid(2880)) - 1440;
+            let cfg = RulesConfig {
+                quiet_hours: vec![window],
+                timezone_offset_minutes: shifted_offset,
+                follow_system_timezone: true,
+                ..RulesConfig::default()
+            };
+            assert!(is_quiet_at(&cfg, ts));
+            let fixed_cfg = RulesConfig {
+                follow_system_timezone: false,
+                ..cfg.clone()
+            };
+            assert!(!is_quiet_at(&fixed_cfg, ts));
+
+            // Out-of-range u64 falls back cleanly to fixed offset without panicking.
+            let fallback_all_day = RulesConfig {
+                quiet_hours: vec![QuietHoursConfig {
+                    start: "00:00".into(),
+                    end: "24:00".into(),
+                }],
+                follow_system_timezone: true,
+                ..RulesConfig::default()
+            };
+            assert!(is_quiet_at(&fallback_all_day, u64::MAX));
+        }
     }
 }

@@ -12,7 +12,7 @@ import type { CommandContribution } from "../host/types";
 import type { MailboxController } from "./controller";
 import type { DocumentController } from "./document";
 import { presentation, truncationNote } from "./document";
-import { addressOnly, displayName, fullDate, initials } from "./format";
+import { addressOnly, displayName, fullDate, initials, isoDateTime } from "./format";
 import { AttachmentStrip, LinkSheet, OtpBar, RemoteBanner } from "./ReaderParts";
 
 function CommandButton({
@@ -202,8 +202,8 @@ export function Reader({ host, controller, documents, composer }: ReaderProps) {
                   </div>
                 </div>
                 <time
-                  dateTime={new Date(row.sort_at * 1000).toISOString()}
-                  title={`发件人声明 ${row.date_at ? fullDate(row.date_at) : "缺失"} · 收到 ${fullDate(row.received_at)}`}
+                  dateTime={isoDateTime(row.sort_at)}
+                  title={`发件人声明 ${row.date_at && row.date_at > 0 ? fullDate(row.date_at) : "缺失"} · 收到 ${row.received_at > 0 ? fullDate(row.received_at) : "未知"}`}
                 >
                   {fullDate(row.sort_at)}
                 </time>

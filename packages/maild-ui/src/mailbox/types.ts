@@ -66,6 +66,10 @@ export interface Receipt {
   missing_uids?: string[];
   mode: string | null;
 }
+export interface ServerSearchOptions {
+  since?: number;
+  until?: number;
+}
 export interface MailboxBridge {
   profiles(): Promise<Profile[]>;
   query(query: MailboxQuery, offset: number): Promise<UiPage>;
@@ -81,7 +85,12 @@ export interface MailboxBridge {
    */
   syncNow?(account?: string): Promise<void>;
   /** 可选：在服务器上搜索更早的邮件（本地缓存有界）。返回远端摘要，不写本地库。 */
-  serverSearch?(account: string, folder: string, query: string): Promise<UiSummary[]>;
+  serverSearch?(
+    account: string,
+    folder: string,
+    query: string,
+    options?: ServerSearchOptions,
+  ): Promise<UiSummary[]>;
   /** 可选：把一封服务器历史邮件拉回本地库并返回完整详情；服务器上已不存在时返回 null。 */
   fetchServerMessage?(account: string, folder: string, uid: string): Promise<UiMessage | null>;
 }

@@ -189,12 +189,6 @@ pub fn assemble_with_options(
     }
 
     let mut asm = load(&global_registry(), ctx, toml_text)?;
-    if quiet_hours_configured(toml_text) && ctx.get::<Scheduler>().is_none() {
-        asm.errors.push(LoadError::Apply {
-            plugin: "rules".into(),
-            detail: "quiet_hours 需要先装配 scheduler 插件".into(),
-        });
-    }
     let entries = mount_account_configs(ctx, account_configs.clone(), &mut asm);
 
     let accounts = Arc::new(Accounts::with_entries(entries));
@@ -255,28 +249,6 @@ fn validate_global_configs(toml_text: &str) -> Result<(), LoadError> {
         })?;
     }
     Ok(())
-}
-
-fn quiet_hours_configured(toml_text: &str) -> bool {
-    let Ok(root) = toml::from_str::<toml::Value>(toml_text) else {
-        return false;
-    };
-    let Some(rules) = root
-        .get("plugins")
-        .and_then(toml::Value::as_table)
-        .and_then(|plugins| plugins.get("rules"))
-    else {
-        return false;
-    };
-    if rules.get("enabled").and_then(toml::Value::as_bool) == Some(false) {
-        return false;
-    }
-    rules
-        .get("config")
-        .and_then(toml::Value::as_table)
-        .and_then(|config| config.get("quiet_hours"))
-        .and_then(toml::Value::as_array)
-        .is_some_and(|windows| !windows.is_empty())
 }
 
 /// 逐账户装配 receive：scoped + isolate（Receive / ReceiveConfig 独立绑定），

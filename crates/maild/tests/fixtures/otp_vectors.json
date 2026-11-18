@@ -1,0 +1,218 @@
+[
+  {
+    "name": "zh_standard_6_digit",
+    "subject": "登录验证码",
+    "body": "您的验证码是 849201，5 分钟内有效，请勿泄露。",
+    "expected": "849201"
+  },
+  {
+    "name": "zh_bank_dynamic_4_digit",
+    "subject": "【某银行】",
+    "body": "动态码：4821，如非本人操作请忽略。",
+    "expected": "4821"
+  },
+  {
+    "name": "zh_check_code_adjacent",
+    "subject": "",
+    "body": "您的校验码为123456，10分钟内有效",
+    "expected": "123456"
+  },
+  {
+    "name": "zh_extract_code_4_digit",
+    "subject": "分享文件",
+    "body": "提取码: 8848",
+    "expected": "8848"
+  },
+  {
+    "name": "zh_one_time_password_8_digit",
+    "subject": "安全提醒",
+    "body": "本次一次性密码 30517246，请勿告知他人。",
+    "expected": "30517246"
+  },
+  {
+    "name": "zh_date_and_otp",
+    "subject": "通知",
+    "body": "2026年11月18日 您的验证码是 902211",
+    "expected": "902211"
+  },
+  {
+    "name": "zh_compact_date_and_otp",
+    "subject": "通知",
+    "body": "您的订单 20261117 已发货，取件验证码 593021。",
+    "expected": "593021"
+  },
+  {
+    "name": "zh_cjk_punctuation_after_url",
+    "subject": "安全中心",
+    "body": "官网 https://example.com，您的验证码：640219。",
+    "expected": "640219"
+  },
+  {
+    "name": "zh_newline_yuan_not_currency",
+    "subject": "节日问候",
+    "body": "您的验证码是：482910\n元旦快乐！",
+    "expected": "482910"
+  },
+  {
+    "name": "en_verification_code",
+    "subject": "Verify your email",
+    "body": "Your verification code is 908172.",
+    "expected": "908172"
+  },
+  {
+    "name": "en_one_time_passcode_8_digit",
+    "subject": "Your one-time passcode",
+    "body": "Use 55443322 to sign in.",
+    "expected": "55443322"
+  },
+  {
+    "name": "en_otp_before_keyword",
+    "subject": "OTP for login",
+    "body": "123456 is your OTP. Do not share it.",
+    "expected": "123456"
+  },
+  {
+    "name": "en_2fa_code",
+    "subject": "",
+    "body": "Your 2FA security code is 135790",
+    "expected": "135790"
+  },
+  {
+    "name": "en_subject_keyword_body_code",
+    "subject": "Login code",
+    "body": "135246\n\nThis code expires in 10 minutes.",
+    "expected": "135246"
+  },
+  {
+    "name": "western_date_mdy_abbrev_null",
+    "subject": "",
+    "body": "Please verify your login on Nov 18, 2026.",
+    "expected": null
+  },
+  {
+    "name": "western_date_dmy_full_null",
+    "subject": "",
+    "body": "Verification link valid until 18 November 2026",
+    "expected": null
+  },
+  {
+    "name": "western_date_month_year_null",
+    "subject": "",
+    "body": "Verification statement for September 2026",
+    "expected": null
+  },
+  {
+    "name": "copyright_symbol_year_null",
+    "subject": "",
+    "body": "© 2026 Example Inc. Verify your email",
+    "expected": null
+  },
+  {
+    "name": "copyright_word_year_null",
+    "subject": "",
+    "body": "Verify your email\nCopyright 2026 Example Inc.",
+    "expected": null
+  },
+  {
+    "name": "western_date_with_real_otp",
+    "subject": "",
+    "body": "Your verification code on Nov 18, 2026 is 482910",
+    "expected": "482910"
+  },
+  {
+    "name": "mmddyyyy_kept_as_otp",
+    "subject": "",
+    "body": "Your verification code is 11182026",
+    "expected": "11182026"
+  },
+  {
+    "name": "ddmmyyyy_kept_as_otp",
+    "subject": "",
+    "body": "Your verification code is 18112026",
+    "expected": "18112026"
+  },
+  {
+    "name": "compact_yyyymmdd_null",
+    "subject": "通知",
+    "body": "验证码相关说明于 20261118 生效。",
+    "expected": null
+  },
+  {
+    "name": "iso_date_null",
+    "subject": "通知",
+    "body": "验证码功能 2026-11-18 上线。",
+    "expected": null
+  },
+  {
+    "name": "zh_year_suffix_null",
+    "subject": "通知",
+    "body": "验证码服务自 2026 年起调整。",
+    "expected": null
+  },
+  {
+    "name": "currency_euro_null",
+    "subject": "",
+    "body": "Verification receipt: € 1299 confirmed.",
+    "expected": null
+  },
+  {
+    "name": "currency_dollar_null",
+    "subject": "",
+    "body": "Please verify charge of $ 2026 on your card.",
+    "expected": null
+  },
+  {
+    "name": "currency_pound_null",
+    "subject": "",
+    "body": "Verification payment £ 4821 confirmed.",
+    "expected": null
+  },
+  {
+    "name": "currency_yen_fullwidth_null",
+    "subject": "",
+    "body": "验证码服务费 ￥ 1999 已支付。",
+    "expected": null
+  },
+  {
+    "name": "currency_yuan_suffix_null",
+    "subject": "",
+    "body": "交易确认码说明：本笔消费 1999 元。",
+    "expected": null
+  },
+  {
+    "name": "url_query_digits_null",
+    "subject": "通知",
+    "body": "Verify your email: https://example.com/verify?id=88442211&t=1",
+    "expected": null
+  },
+  {
+    "name": "long_phone_number_null",
+    "subject": "通知",
+    "body": "验证码已发送至 13800138000，请查收短信。",
+    "expected": null
+  },
+  {
+    "name": "long_order_number_null",
+    "subject": "通知",
+    "body": "订单号 202611180001 的验证码说明见附件。",
+    "expected": null
+  },
+  {
+    "name": "hex_token_substring_null",
+    "subject": "",
+    "body": "verify token deadbeef123456cafe",
+    "expected": null
+  },
+  {
+    "name": "ordinary_mail_without_keyword_null",
+    "subject": "会议通知",
+    "body": "会议改到 3021 室，下午 1430 开始。",
+    "expected": null
+  },
+  {
+    "name": "hotpot_word_boundary_null",
+    "subject": "dinner",
+    "body": "Let's grab hotpot at 1830 tonight",
+    "expected": null
+  }
+]

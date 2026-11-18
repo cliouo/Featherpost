@@ -215,10 +215,16 @@ pub fn eligible(cfg: &RulesConfig, msg: &MailMessage, now_unix_secs: u64) -> boo
     if cfg.is_account_muted(&msg.account) {
         return false;
     }
-    if msg
+    let effective_ts = msg
         .date_at
-        .is_some_and(|date| date.saturating_add(STALE_AFTER_SECS) < now_unix_secs)
-    {
+        .or_else(|| {
+            (msg.sort_at >= crate::mime::EARLIEST_PLAUSIBLE_DATE_SECS).then_some(msg.sort_at)
+        })
+        .or_else(|| {
+            (msg.received_at >= crate::mime::EARLIEST_PLAUSIBLE_DATE_SECS)
+                .then_some(msg.received_at)
+        });
+    if effective_ts.is_some_and(|ts| ts.saturating_add(STALE_AFTER_SECS) < now_unix_secs) {
         return false;
     }
     true
@@ -344,5 +350,39 @@ mod tests {
         assert_eq!(sender_label("<z@s.cn>", "acc"), "z@s.cn");
         assert_eq!(sender_label("z@s.cn", "acc"), "z@s.cn");
         assert_eq!(sender_label("  ", "acc"), "acc");
+    }
+
+    #[test]
+    fn eligible_blocks_stale_arrival_without_date_while_keeping_synthetic_timestamps() {
+        let cfg = RulesConfig {
+            notify_new_mail: true,
+            ..RulesConfig::default()
+        };
+        let now = 1_795_000_000_u64;
+        for synthetic in [0_u64, 1, 42] {
+            let msg = MailMessage {
+                account: "acc".into(),
+                uid: "1".into(),
+                received_at: synthetic,
+                ..Default::default()
+            };
+            assert!(eligible(&cfg, &msg, now), "synthetic={synthetic}");
+        }
+        let stale_arrival = MailMessage {
+            account: "acc".into(),
+            uid: "2".into(),
+            received_at: now - STALE_AFTER_SECS - 1,
+            sort_at: now - STALE_AFTER_SECS - 1,
+            ..Default::default()
+        };
+        assert!(!eligible(&cfg, &stale_arrival, now));
+        let fresh_arrival = MailMessage {
+            account: "acc".into(),
+            uid: "3".into(),
+            received_at: now - 60,
+            sort_at: now - 60,
+            ..Default::default()
+        };
+        assert!(eligible(&cfg, &fresh_arrival, now));
     }
 }

@@ -728,16 +728,23 @@ fn require_text(value: Option<String>) -> AppResult<String> {
         .ok_or_else(AppError::invalid_response)
 }
 
+const LATEST_PLAUSIBLE_DATE_SECS: u64 = 253_402_300_799;
+
 fn parse_received_at(value: Option<Value>) -> AppResult<u64> {
     let value = value.ok_or_else(AppError::invalid_response)?;
     if let Some(timestamp) = value.as_u64() {
-        return Ok(timestamp);
+        return (timestamp <= LATEST_PLAUSIBLE_DATE_SECS)
+            .then_some(timestamp)
+            .ok_or_else(AppError::invalid_response);
     }
     let text = value.as_str().ok_or_else(AppError::invalid_response)?;
     let timestamp = OffsetDateTime::parse(text, &Rfc3339)
         .map_err(|_| AppError::invalid_response())?
         .unix_timestamp();
-    u64::try_from(timestamp).map_err(|_| AppError::invalid_response())
+    u64::try_from(timestamp)
+        .ok()
+        .filter(|timestamp| *timestamp <= LATEST_PLAUSIBLE_DATE_SECS)
+        .ok_or_else(AppError::invalid_response)
 }
 
 fn validate_outgoing(to: &str, subject: &str, body: &str) -> AppResult<()> {
@@ -1359,6 +1366,30 @@ mod tests {
         );
         server.await.unwrap();
         assert_eq!(captures.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn parse_received_at_rejects_millisecond_or_five_digit_year_timestamps() {
+        assert_eq!(
+            parse_received_at(Some(serde_json::json!(1_755_907_200_u64))).unwrap(),
+            1_755_907_200
+        );
+        assert_eq!(
+            parse_received_at(Some(serde_json::json!(253_402_300_799_u64))).unwrap(),
+            253_402_300_799
+        );
+        assert_eq!(
+            parse_received_at(Some(serde_json::json!(1_795_000_000_000_u64)))
+                .unwrap_err()
+                .code(),
+            ErrorCode::InvalidResponse
+        );
+        assert_eq!(
+            parse_received_at(Some(serde_json::json!(253_402_300_800_u64)))
+                .unwrap_err()
+                .code(),
+            ErrorCode::InvalidResponse
+        );
     }
 
     #[cfg(feature = "live-tests")]

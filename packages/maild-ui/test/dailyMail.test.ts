@@ -7,6 +7,13 @@ import { MailboxController, messageKey } from "../src/mailbox/controller";
 import { FolderNav } from "../src/mailbox/FolderNav";
 import { runShortcut, SHORTCUT_COMMANDS } from "../src/mailbox/keyboard";
 import { isEditableTarget, shortcutFor, type ShortcutAction } from "../src/mailbox/shortcuts";
+import {
+  localDayEndSecs,
+  localDayStartSecs,
+  parseLocalDateYmd,
+  SearchBar,
+} from "../src/mailbox/SearchBar";
+import type { ServerSearchOptions } from "../src/bridge/types";
 import { Welcome } from "../src/mailbox/Welcome";
 import { SettingsController } from "../src/settings/controller";
 import { Notifications } from "../src/settings/Notifications";
@@ -257,6 +264,108 @@ describe("服务器历史搜索与按需拉取", () => {
     expect(c.state.detailError).toContain("服务器上已找不到");
     // 未拉回本地的服务器结果不能写。
     expect(await c.toggleSelected("flagged")).toBeNull();
+  });
+
+  it("searchServer 透传 since/until 日期筛选，并对忽略参数的桥做纵深后置过滤", async () => {
+    const { bridge, c } = await ready();
+    const receivedCalls: Array<{
+      account: string;
+      folder: string;
+      query: string;
+      options?: ServerSearchOptions;
+    }> = [];
+    // 假桥故意忽略 options 返回越界与无日期（sort_at = 0）摘要，验证 controller 纵深过滤
+    bridge.mailbox.serverSearch = async (account, folderName, query, options) => {
+      receivedCalls.push({ account, folder: folderName, query, options });
+      return [
+        { ...remote("101"), sort_at: 999 }, // 早于 since
+        { ...remote("102"), sort_at: 1000 }, // 恰好等于 since
+        { ...remote("103"), sort_at: 1500 }, // 区间内
+        { ...remote("104"), sort_at: 2000 }, // 恰好等于 until
+        { ...remote("105"), sort_at: 2001 }, // 晚于 until
+        { ...remote("106"), sort_at: 0 }, // 缺失日期兜底 0
+      ];
+    };
+    c.search({ query: "报销", since: 1000, until: 2000 });
+    bridge.mailbox.queries.at(-1)!.d.resolve({ messages: [], total: 0 });
+    await flush();
+    await c.searchServer();
+    expect(receivedCalls).toEqual([
+      {
+        account: "demo",
+        folder: "INBOX",
+        query: "报销",
+        options: { since: 1000, until: 2000 },
+      },
+    ]);
+    expect(c.state.remote.status).toBe("ready");
+    expect(c.state.remote.rows.map((r) => r.uid)).toEqual(["104", "103", "102"]);
+  });
+});
+
+describe("SearchBar 日期边界：夏令时跳变与午夜切换安全", () => {
+  const proc = (globalThis as { process?: { env: Record<string, string | undefined> } }).process;
+
+  function withTz<T>(tz: string, fn: () => T): T {
+    if (!proc) return fn();
+    const prev = proc.env.TZ;
+    proc.env.TZ = tz;
+    try {
+      return fn();
+    } finally {
+      if (prev === undefined) delete proc.env.TZ;
+      else proc.env.TZ = prev;
+    }
+  }
+
+  it("显式按次日本地零点减 1 秒计算 until，覆盖 23 小时、25 小时与午夜夏令时时区", () => {
+    expect(parseLocalDateYmd("2026-02-29")).toBeNull();
+    expect(parseLocalDateYmd("2026-04-31")).toBeNull();
+    expect(parseLocalDateYmd("2024-02-29")).toEqual({ y: 2024, m: 2, d: 29 });
+
+    withTz("America/Chicago", () => {
+      // 普通 24 小时日：86400 - 1 = 86399 秒
+      const normStart = localDayStartSecs("2026-11-18")!;
+      const normEnd = localDayEndSecs("2026-11-18")!;
+      expect(normEnd - normStart).toBe(86_399);
+      expect(normEnd + 1).toBe(localDayStartSecs("2026-11-19"));
+
+      // 北美夏令时拨快日（23 小时）：82800 - 1 = 82799 秒
+      const springStart = localDayStartSecs("2026-03-08")!;
+      const springEnd = localDayEndSecs("2026-03-08")!;
+      expect(springEnd - springStart).toBe(82_799);
+      expect(springEnd + 1).toBe(localDayStartSecs("2026-03-09"));
+
+      // 北美夏令时拨慢日（25 小时）：90000 - 1 = 89999 秒
+      const fallStart = localDayStartSecs("2026-11-01")!;
+      const fallEnd = localDayEndSecs("2026-11-01")!;
+      expect(fallEnd - fallStart).toBe(89_999);
+      expect(fallEnd + 1).toBe(localDayStartSecs("2026-11-02"));
+
+      // 跨年边界
+      expect(localDayEndSecs("2026-12-31")! + 1).toBe(localDayStartSecs("2027-01-01"));
+    });
+
+    // 午夜 00:00 跳变的夏令时时区（America/Havana）：日末始终紧接次日日始前 1 秒
+    withTz("America/Havana", () => {
+      expect(localDayEndSecs("2026-03-07")! + 1).toBe(localDayStartSecs("2026-03-08"));
+      expect(localDayEndSecs("2026-03-08")! + 1).toBe(localDayStartSecs("2026-03-09"));
+      expect(localDayEndSecs("2026-10-31")! + 1).toBe(localDayStartSecs("2026-11-01"));
+      expect(localDayEndSecs("2026-11-01")! + 1).toBe(localDayStartSecs("2026-11-02"));
+    });
+  });
+
+  it("SearchBar 按本地日历回显起止日期筛选标签", async () => {
+    const { bridge, c } = await ready();
+    withTz("Asia/Shanghai", () => {
+      const since = localDayStartSecs("2026-11-01")!;
+      const until = localDayEndSecs("2026-11-18")!;
+      c.search({ query: "账单", since, until });
+      bridge.mailbox.queries.at(-1)!.d.resolve({ messages: [], total: 0 });
+      const html = renderToStaticMarkup(createElement(SearchBar, { controller: c }));
+      expect(html).toContain("从：2026-11-01");
+      expect(html).toContain("到：2026-11-18");
+    });
   });
 });
 

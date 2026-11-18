@@ -1540,7 +1540,7 @@ async fn search_messages(ctx: &Context, params: &Value) -> HandlerResult {
             })
             .ok_or_else(|| invalid_params("账户不存在或未启用"))?;
         let messages = receive
-            .server_search(&folder, &text)
+            .server_search(&folder, &text, since, until)
             .await
             .map_err(internal)?;
         let total = messages.len() as i64;
@@ -3802,7 +3802,7 @@ async fn prepare_reply(ctx: &Context, params: &Value) -> HandlerResult {
         .map(|manager| manager.own_addresses(&account))
         .unwrap_or_default();
 
-    let date = compose::rfc5322_date(original.date_at.unwrap_or(original.received_at));
+    let date = compose::attribution_date(original.date_at.unwrap_or(original.received_at));
     let sender_addresses = compose::extract_addresses(&original.sender);
     let draft = match mode {
         compose::DraftMode::Reply | compose::DraftMode::ReplyAll => {

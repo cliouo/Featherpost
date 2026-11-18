@@ -4,6 +4,7 @@ import { useStore } from "../host/hooks";
 import type { Bundle } from "../host/types";
 import { ComposeController, COMPOSE_VIEW, DRAFTS_VIEW } from "./controller";
 import { Editor } from "./Editor";
+import { fullDate, isoDateTime, shortDate } from "../mailbox/format";
 export function composeModule(
   host: Host,
   controller: ComposeController,
@@ -88,8 +89,11 @@ export function composeModule(
                       </span>
                       <p>{d.snippet || "空白草稿"}</p>
                     </div>
-                    <time>
-                      {new Date(d.updated_at * 1000).toLocaleDateString()}
+                    <time
+                      dateTime={isoDateTime(d.updated_at)}
+                      title={fullDate(d.updated_at)}
+                    >
+                      {shortDate(d.updated_at)}
                     </time>
                   </button>
                 ))}

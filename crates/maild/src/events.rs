@@ -7,7 +7,7 @@
 //! | `OtpDetected` | emit | 验证码提取结果（通知、剪贴板等消费者订阅） |
 //! | `AccountState` | emit | 账户连接状态变化（连接中/在线/离线/重连中） |
 //! | `NotifyRouteEvent` | bail | 通知路由决策（rules 插件用；R4 定义协议、暂不消费） |
-//! | `QuietHoursQuery` | bail | 账户静默时段查询（rules 提供策略，scheduler 只负责刷新时钟） |
+//! | `QuietHoursQuery` | bail | 账户静默时段查询（rules 按本地时区或固定偏移即时判定） |
 //! | `FrontendIntentQueued` | emit | 某前端有新的待领导航意图（ADR-0045：唤醒隐藏在菜单栏的窗口） |
 //! | `AgentStoppingEvent` | emit | 用户经本机 IPC 请求整体停止 Agent（推给已认证前端先刷盘草稿并撤下 Dock 图标） |
 
@@ -62,8 +62,8 @@ pub struct MailMessage {
     pub subject: String,
     /// 提取出的纯文本正文（优先 text/plain，否则由 HTML 转换而来）。
     pub body: String,
-    /// **本机第一次观测到这封信的时刻**（unix 秒），不是发信时间。
-    /// 发信时间见 [`MailMessage::date_at`]，排序键见 [`MailMessage::sort_at`]。
+    /// **最佳已知到达时刻**（IMAP `INTERNALDATE`、provider 收信时刻，缺失时回退本机首次观测时刻；
+    /// unix 秒），不是发信人声称的时间。发信时间见 [`MailMessage::date_at`]，排序键见 [`MailMessage::sort_at`]。
     pub received_at: u64,
 
     // —— ADR-0025：RFC 5322 事实、HTML 原文、摘要与标记位。全部 additive。——

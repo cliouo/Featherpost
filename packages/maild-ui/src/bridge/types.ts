@@ -1,5 +1,6 @@
-import type { MailboxBridge } from '../mailbox/types';
+import type { MailboxBridge, ServerSearchOptions } from '../mailbox/types';
 import type { ComposeBridge } from '../compose/types';
+export type { ServerSearchOptions };
 // 与 crates/maild-ui/src/bridge.rs 的 DTO 一一对应（snake_case 原样）。这是 webview 侧知道的
 // 全部协议：没有 endpoint、token、原始错误文本，也没有 body_html——HTML 只以隔离文档的 URL 形式
 // 交给 iframe（ADR-0033），宿主脚本从不持有邮件 HTML 字符串。

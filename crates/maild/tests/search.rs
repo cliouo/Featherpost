@@ -449,7 +449,7 @@ async fn server_search_runs_on_the_receive_connection_and_returns_summaries() {
 
     let hits = tokio::time::timeout(
         Duration::from_secs(10),
-        receive.server_search("Archive", "年度报告"),
+        receive.server_search("Archive", "年度报告", None, None),
     )
     .await
     .expect("服务器检索未在 10s 内返回")
@@ -468,7 +468,7 @@ async fn server_search_runs_on_the_receive_connection_and_returns_summaries() {
     assert!(search.contains("CHARSET UTF-8"), "实际命令: {search}");
 
     let empty = receive
-        .server_search("Archive", "不存在的词")
+        .server_search("Archive", "不存在的词", None, None)
         .await
         .expect("空结果不是错误");
     assert!(empty.is_empty());
@@ -477,6 +477,110 @@ async fn server_search_runs_on_the_receive_connection_and_returns_summaries() {
     assert_eq!(server.imap_connections(), 1, "服务器检索不得新建连接");
 
     drop(assembly);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn internal_date_anchors_decade_old_mail_clamps_spoofed_future_and_filters_server_search() {
+    let server = FakeMail::start().await.expect("假邮件服务器启动");
+    server.add_mailbox("Archive", "\\Archive");
+
+    // 1. >10 年前的历史邮件（2010-05-15 08:30:00Z = 1_273_912_200）：
+    //    若 `received_at` 取本机 `now` 会因超出 10 年容忍窗口回退到 `now`，有了 INTERNALDATE 后保持 2010 年。
+    let mail_2010 = "From: Archive <old@test.local>\r\nTo: me@test.local\r\n\
+Subject: 2010 归档合同\r\nDate: Sat, 15 May 2010 08:30:00 +0000\r\n\r\ncommon-token 2010\r\n"
+        .as_bytes()
+        .to_vec();
+    server.deliver_to_with_internal_date(
+        "INBOX",
+        "\\Seen",
+        Some("15-May-2010 08:30:00 +0000"),
+        mail_2010.clone(),
+    );
+    server.deliver_to_with_internal_date(
+        "Archive",
+        "\\Seen",
+        Some("15-May-2010 08:30:00 +0000"),
+        mail_2010,
+    );
+
+    // 2. 缺失 Date 头的历史邮件（2011-06-01 00:00:00Z = 1_306_886_400）：靠 INTERNALDATE 锚定。
+    let dateless_2011 = "From: Archive <nodate@test.local>\r\nTo: me@test.local\r\n\
+Subject: 无日期老信\r\n\r\ncommon-token 2011\r\n"
+        .as_bytes()
+        .to_vec();
+    server.deliver_to_with_internal_date(
+        "Archive",
+        "\\Seen",
+        Some("01-Jun-2011 00:00:00 +0000"),
+        dateless_2011,
+    );
+
+    // 3. 伪造远未来 Date 且服务器省略 INTERNALDATE：server_search 中必须钳制为 0，绝不排到顶部。
+    let spoofed_future = "From: Spam <spam@test.local>\r\nTo: me@test.local\r\n\
+Subject: 伪造 2100\r\nDate: Fri, 01 Jan 2100 00:00:00 +0000\r\n\r\ncommon-token future\r\n"
+        .as_bytes()
+        .to_vec();
+    server.deliver_to_with_internal_date("Archive", "\\Seen", None, spoofed_future);
+
+    let ctx = Context::new();
+    let mut assembly =
+        maild::assemble(&ctx, &assembly_toml(server.imap_addr.port())).expect("装配成功");
+    let accounts = ctx.get::<Accounts>().expect("accounts 服务");
+    let receive = accounts.snapshot().swap_remove(0).2;
+    tokio::time::timeout(Duration::from_secs(10), receive.wait_online())
+        .await
+        .expect("10s 内未在线");
+
+    let store = ctx.get::<Store>().expect("store 服务");
+    let probe = store.clone();
+    let until_stored = tokio::time::Instant::now() + Duration::from_secs(10);
+    while tokio::time::Instant::now() < until_stored {
+        if probe.get_message("e2e", Some("INBOX"), "1").unwrap().is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    let synced_old = store
+        .get_message("e2e", Some("INBOX"), "1")
+        .unwrap()
+        .expect("INBOX 2010 老信已落库");
+    assert_eq!(synced_old.received_at, 1_273_912_200);
+    assert_eq!(synced_old.sort_at, 1_273_912_200, ">10 年老信不应被排成今日");
+
+    let all_hits = receive
+        .server_search("Archive", "common-token", None, None)
+        .await
+        .expect("server_search 成功");
+    assert_eq!(all_hits.len(), 3);
+    // 按 sort_at 降序：2011 (1_306_886_400) -> 2010 (1_273_912_200) -> 伪造未来无 INTERNALDATE (0)
+    assert_eq!(
+        all_hits.iter().map(|s| s.sort_at).collect::<Vec<_>>(),
+        vec![1_306_886_400, 1_273_912_200, 0]
+    );
+
+    // since / until 边界过滤（含通过 API scope=server）。
+    let only_2010 = receive
+        .server_search(
+            "Archive",
+            "common-token",
+            Some(1_270_000_000),
+            Some(1_280_000_000),
+        )
+        .await
+        .unwrap();
+    assert_eq!(only_2010.len(), 1);
+    assert_eq!(only_2010[0].subject, "2010 归档合同");
+
+    // 按需单封拉取缺失 Date 的 2011 老信，同样保留 INTERNALDATE。
+    let fetched_2011 = receive
+        .fetch_message_by_uid("Archive", 2)
+        .await
+        .unwrap()
+        .expect("Archive UID 2");
+    assert_eq!(fetched_2011.received_at, 1_306_886_400);
+    assert_eq!(fetched_2011.sort_at, 1_306_886_400);
+
+    assembly.dispose().await;
 }
 
 /// 回填任务在 `spawn_blocking` 里持有的是真 `Arc<Store>`。卸载只发停止信号加 `abort()`

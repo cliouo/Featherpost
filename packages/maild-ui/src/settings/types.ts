@@ -50,6 +50,8 @@ export interface Rules {
   silent_keywords: string[];
   quiet_hours: { start: string; end: string }[];
   timezone_offset_minutes: number;
+  /** 静默时段跟随系统本地时区与夏令时；旧后端不回传此键，界面据此判断是否支持。 */
+  follow_system_timezone?: boolean;
   /** 收件箱新邮件系统通知；旧后端不回传此键，界面据此判断是否支持。 */
   notify_new_mail?: boolean;
   /** 不弹通知的账户 id。 */

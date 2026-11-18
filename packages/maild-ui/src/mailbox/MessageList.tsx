@@ -2,7 +2,7 @@ import type { UiSummary } from "../bridge/types";
 import { Icon } from "../app/Icon";
 import { useStore } from "../host/hooks";
 import { messageKey, scopeTitle, type MailboxController } from "./controller";
-import { displayName, shortDate } from "./format";
+import { displayName, fullDate, isoDateTime, shortDate } from "./format";
 function Row({
   row,
   controller,
@@ -44,8 +44,8 @@ function Row({
           </span>
           {row.has_attachments && <Icon name="paperclip" />}
           <time
-            title={new Date(row.sort_at * 1000).toLocaleString()}
-            dateTime={new Date(row.sort_at * 1000).toISOString()}
+            title={fullDate(row.sort_at)}
+            dateTime={isoDateTime(row.sort_at)}
           >
             {shortDate(row.sort_at)}
           </time>
@@ -108,8 +108,8 @@ function RemoteRow({
           </span>
           {row.has_attachments && <Icon name="paperclip" />}
           <time
-            title={new Date(row.sort_at * 1000).toLocaleString()}
-            dateTime={new Date(row.sort_at * 1000).toISOString()}
+            title={fullDate(row.sort_at)}
+            dateTime={isoDateTime(row.sort_at)}
           >
             {shortDate(row.sort_at)}
           </time>

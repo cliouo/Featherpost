@@ -116,6 +116,31 @@ fn raw_extract_code_contract_is_unchanged() {
     );
 }
 
+#[test]
+fn smart_otp_matches_shared_cross_language_fixture_vectors() {
+    #[derive(serde::Deserialize)]
+    struct OtpVector {
+        name: String,
+        subject: String,
+        body: String,
+        expected: Option<String>,
+    }
+
+    let raw = include_str!("fixtures/otp_vectors.json");
+    let vectors: Vec<OtpVector> = serde_json::from_str(raw).expect("valid otp_vectors.json");
+    assert!(vectors.len() >= 25, "shared OTP vectors must be non-trivial");
+    for v in &vectors {
+        assert_eq!(
+            extract_smart_otp(&v.body, &v.subject),
+            v.expected,
+            "shared OTP vector {:?} failed (subject={:?}, body={:?})",
+            v.name,
+            v.subject,
+            v.body
+        );
+    }
+}
+
 // —— 2. rules_state.toml ——
 
 fn secure_dir() -> tempfile::TempDir {

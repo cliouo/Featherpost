@@ -245,6 +245,8 @@ const FETCH_BY_UID_QUEUE: usize = 4;
 pub(crate) struct ServerSearchRequest {
     folder: String,
     query: String,
+    since: Option<u64>,
+    until: Option<u64>,
     reply: oneshot::Sender<Result<Vec<MessageSummary>, String>>,
 }
 
@@ -356,6 +358,8 @@ impl Receive {
         &self,
         folder: &str,
         query: &str,
+        since: Option<u64>,
+        until: Option<u64>,
     ) -> Result<Vec<MessageSummary>, String> {
         if !*self.inner.online.borrow() {
             return Err("账户当前离线，无法执行服务器检索".into());
@@ -366,6 +370,8 @@ impl Receive {
             .try_send(ServerSearchRequest {
                 folder: folder.to_string(),
                 query: query.to_string(),
+                since,
+                until,
                 reply,
             })
             .map_err(|_| "已有一次服务器检索在执行，请稍后重试".to_string())?;
@@ -889,12 +895,21 @@ async fn serve_server_search(
     capabilities: ServerCapabilities,
     request: ServerSearchRequest,
 ) {
-    let outcome =
-        run_server_search(session, account, selected, capabilities, &request.folder, &request.query)
-            .await;
+    let outcome = run_server_search(
+        session,
+        account,
+        selected,
+        capabilities,
+        &request.folder,
+        &request.query,
+        request.since,
+        request.until,
+    )
+    .await;
     let _ = request.reply.send(outcome);
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_server_search(
     session: &mut async_imap::Session<Conn>,
     account: &str,
@@ -902,6 +917,8 @@ async fn run_server_search(
     capabilities: ServerCapabilities,
     folder: &str,
     query: &str,
+    since: Option<u64>,
+    until: Option<u64>,
 ) -> Result<Vec<MessageSummary>, String> {
     ensure_selected(session, selected, folder, capabilities.condstore).await?;
     // 非 ASCII 查询必须声明字符集。RFC 3501 严格来说要求用 literal 传 8bit，
@@ -925,21 +942,41 @@ async fn run_server_search(
     }
     let set = uids.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
     let fetches = session
-        .uid_fetch(set, "(UID FLAGS BODY.PEEK[HEADER])")
+        .uid_fetch(set, "(UID FLAGS INTERNALDATE BODY.PEEK[HEADER])")
         .await
         .map_err(|error| format!("服务器检索取头失败: {error}"))?;
     futures::pin_mut!(fetches);
+    let now = now_unix();
+    let max_arrival = now.saturating_add(mime::DATE_FUTURE_TOLERANCE_SECS);
     let mut out: Vec<MessageSummary> = Vec::new();
     while let Some(fetch) = fetches.next().await {
         let fetch = fetch.map_err(|error| format!("服务器检索取头出错: {error}"))?;
         let Some(uid) = fetch.uid else { continue };
         let header = fetch.header().unwrap_or_default();
-        let mut message = parse_message_at(account, &uid.to_string(), header, 0);
+        let received_at = fetch
+            .internal_date()
+            .and_then(|dt| u64::try_from(dt.timestamp()).ok())
+            .filter(|ts| (mime::EARLIEST_PLAUSIBLE_DATE_SECS..=max_arrival).contains(ts))
+            .unwrap_or(0);
+        let mut message = parse_message_at(account, &uid.to_string(), header, received_at);
         message.folder = folder.to_string();
         apply_flags(&mut message, &fetch);
-        // 头里没有正文，`sort_at` 只能来自 Date；解析不出就退回 0（列表按它排在最后）。
-        message.sort_at = message.date_at.unwrap_or(0);
-        out.push(MessageSummary::from(&message));
+        // 有可信 INTERNALDATE 时按标准 sort_key 锚定；服务器省去 INTERNALDATE 时仍挡住远未来伪造 Date。
+        message.sort_at = if received_at > 0 {
+            mime::sort_key(message.date_at, received_at)
+        } else {
+            message
+                .date_at
+                .filter(|date| *date <= max_arrival)
+                .unwrap_or(0)
+        };
+        let summary = MessageSummary::from(&message);
+        if since.is_some_and(|bound| summary.sort_at < bound)
+            || until.is_some_and(|bound| summary.sort_at > bound)
+        {
+            continue;
+        }
+        out.push(summary);
     }
     out.sort_by_key(|summary| std::cmp::Reverse(summary.sort_at));
     Ok(out)
@@ -1968,10 +2005,11 @@ impl SyncSession<'_> {
                 .and_then(|store| store.folder_by_name(self.account, folder).ok().flatten())
                 .and_then(|record| record.role),
         };
+        let now = now_unix();
         let mut found: Option<MailMessage> = None;
         {
             let fetches = session
-                .uid_fetch(uid.to_string(), "(UID FLAGS BODY.PEEK[])")
+                .uid_fetch(uid.to_string(), "(UID FLAGS INTERNALDATE BODY.PEEK[])")
                 .await
                 .map_err(|error| format!("按需拉取 FETCH 失败: {error}"))?;
             futures::pin_mut!(fetches);
@@ -1982,7 +2020,8 @@ impl SyncSession<'_> {
                     continue;
                 }
                 let Some(body) = fetch.body() else { continue };
-                let mut message = parse_message(self.account, &uid.to_string(), body);
+                let received_at = arrival_from_fetch(&fetch, now);
+                let mut message = parse_message_at(self.account, &uid.to_string(), body, received_at);
                 message.folder = folder.to_string();
                 message.folder_role = FolderRole::to_column(role).to_string();
                 apply_flags(&mut message, &fetch);
@@ -2075,10 +2114,11 @@ async fn fetch_and_deliver(
     highest: &mut u32,
 ) -> Result<(), String> {
     let fetches = session
-        .uid_fetch(uid_set, "(UID FLAGS BODY.PEEK[])")
+        .uid_fetch(uid_set, "(UID FLAGS INTERNALDATE BODY.PEEK[])")
         .await
         .map_err(|error| format!("UID FETCH 失败: {error}"))?;
     futures::pin_mut!(fetches);
+    let now = now_unix();
     while let Some(fetch) = fetches.next().await {
         let fetch = fetch.map_err(|error| format!("FETCH 流出错: {error}"))?;
         let Some(uid) = fetch.uid else { continue };
@@ -2092,7 +2132,8 @@ async fn fetch_and_deliver(
             continue;
         }
         let Some(body) = fetch.body() else { continue };
-        let mut message = parse_message(account, &uid.to_string(), body);
+        let received_at = arrival_from_fetch(&fetch, now);
+        let mut message = parse_message_at(account, &uid.to_string(), body, received_at);
         message.folder = target.name.clone();
         message.folder_role = FolderRole::to_column(target.role).to_string();
         apply_flags(&mut message, &fetch);
@@ -2116,6 +2157,14 @@ async fn fetch_and_deliver(
     Ok(())
 }
 
+fn arrival_from_fetch(fetch: &async_imap::types::Fetch, now: u64) -> u64 {
+    fetch
+        .internal_date()
+        .and_then(|dt| u64::try_from(dt.timestamp()).ok())
+        .map(|ts| mime::sanitize_arrival_secs(ts, now))
+        .unwrap_or(now)
+}
+
 /// MIME → [`MailMessage`]：解析 RFC 5322 事实、正文（纯文本 + HTML 原文）与附件（ADR-0025）。
 pub fn parse_message(account: &str, uid: &str, raw: &[u8]) -> MailMessage {
     let received_at = SystemTime::now()
@@ -2125,8 +2174,9 @@ pub fn parse_message(account: &str, uid: &str, raw: &[u8]) -> MailMessage {
     parse_message_at(account, uid, raw, received_at)
 }
 
-/// [`parse_message`] 的可注入时钟版本。`received_at` 是「本机第一次观测到这封信的
-/// 时刻」，与 `Date` 头无关；显式传入使排序与可信度判定可确定性测试。
+/// [`parse_message`] 的可注入到达时间版本。`received_at` 是最佳已知到达时刻（IMAP
+/// `INTERNALDATE`、provider 收信时刻，缺失时回退本机首次观测时刻），与 `Date` 头无关；
+/// 显式传入使排序与可信度判定可确定性测试。
 pub fn parse_message_at(account: &str, uid: &str, raw: &[u8], received_at: u64) -> MailMessage {
     let parsed = parse_mail(raw).ok();
     let get = |name: &str| -> String {
@@ -2383,12 +2433,21 @@ fn provider_call_detail(error: crate::provider::ProviderCallError) -> String {
 fn parse_provider_messages(account: &str, value: &serde_json::Value) -> Result<Vec<MailMessage>, String> {
     let response: TransportReceiveResponse = serde_json::from_value(value.clone())
         .map_err(|_| "provider receive 应答结构无效".to_string())?;
+    let now = now_unix();
     let mut out = Vec::with_capacity(response.messages.len());
     for item in response.messages {
         let uid = item.uid;
         if uid.is_empty() || uid.len() > 20 || !uid.bytes().all(|byte| byte.is_ascii_digit()) {
             return Err("provider 返回非法 uid（必须是十进制数字）".into());
         }
+        if item.received_at > mime::LATEST_PLAUSIBLE_DATE_SECS {
+            return Err("provider 返回非法 received_at".into());
+        }
+        let received_at = if item.received_at >= mime::EARLIEST_PLAUSIBLE_DATE_SECS {
+            mime::sanitize_arrival_secs(item.received_at, now)
+        } else {
+            item.received_at
+        };
         let sender = sanitize_detail_owned(&item.sender);
         // recipient 是 ADR-0022 增补的可选键（地址层溯源）；缺省为空。
         let recipient = sanitize_detail_owned(&item.recipient);
@@ -2400,7 +2459,7 @@ fn parse_provider_messages(account: &str, value: &serde_json::Value) -> Result<V
         mime::truncate_utf8_bytes(&mut body, mime::MAX_STORED_TEXT_BYTES);
         // ADR-0025：provider 合同新增的可选头部键，缺省保持既有行为。
         let date_at = mime::parse_date_header(&item.date);
-        let sort_at = mime::sort_key(date_at, item.received_at);
+        let sort_at = mime::sort_key(date_at, received_at);
         let snippet = mime::snippet_of(&body);
         out.push(MailMessage {
             account: account.to_string(),
@@ -2409,7 +2468,7 @@ fn parse_provider_messages(account: &str, value: &serde_json::Value) -> Result<V
             recipient,
             subject,
             body,
-            received_at: item.received_at,
+            received_at,
             message_id: mime::sanitize_header(
                 &mime::strip_angle_brackets(&item.message_id),
                 mime::MAX_MESSAGE_ID_BYTES,
@@ -2485,5 +2544,33 @@ mod tests {
             ..ReceiveConfig::default()
         };
         assert_eq!(base.merge(&frag).initial_sync_limit, 50);
+    }
+
+    #[test]
+    fn provider_messages_reject_millisecond_received_at_and_clamp_far_future() {
+        let bad = serde_json::json!({
+            "messages": [{
+                "uid": "1",
+                "sender": "s@example.test",
+                "subject": "ms bug",
+                "body": "hi",
+                "received_at": 1_795_000_000_000_u64
+            }]
+        });
+        let err = parse_provider_messages("acc", &bad).unwrap_err();
+        assert!(err.contains("received_at"), "{err}");
+
+        let now = now_unix();
+        let future = serde_json::json!({
+            "messages": [{
+                "uid": "2",
+                "sender": "s@example.test",
+                "subject": "future",
+                "body": "hi",
+                "received_at": 4_102_444_800_u64
+            }]
+        });
+        let parsed = parse_provider_messages("acc", &future).unwrap();
+        assert!(parsed[0].received_at <= now.saturating_add(60));
     }
 }

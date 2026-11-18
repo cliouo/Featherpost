@@ -2,9 +2,64 @@ import { useEffect, useState } from "react";
 import { Icon } from "../app/Icon";
 import { useStore } from "../host/hooks";
 import type { MailboxController } from "./controller";
+import { localIsoDate, MAX_SAFE_UNIX_SECS } from "./format";
 import type { MailboxQuery } from "./types";
-const day = (v?: number) =>
-  v === undefined ? "" : new Date(v * 1000).toLocaleDateString("sv-SE");
+
+export function parseLocalDateYmd(ymd: string): { y: number; m: number; d: number } | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd.trim());
+  if (!match) return null;
+  const y = Number(match[1]);
+  const m = Number(match[2]);
+  const d = Number(match[3]);
+  if (!Number.isInteger(y) || m < 1 || m > 12 || d < 1 || d > 31) return null;
+  const check = new Date(y, m - 1, d, 12, 0, 0);
+  check.setFullYear(y);
+  if (
+    Number.isNaN(check.getTime()) ||
+    check.getFullYear() !== y ||
+    check.getMonth() !== m - 1 ||
+    check.getDate() !== d
+  ) {
+    return null;
+  }
+  return { y, m, d };
+}
+
+export function localDayStartSecs(ymd: string): number | null {
+  const parsed = parseLocalDateYmd(ymd);
+  if (!parsed) return null;
+  const { y, m, d } = parsed;
+  const date = new Date(y, m - 1, d, 0, 0, 0);
+  date.setFullYear(y);
+  const secs = Math.floor(date.getTime() / 1000);
+  return Number.isFinite(secs) && secs >= 0 && secs <= MAX_SAFE_UNIX_SECS ? secs : null;
+}
+
+/** 次日本地零点减 1 秒：天然覆盖夏令时 23/25 小时日与午夜跳变时区。 */
+export function localDayEndSecs(ymd: string): number | null {
+  const parsed = parseLocalDateYmd(ymd);
+  if (!parsed) return null;
+  const { y, m, d } = parsed;
+  const nextMidnight = new Date(y, m - 1, d + 1, 0, 0, 0);
+  if (y < 100) {
+    const base = new Date(0);
+    base.setFullYear(y, m - 1, d + 1);
+    base.setHours(0, 0, 0, 0);
+    const secs = Math.floor(base.getTime() / 1000) - 1;
+    return Number.isFinite(secs) && secs >= 0 && secs <= MAX_SAFE_UNIX_SECS ? secs : null;
+  }
+  const secs = Math.floor(nextMidnight.getTime() / 1000) - 1;
+  return Number.isFinite(secs) && secs >= 0 && secs <= MAX_SAFE_UNIX_SECS ? secs : null;
+}
+
+const day = (v?: number) => {
+  if (v === undefined) return "";
+  if (v === 0) {
+    const epoch = new Date(0);
+    return `${String(epoch.getFullYear()).padStart(4, "0")}-${String(epoch.getMonth() + 1).padStart(2, "0")}-${String(epoch.getDate()).padStart(2, "0")}`;
+  }
+  return localIsoDate(v);
+};
 export function SearchBar({ controller }: { controller: MailboxController }) {
   const s = useStore(controller.store),
     [query, setQuery] = useState(""),
@@ -30,16 +85,12 @@ export function SearchBar({ controller }: { controller: MailboxController }) {
     }
   }, [s.scope]);
   function submit() {
-    const start = since
-      ? Math.floor(new Date(since + "T00:00:00").getTime() / 1000)
-      : undefined;
-    const end = until
-      ? Math.floor(new Date(until + "T23:59:59").getTime() / 1000)
-      : undefined;
+    const start = since ? localDayStartSecs(since) : undefined;
+    const end = until ? localDayEndSecs(until) : undefined;
     if (
-      (start !== undefined && (!Number.isFinite(start)||start<0)) ||
-      (end !== undefined && (!Number.isFinite(end)||end<0)) ||
-      (start !== undefined && end !== undefined && start > end)
+      (since && start === null) ||
+      (until && end === null) ||
+      (start !== null && start !== undefined && end !== null && end !== undefined && start > end)
     ) {
       setError("请选择有效的日期范围。");
       return;
@@ -52,8 +103,8 @@ export function SearchBar({ controller }: { controller: MailboxController }) {
       account: account || undefined,
       folder: folder || undefined,
       from: from.trim() || undefined,
-      since: start,
-      until: end,
+      since: start ?? undefined,
+      until: end ?? undefined,
       has_attachments: attachment || undefined,
     });
   }

@@ -702,22 +702,40 @@ export class MailboxController {
   }
   async searchServer() {
     if (!this.canSearchServer || this.state.scope.kind !== "search") return;
-    const query = this.state.scope.query.query!.trim();
+    const scopeQuery = this.state.scope.query;
+    const query = scopeQuery.query!.trim();
+    const since = scopeQuery.since;
+    const until = scopeQuery.until;
     const targets = this.serverTargets();
     const current = this.remoteRequests.begin();
     const epoch = this.state.snapshot.connection_epoch;
     this.patch({
       remote: { ...idleRemote(), status: "loading", query, accounts: targets.map((t) => t.account) },
     });
+    const inRange = (r: UiSummary) =>
+      (since === undefined || r.sort_at >= since) &&
+      (until === undefined || (r.sort_at > 0 && r.sort_at <= until));
     const found: UiSummary[] = [];
     let failed = 0,
       lastError: unknown = null;
     for (const target of targets) {
       try {
-        const rows = await this.bridge.mailbox.serverSearch!(target.account, target.folder, query);
+        const rows = await this.bridge.mailbox.serverSearch!(
+          target.account,
+          target.folder,
+          query,
+          { since, until },
+        );
         if (!current() || this.stopped) return;
-        // 越界结果（别的账户 / 文件夹）一律丢弃。
-        found.push(...rows.filter((r) => r.account === target.account && r.folder === target.folder));
+        // 越界结果（别的账户 / 文件夹 / 日期范围外）一律丢弃。
+        found.push(
+          ...rows.filter(
+            (r) =>
+              r.account === target.account &&
+              r.folder === target.folder &&
+              inRange(r),
+          ),
+        );
       } catch (e) {
         if (!current() || this.stopped) return;
         failed++;

@@ -945,6 +945,33 @@ fn print_discovery(discovery: &maild_client::ProviderDiscovery) {
     }
 }
 
+const EARLIEST_PLAUSIBLE_DATE_SECS: u64 = 31_536_000;
+const LATEST_PLAUSIBLE_DATE_SECS: u64 = 253_402_300_799;
+
+fn format_unix_with_utc_hint(secs: u64) -> String {
+    if !(EARLIEST_PLAUSIBLE_DATE_SECS..=LATEST_PLAUSIBLE_DATE_SECS).contains(&secs) {
+        return secs.to_string();
+    }
+    let days = (secs / 86_400) as i64;
+    let seconds_of_day = secs % 86_400;
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = if month <= 2 { y + 1 } else { y };
+    format!(
+        "{secs} ({year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z)",
+        seconds_of_day / 3600,
+        (seconds_of_day % 3600) / 60,
+        seconds_of_day % 60,
+    )
+}
+
 fn print_settings(result: &Value) {
     let rules = &result["rules"];
     println!(
@@ -955,6 +982,9 @@ fn print_settings(result: &Value) {
         "timezone_offset_minutes: {}",
         rules["timezone_offset_minutes"].as_i64().unwrap_or(0)
     );
+    if rules["follow_system_timezone"].as_bool() == Some(true) {
+        println!("follow_system_timezone: true");
+    }
     let keywords = rules["silent_keywords"]
         .as_array()
         .map(|values| {
@@ -1015,8 +1045,11 @@ fn print_message(result: &Value) {
     );
     println!(
         "received_at: {}",
-        message["received_at"].as_u64().unwrap_or(0)
+        format_unix_with_utc_hint(message["received_at"].as_u64().unwrap_or(0))
     );
+    if let Some(date_at) = message["date_at"].as_u64() {
+        println!("date_at: {}", format_unix_with_utc_hint(date_at));
+    }
     if let Some(decision) = result.get("remote_content") {
         println!(
             "remote_content: {} ({})",
@@ -1552,7 +1585,10 @@ fn print_draft(draft: &maild_client::DraftView, json_output: bool) -> Result<(),
         }
     }
     println!("subject: {}", terminal_text(&draft.subject));
-    println!("updated_at: {}", draft.updated_at);
+    println!(
+        "updated_at: {}",
+        format_unix_with_utc_hint(draft.updated_at)
+    );
     for (index, attachment) in draft.attachments.iter().enumerate() {
         println!(
             "attachment[{index}]: {} ({} bytes, {}){}",
@@ -1626,7 +1662,7 @@ async fn run_reading_policy(
             "  {} [{}] added_at={}",
             terminal_text(&entry.value),
             terminal_text(&entry.kind),
-            entry.added_at
+            format_unix_with_utc_hint(entry.added_at)
         );
     }
     if !result.persisted {
@@ -2093,6 +2129,25 @@ mod tests {
         );
         assert!(parse_rules_json("[]").is_err());
         assert!(parse_rules_json("not-json").is_err());
+    }
+
+    #[test]
+    fn unix_utc_hint_preserves_small_synthetic_values_and_formats_real_timestamps() {
+        assert_eq!(format_unix_with_utc_hint(0), "0");
+        assert_eq!(format_unix_with_utc_hint(1234), "1234");
+        assert_eq!(
+            format_unix_with_utc_hint(31_536_000),
+            "31536000 (1971-01-01T00:00:00Z)"
+        );
+        assert_eq!(
+            format_unix_with_utc_hint(1_795_001_600),
+            "1795001600 (2026-11-18T11:33:20Z)"
+        );
+        assert_eq!(
+            format_unix_with_utc_hint(253_402_300_799),
+            "253402300799 (9999-12-31T23:59:59Z)"
+        );
+        assert_eq!(format_unix_with_utc_hint(253_402_300_800), "253402300800");
     }
 
     #[test]

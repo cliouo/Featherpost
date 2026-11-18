@@ -2,6 +2,7 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 
 import { App } from './app/App';
+import { ErrorBoundary } from './app/ErrorBoundary';
 import { tauriBridge } from './bridge/tauri';
 import { Host } from './host/host';
 import { mailboxModule } from './mailbox/module';
@@ -36,6 +37,8 @@ void host.start();
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <App host={host} />
+    <ErrorBoundary onReset={() => { void host.bridge.refresh().catch(() => {}); }}>
+      <App host={host} />
+    </ErrorBoundary>
   </StrictMode>,
 );

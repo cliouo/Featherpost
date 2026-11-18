@@ -4,6 +4,8 @@
 - 关联：ADR-0007（`user_version` 迁移框架）、ADR-0008/0009（备份与恢复）、ADR-0022（地址层与 v2）、
   ADR-0024（内置前端迁移）；ROADMAP M4.5-01
 
+> **后续时间语义增补（2026-11）**：IMAP 同步（增量抓取、按需单封拉取）与 `scope = "server"` 服务器检索在 `UID FETCH` 中携带 `INTERNALDATE`，将经 `[1971-01-01T00:00:00Z, now + 24h]` 钳制的服务器到达时间写入 `received_at`（服务器未返回或越界时回退本机观测时刻），使早于 10 年或缺失 `Date` 头的历史邮件仍按真实历史时刻排序；`parse_date_header` 与 provider `received_at` 同时增设四位年份上界 `9999-12-31T23:59:59Z`（`253_402_300_799`），阻断毫秒时间戳与超界年份。schema 与协议版本保持不变。
+
 ## 背景
 
 maild 至今把一封邮件存成 `(account, uid, sender, recipient, subject, body, received_at)` 七元组。
