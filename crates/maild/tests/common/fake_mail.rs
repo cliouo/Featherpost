@@ -133,7 +133,42 @@ struct RawMessage {
     uid: u64,
     /// FETCH 回复里的 FLAGS 内容（空串 = `FLAGS ()`）。
     flags: String,
+    /// FETCH 回复里的 `INTERNALDATE`（`None` 模拟不返回 INTERNALDATE 的旧服务器）。
+    internal_date: Option<String>,
     raw: Vec<u8>,
+}
+
+fn format_imap_internal_date(unix_secs: u64) -> String {
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    let days = (unix_secs / 86_400) as i64;
+    let seconds_of_day = unix_secs % 86_400;
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = if m <= 2 { y + 1 } else { y };
+    format!(
+        "{d:02}-{}-{year:04} {:02}:{:02}:{:02} +0000",
+        MONTHS[(m - 1) as usize],
+        seconds_of_day / 3600,
+        (seconds_of_day % 3600) / 60,
+        seconds_of_day % 60,
+    )
+}
+
+fn now_imap_internal_date() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    format_imap_internal_date(secs)
 }
 
 impl State {
@@ -162,6 +197,7 @@ impl State {
         self.messages.lock().unwrap().push(RawMessage {
             uid,
             flags: String::new(),
+            internal_date: Some(now_imap_internal_date()),
             raw,
         });
         let n = self.count();
@@ -209,15 +245,22 @@ impl State {
             .unwrap_or(1)
     }
 
-    /// (uid, flags, raw)，按 uid 升序。
-    fn mailbox_snapshot(&self, name: &str) -> Vec<(u64, String, Vec<u8>)> {
+    /// (uid, flags, internal_date, raw)，按 uid 升序。
+    fn mailbox_snapshot(&self, name: &str) -> Vec<(u64, String, Option<String>, Vec<u8>)> {
         if Self::is_inbox(name) {
             return self
                 .messages
                 .lock()
                 .unwrap()
                 .iter()
-                .map(|message| (message.uid, message.flags.clone(), message.raw.clone()))
+                .map(|message| {
+                    (
+                        message.uid,
+                        message.flags.clone(),
+                        message.internal_date.clone(),
+                        message.raw.clone(),
+                    )
+                })
                 .collect();
         }
         self.extra
@@ -228,7 +271,14 @@ impl State {
                 mailbox
                     .messages
                     .iter()
-                    .map(|message| (message.uid, message.flags.clone(), message.raw.clone()))
+                    .map(|message| {
+                        (
+                            message.uid,
+                            message.flags.clone(),
+                            message.internal_date.clone(),
+                            message.raw.clone(),
+                        )
+                    })
                     .collect()
             })
             .unwrap_or_default()
@@ -266,19 +316,20 @@ impl State {
         }
     }
 
-    fn take_raw(&self, mailbox: &str, uid: u64) -> Option<(String, Vec<u8>)> {
+    fn take_raw(&self, mailbox: &str, uid: u64) -> Option<(String, Option<String>, Vec<u8>)> {
         self.mailbox_snapshot(mailbox)
             .into_iter()
-            .find(|(existing, _, _)| *existing == uid)
-            .map(|(_, flags, raw)| (flags, raw))
+            .find(|(existing, _, _, _)| *existing == uid)
+            .map(|(_, flags, internal_date, raw)| (flags, internal_date, raw))
     }
 
-    fn append(&self, mailbox: &str, flags: &str, raw: Vec<u8>) {
+    fn append(&self, mailbox: &str, flags: &str, internal_date: Option<String>, raw: Vec<u8>) {
         if Self::is_inbox(mailbox) {
             let uid = self.next_uid.fetch_add(1, Ordering::Relaxed);
             self.messages.lock().unwrap().push(RawMessage {
                 uid,
                 flags: flags.to_string(),
+                internal_date,
                 raw,
             });
             return;
@@ -295,6 +346,7 @@ impl State {
         entry.messages.push(RawMessage {
             uid,
             flags: flags.to_string(),
+            internal_date,
             raw,
         });
     }
@@ -534,11 +586,25 @@ impl FakeMail {
 
     /// 往指定 mailbox 投递一封信；`flags` 是 FETCH 回复里的 FLAGS 内容（可为空串）。
     pub fn deliver_to(&self, mailbox: &str, flags: &str, raw: Vec<u8>) {
+        let internal_date = now_imap_internal_date();
+        self.deliver_to_with_internal_date(mailbox, flags, Some(&internal_date), raw);
+    }
+
+    /// 往指定 mailbox 投递一封带显式 `INTERNALDATE`（或 `None` 省略）的信，供历史时间锚定测试用。
+    pub fn deliver_to_with_internal_date(
+        &self,
+        mailbox: &str,
+        flags: &str,
+        internal_date: Option<&str>,
+        raw: Vec<u8>,
+    ) {
+        let internal_date = internal_date.map(str::to_string);
         if State::is_inbox(mailbox) {
             let uid = self.state.next_uid.fetch_add(1, Ordering::Relaxed);
             self.state.messages.lock().unwrap().push(RawMessage {
                 uid,
                 flags: flags.to_string(),
+                internal_date,
                 raw,
             });
             let n = self.state.count();
@@ -557,6 +623,7 @@ impl FakeMail {
         entry.messages.push(RawMessage {
             uid,
             flags: flags.to_string(),
+            internal_date,
             raw,
         });
     }
@@ -592,7 +659,7 @@ impl FakeMail {
         self.state
             .mailbox_snapshot(mailbox)
             .into_iter()
-            .map(|(uid, flags, _)| (uid, flags))
+            .map(|(uid, flags, _, _)| (uid, flags))
             .collect()
     }
 
@@ -1083,13 +1150,13 @@ async fn imap_run<S: AsyncRead + AsyncWrite + Unpin>(stream: S, state: Arc<State
                         let hits: Vec<String> = state
                             .mailbox_snapshot(&selected)
                             .into_iter()
-                            .filter(|(_, _, raw)| {
+                            .filter(|(_, _, _, raw)| {
                                 !needle.is_empty()
                                     && String::from_utf8_lossy(raw)
                                         .to_ascii_lowercase()
                                         .contains(&needle)
                             })
-                            .map(|(uid, _, _)| uid.to_string())
+                            .map(|(uid, _, _, _)| uid.to_string())
                             .collect();
                         let listed = if hits.is_empty() {
                             "* SEARCH\r\n".to_string()
@@ -1108,10 +1175,12 @@ async fn imap_run<S: AsyncRead + AsyncWrite + Unpin>(stream: S, state: Arc<State
                         state.imap_fetches.fetch_add(1, Ordering::Relaxed);
                         let range = parts.get(3).copied().unwrap_or("1:*").to_string();
                         let items = parts.get(4..).map(|rest| rest.join(" ")).unwrap_or_default();
+                        let upper_items = items.to_ascii_uppercase();
                         // 标记对账只要 FLAGS，不带正文——与增量抓取区分开。
-                        let bodyless = !items.to_ascii_uppercase().contains("BODY");
+                        let bodyless = !upper_items.contains("BODY");
                         // 服务器检索取回的是头部：`BODY.PEEK[HEADER]`。
-                        let header_only = items.to_ascii_uppercase().contains("[HEADER]");
+                        let header_only = upper_items.contains("[HEADER]");
+                        let want_internal_date = upper_items.contains("INTERNALDATE");
                         // `N:*` 之外还支持逗号分隔的显式 UID 集合（检索命中用）。
                         let explicit: Option<Vec<u64>> = if range.contains(':') {
                             None
@@ -1131,15 +1200,19 @@ async fn imap_run<S: AsyncRead + AsyncWrite + Unpin>(stream: S, state: Arc<State
                             .and_then(|value| value.parse().ok())
                             .unwrap_or(1);
                         let all = state.mailbox_snapshot(&selected);
-                        let highest = all.iter().map(|(uid, _, _)| *uid).max();
+                        let highest = all.iter().map(|(uid, _, _, _)| *uid).max();
                         let mut emitted = 0usize;
-                        for (i, (uid, flags, raw)) in all.iter().enumerate() {
+                        for (i, (uid, flags, internal_date, raw)) in all.iter().enumerate() {
                             match &explicit {
                                 Some(list) if !list.contains(uid) => continue,
                                 None if *uid < start => continue,
                                 _ => {}
                             }
                             let seq = i + 1;
+                            let internal_attr = match (want_internal_date, internal_date.as_deref()) {
+                                (true, Some(dt)) => format!(" INTERNALDATE \"{dt}\""),
+                                _ => String::new(),
+                            };
                             if header_only {
                                 let split = raw
                                     .windows(4)
@@ -1150,7 +1223,7 @@ async fn imap_run<S: AsyncRead + AsyncWrite + Unpin>(stream: S, state: Arc<State
                                 let len = header.len();
                                 out.extend_from_slice(
                                     format!(
-                                        "* {seq} FETCH (UID {uid} FLAGS ({flags}) BODY[HEADER] {{{len}}}\r\n"
+                                        "* {seq} FETCH (UID {uid} FLAGS ({flags}){internal_attr} BODY[HEADER] {{{len}}}\r\n"
                                     )
                                     .as_bytes(),
                                 );
@@ -1161,7 +1234,7 @@ async fn imap_run<S: AsyncRead + AsyncWrite + Unpin>(stream: S, state: Arc<State
                             }
                             if bodyless {
                                 out.extend_from_slice(
-                                    format!("* {seq} FETCH (UID {uid} FLAGS ({flags}))\r\n")
+                                    format!("* {seq} FETCH (UID {uid} FLAGS ({flags}){internal_attr})\r\n")
                                         .as_bytes(),
                                 );
                                 emitted += 1;
@@ -1170,7 +1243,7 @@ async fn imap_run<S: AsyncRead + AsyncWrite + Unpin>(stream: S, state: Arc<State
                             let len = raw.len();
                             out.extend_from_slice(
                                 format!(
-                                    "* {seq} FETCH (UID {uid} FLAGS ({flags}) BODY[] {{{len}}}\r\n"
+                                    "* {seq} FETCH (UID {uid} FLAGS ({flags}){internal_attr} BODY[] {{{len}}}\r\n"
                                 )
                                 .as_bytes(),
                             );
@@ -1181,16 +1254,20 @@ async fn imap_run<S: AsyncRead + AsyncWrite + Unpin>(stream: S, state: Arc<State
                         // 对账用的全量请求即使空集也如实返回空——存在性对账依赖这一点。
                         if emitted == 0 && !bodyless && !header_only && explicit.is_none() {
                             if let Some(highest) = highest {
-                                let (index, (uid, flags, raw)) = all
+                                let (index, (uid, flags, internal_date, raw)) = all
                                     .iter()
                                     .enumerate()
-                                    .find(|(_, (uid, _, _))| *uid == highest)
+                                    .find(|(_, (uid, _, _, _))| *uid == highest)
                                     .expect("最大 UID 必在快照内");
                                 let seq = index + 1;
                                 let len = raw.len();
+                                let internal_attr = match (want_internal_date, internal_date.as_deref()) {
+                                    (true, Some(dt)) => format!(" INTERNALDATE \"{dt}\""),
+                                    _ => String::new(),
+                                };
                                 out.extend_from_slice(
                                     format!(
-                                        "* {seq} FETCH (UID {uid} FLAGS ({flags}) BODY[] {{{len}}}\r\n"
+                                        "* {seq} FETCH (UID {uid} FLAGS ({flags}){internal_attr} BODY[] {{{len}}}\r\n"
                                     )
                                     .as_bytes(),
                                 );
@@ -1245,8 +1322,8 @@ async fn imap_run<S: AsyncRead + AsyncWrite + Unpin>(stream: S, state: Arc<State
                                     continue;
                                 }
                                 match state.take_raw(&selected, uid) {
-                                    Some((flags, raw)) => {
-                                        state.append(&target, &flags, raw);
+                                    Some((flags, internal_date, raw)) => {
+                                        state.append(&target, &flags, internal_date, raw);
                                         if sub == "MOVE" {
                                             state.remove(&selected, uid);
                                         }
@@ -1264,7 +1341,7 @@ async fn imap_run<S: AsyncRead + AsyncWrite + Unpin>(stream: S, state: Arc<State
                                 let deleted = state
                                     .mailbox_snapshot(&selected)
                                     .into_iter()
-                                    .any(|(existing, flags, _)| {
+                                    .any(|(existing, flags, _, _)| {
                                         existing == uid
                                             && flags.to_ascii_lowercase().contains("deleted")
                                     });
@@ -1303,7 +1380,7 @@ async fn imap_run<S: AsyncRead + AsyncWrite + Unpin>(stream: S, state: Arc<State
                             raw.extend_from_slice(b"\r\n");
                         }
                         raw.truncate(literal);
-                        state.append(&target, "", raw);
+                        state.append(&target, "", Some(now_imap_internal_date()), raw);
                         out.extend_from_slice(
                             format!("{tag} OK APPEND completed\r\n").as_bytes(),
                         );

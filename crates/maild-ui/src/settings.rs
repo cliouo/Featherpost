@@ -88,6 +88,8 @@ pub struct RulesConfig {
     #[serde(default)]
     pub timezone_offset_minutes: i32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub follow_system_timezone: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notify_new_mail: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub muted_accounts: Option<Vec<String>>,
@@ -101,18 +103,21 @@ pub struct UiRules {
 
 impl UiRules {
     /// 从 `getSettings`/`setSettings` 原始响应投影。`persisted` 键（ADR-0043 起 get/set 都回）
-    /// 或任一新键出现 = 后台认识普适新邮件通知，缺省值补成明确值。
+    /// 或任一新键出现 = 后台认识普适新邮件通知与系统时区开关，缺省值补成明确值。
     fn from_response(value: Value) -> Result<Self, UiError> {
         let supports_new_mail = value.get("persisted").is_some_and(Value::is_boolean)
             || value
                 .get("rules")
                 .and_then(Value::as_object)
                 .is_some_and(|rules| {
-                    rules.contains_key("notify_new_mail") || rules.contains_key("muted_accounts")
+                    rules.contains_key("notify_new_mail")
+                        || rules.contains_key("muted_accounts")
+                        || rules.contains_key("follow_system_timezone")
                 });
         let mut result: UiRules = serde_json::from_value(value)
             .map_err(|error| UiError::failed("settings_rules", error, "后台返回的规则无法识别。"))?;
         if supports_new_mail {
+            result.rules.follow_system_timezone.get_or_insert(false);
             result.rules.notify_new_mail.get_or_insert(false);
             result.rules.muted_accounts.get_or_insert_with(Vec::new);
         }
@@ -539,22 +544,28 @@ mod tests {
             "timezone_offset_minutes": 0
         });
         let new = UiRules::from_response(json!({ "rules": base, "persisted": false })).unwrap();
+        assert_eq!(new.rules.follow_system_timezone, Some(false));
         assert_eq!(new.rules.notify_new_mail, Some(false));
         assert_eq!(new.rules.muted_accounts, Some(Vec::new()));
         let rendered = serde_json::to_value(&new).unwrap();
+        assert_eq!(rendered["rules"]["follow_system_timezone"], false);
         assert_eq!(rendered["rules"]["notify_new_mail"], false);
         assert_eq!(rendered["rules"]["muted_accounts"], json!([]));
 
         let old = UiRules::from_response(json!({ "rules": base })).unwrap();
+        assert_eq!(old.rules.follow_system_timezone, None);
         assert_eq!(old.rules.notify_new_mail, None);
         let rendered = serde_json::to_value(&old.rules).unwrap();
+        assert!(rendered.get("follow_system_timezone").is_none());
         assert!(rendered.get("notify_new_mail").is_none(), "旧后台不认识的键不回传给它");
         assert!(rendered.get("muted_accounts").is_none());
 
         let mut on = base.clone();
+        on["follow_system_timezone"] = json!(true);
         on["notify_new_mail"] = json!(true);
         on["muted_accounts"] = json!(["work"]);
         let on = UiRules::from_response(json!({ "rules": on })).unwrap();
+        assert_eq!(on.rules.follow_system_timezone, Some(true));
         assert_eq!(on.rules.notify_new_mail, Some(true));
         assert_eq!(on.rules.muted_accounts, Some(vec!["work".to_string()]));
     }

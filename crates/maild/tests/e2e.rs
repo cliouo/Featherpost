@@ -672,12 +672,13 @@ password = "dev"
 #[tokio::test(flavor = "current_thread")]
 async fn rules_apply_failure_silences_notifications_fail_closed() {
     let ctx = Context::new();
-    let mut asm = maild::assemble(
+    let mut asm = maild::loader::load(
+        &maild::global_registry(),
         &ctx,
         r#"
 [plugins.rules]
 [plugins.rules.config]
-quiet_hours = [{ start = "22:00", end = "07:00" }]
+quiet_hours = [{ start = "22:00", end = "22:00" }]
 
 [plugins.store]
 [plugins.store.config]
@@ -689,11 +690,11 @@ db_path = ""
     )
     .expect("配置形状有效");
     assert!(
-        asm.errors
+        asm.report()
             .iter()
-            .any(|error| error.to_string().contains("rules")),
-        "缺 scheduler 时 rules 必须明确装配失败: {:?}",
-        asm.errors
+            .any(|(plugin, state)| plugin == "rules" && *state == cordis::FiberState::Failed),
+        "rules apply 非法窗口时必须进入 Failed: {:?}",
+        asm.report()
     );
     assert!(ctx.get::<maild::rules::RulesConfig>().is_some());
     assert!(ctx.get::<maild::rules::RulesSettings>().is_none());

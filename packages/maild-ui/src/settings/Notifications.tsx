@@ -2,6 +2,24 @@ import { useStore } from "../host/hooks";
 import { Field } from "./Accounts";
 import type { SettingsController } from "./controller";
 import { BRAND } from "../brand";
+
+export function formatUtcOffset(minutes: number): string {
+  if (!Number.isFinite(minutes) || minutes === 0) return "UTC+0";
+  const sign = minutes > 0 ? "+" : "−";
+  const abs = Math.abs(Math.trunc(minutes));
+  const hours = Math.floor(abs / 60);
+  const rem = abs % 60;
+  return rem === 0
+    ? `UTC${sign}${hours}`
+    : `UTC${sign}${hours}:${String(rem).padStart(2, "0")}`;
+}
+
+export function currentSystemOffsetMinutes(now = new Date()): number {
+  const raw = now.getTimezoneOffset();
+  if (!Number.isFinite(raw)) return NaN;
+  return raw === 0 ? 0 : -raw;
+}
+
 export function Notifications({
   controller,
 }: {
@@ -12,12 +30,23 @@ export function Notifications({
     r = s.rules;
   const edit = (patch: Partial<NonNullable<typeof r>>) =>
     r && controller.setRules({ ...r, ...patch });
-  // 旧后台不回传这两个键：如实标为「需要后台升级」，而不是假装能保存。
+  // 旧后台不回传新键：如实标为「需要后台升级」，保存时也不发旧后台不认识的字段。
   const baseline = s.rulesBaseline
     ? (JSON.parse(s.rulesBaseline) as Partial<NonNullable<typeof r>>)
     : {};
   const supportsNewMail = baseline.notify_new_mail !== undefined;
   const supportsMute = baseline.muted_accounts !== undefined;
+  const supportsFollowSystemTz =
+    baseline.follow_system_timezone !== undefined ||
+    r?.follow_system_timezone !== undefined;
+  const followSystemTz = Boolean(r?.follow_system_timezone);
+  const systemOffset = currentSystemOffsetMinutes();
+  const showTzMismatch =
+    !!r &&
+    !followSystemTz &&
+    r.quiet_hours.length > 0 &&
+    Number.isFinite(systemOffset) &&
+    r.timezone_offset_minutes !== systemOffset;
   const muted = r?.muted_accounts ?? [];
   const notifyNewMail = r?.notify_new_mail ?? true;
   return (
@@ -142,8 +171,59 @@ export function Notifications({
             </Field>
             <h3>静默时段</h3>
             <p className="group-note">
-              按下面的固定 UTC 偏移计算；不会自动随夏令时切换。
+              {followSystemTz
+                ? "按当前系统本地时区计算，自动跟随夏令时与出行。"
+                : "按下面的固定 UTC 偏移计算；不会自动随夏令时切换。"}
             </p>
+            {supportsFollowSystemTz && (
+              <div className="setting-row">
+                <div className="setting-copy">
+                  <strong>跟随系统时区</strong>
+                  <p>自动适配当前系统时区、夏令时切换与跨时区出行。</p>
+                </div>
+                <button
+                  type="button"
+                  className="toggle"
+                  role="switch"
+                  aria-checked={followSystemTz}
+                  aria-label="跟随系统时区"
+                  onClick={() =>
+                    edit({ follow_system_timezone: !followSystemTz })
+                  }
+                >
+                  <span className="toggle-track" />
+                </button>
+              </div>
+            )}
+            {showTzMismatch && (
+              <div className="provider-caveat" role="status">
+                <span>
+                  当前配置的固定偏移为{" "}
+                  {formatUtcOffset(r.timezone_offset_minutes)}（
+                  {r.timezone_offset_minutes} 分钟），与当前系统时区{" "}
+                  {formatUtcOffset(systemOffset)}（{systemOffset} 分钟）不同。
+                </span>{" "}
+                {supportsFollowSystemTz ? (
+                  <button
+                    type="button"
+                    className="text-button"
+                    onClick={() => edit({ follow_system_timezone: true })}
+                  >
+                    改为跟随系统时区
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="text-button"
+                    onClick={() =>
+                      edit({ timezone_offset_minutes: systemOffset })
+                    }
+                  >
+                    {`填入当前系统偏移（${systemOffset} 分钟）`}
+                  </button>
+                )}
+              </div>
+            )}
             {r.quiet_hours.map((q, i) => (
               <div key={i} className="quiet-hours">
                 <Field label={`第 ${i + 1} 段开始`}>
@@ -192,33 +272,41 @@ export function Notifications({
               type="button"
               className="secondary"
               disabled={r.quiet_hours.length >= 32}
-              onClick={() =>
+              onClick={() => {
+                const autoFollow =
+                  r.quiet_hours.length === 0 &&
+                  supportsFollowSystemTz &&
+                  !followSystemTz &&
+                  r.timezone_offset_minutes === 0;
                 edit({
                   quiet_hours: [
                     ...r.quiet_hours,
                     { start: "22:00", end: "08:00" },
                   ],
-                })
-              }
+                  ...(autoFollow ? { follow_system_timezone: true } : {}),
+                });
+              }}
             >
               添加时段
             </button>
-            <Field
-              label="UTC 偏移（分钟）"
-              hint="例如 UTC+8 为 480，UTC−5 为 −300。"
-            >
-              <input
-                type="number"
-                min={-1440}
-                max={1440}
-                step={1}
-                required
-                value={r.timezone_offset_minutes}
-                onChange={(e) =>
-                  edit({ timezone_offset_minutes: Number(e.target.value) })
-                }
-              />
-            </Field>
+            {!followSystemTz && (
+              <Field
+                label="UTC 偏移（分钟）"
+                hint="例如 UTC+8 为 480，UTC−5 为 −300。"
+              >
+                <input
+                  type="number"
+                  min={-1440}
+                  max={1440}
+                  step={1}
+                  required
+                  value={r.timezone_offset_minutes}
+                  onChange={(e) =>
+                    edit({ timezone_offset_minutes: Number(e.target.value) })
+                  }
+                />
+              </Field>
+            )}
             <div className="settings-actions">
               <button
                 type="submit"

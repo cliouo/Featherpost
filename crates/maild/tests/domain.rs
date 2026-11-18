@@ -321,20 +321,34 @@ poll_secs = 1
 #[test]
 fn quiet_hours_requires_scheduler() {
     use cordis::Context;
-    use maild::loader::LoadError;
+    use maild::events::{QuietHoursQuery, QuietHoursRequest};
 
+    // `quiet_hours` 查询时直接计算日周期窗口，不再依赖 `scheduler` 插件或 1 秒唤醒定时器。
     let ctx = Context::new();
     let config = r#"
 [plugins.rules]
 [plugins.rules.config]
 quiet_hours = [{ start = "22:00", end = "07:00" }]
+timezone_offset_minutes = 480
 "#;
     let asm = maild::assemble(&ctx, config).expect("顶层配置有效");
-    assert!(asm.errors.iter().any(|error| matches!(
-        error,
-        LoadError::Apply { plugin, detail }
-            if plugin == "rules" && detail.contains("需要先装配 scheduler")
-    )));
+    assert!(asm.errors.is_empty(), "无 scheduler 也应成功装配: {:?}", asm.errors);
+    assert!(ctx.get::<maild::scheduler::Scheduler>().is_none());
+    assert!(ctx.get::<maild::rules::RulesSettings>().is_some());
+    assert_eq!(
+        ctx.bail::<QuietHoursQuery>(QuietHoursRequest {
+            account: "main".into(),
+            at_unix_secs: 1_767_277_800, // 22:30 UTC+8
+        }),
+        Some(true)
+    );
+    assert_eq!(
+        ctx.bail::<QuietHoursQuery>(QuietHoursRequest {
+            account: "main".into(),
+            at_unix_secs: 1_767_231_400, // 09:30 UTC+8
+        }),
+        Some(false)
+    );
 }
 
 #[test]

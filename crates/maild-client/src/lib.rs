@@ -240,7 +240,7 @@ pub struct MailMessage {
     pub recipient: String,
     pub subject: String,
     pub body: String,
-    /// **本机第一次观测到这封信的时刻**，不是发信时间（ADR-0025）。
+    /// **最佳已知到达时刻**（IMAP `INTERNALDATE`、provider 收信时刻，或本机首次观测回退），不是发信人声称的 `Date`（ADR-0025）。
     pub received_at: u64,
 
     // —— ADR-0025 新增；旧 daemon 一律缺省。——
@@ -1359,6 +1359,9 @@ pub struct RulesSettings {
     #[serde(default)]
     pub quiet_hours: Vec<QuietHours>,
     pub timezone_offset_minutes: i32,
+    /// 静默时段跟随系统本地时区与夏令时。旧 daemon 不回传 → `false`；为 `false` 时不序列化。
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub follow_system_timezone: bool,
     /// 收件箱新邮件系统通知（ADR-0043）。旧 daemon 不回传 → `false`；为 `false` 时不序列化，
     /// 发给旧 daemon 的整包 patch 逐字节不变。
     #[serde(default, skip_serializing_if = "is_false")]
@@ -1382,6 +1385,8 @@ pub struct RulesPatch {
     pub quiet_hours: Option<Vec<QuietHours>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timezone_offset_minutes: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub follow_system_timezone: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notify_new_mail: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1429,7 +1434,11 @@ fn rules_error(field: RulesField, message: impl Into<String>) -> RulesValidation
     }
 }
 
-fn validate_clock(field: RulesField, value: &str) -> Result<u16, RulesValidationError> {
+fn validate_clock(
+    field: RulesField,
+    value: &str,
+    allow_24_end: bool,
+) -> Result<u16, RulesValidationError> {
     let invalid = |message: String| rules_error(field, message);
     let Some((hour, minute)) = value.split_once(':') else {
         return Err(invalid(format!("时间必须是 HH:MM: {value}")));
@@ -1446,7 +1455,12 @@ fn validate_clock(field: RulesField, value: &str) -> Result<u16, RulesValidation
     if hour > 24 || minute >= 60 || (hour == 24 && minute != 0) {
         return Err(invalid(format!("时间超出范围: {value}")));
     }
-    Ok((hour * 60 + minute) % (24 * 60))
+    let total = hour * 60 + minute;
+    if total == 24 * 60 && allow_24_end {
+        Ok(24 * 60)
+    } else {
+        Ok(total % (24 * 60))
+    }
 }
 
 fn validate_keywords(keywords: &[String]) -> Result<(), RulesValidationError> {
@@ -1475,9 +1489,9 @@ fn validate_quiet_hours(windows: &[QuietHours]) -> Result<(), RulesValidationErr
         ));
     }
     for (index, window) in windows.iter().enumerate() {
-        let start = validate_clock(RulesField::QuietHoursStart(index), &window.start)?;
-        let end = validate_clock(RulesField::QuietHoursEnd(index), &window.end)?;
-        if start == end {
+        let start = validate_clock(RulesField::QuietHoursStart(index), &window.start, false)?;
+        let end = validate_clock(RulesField::QuietHoursEnd(index), &window.end, true)?;
+        if start == end || window.start == window.end {
             return Err(rules_error(
                 RulesField::QuietHoursEnd(index),
                 format!(
@@ -4935,10 +4949,26 @@ mod tests {
                 end: "07:00".into(),
             }],
             timezone_offset_minutes: 480,
+            follow_system_timezone: false,
             notify_new_mail: false,
             muted_accounts: Vec::new(),
         };
         assert_eq!(validate_rules_settings(&valid), Ok(()));
+        let mut all_day = valid.clone();
+        all_day.quiet_hours[0] = QuietHours {
+            start: "00:00".into(),
+            end: "24:00".into(),
+        };
+        assert_eq!(validate_rules_settings(&all_day), Ok(()));
+        let mut both_24 = valid.clone();
+        both_24.quiet_hours[0] = QuietHours {
+            start: "24:00".into(),
+            end: "24:00".into(),
+        };
+        assert_eq!(
+            validate_rules_settings(&both_24).unwrap_err().field,
+            RulesField::QuietHoursEnd(0)
+        );
         assert_eq!(
             validate_settings_result(
                 &SettingsResult {
@@ -5024,19 +5054,25 @@ mod tests {
             "timezone_offset_minutes": 0
         });
         let parsed: RulesSettings = serde_json::from_value(old_wire.clone()).unwrap();
+        assert!(!parsed.follow_system_timezone);
         assert!(!parsed.notify_new_mail);
         assert!(parsed.muted_accounts.is_empty());
         assert_eq!(serde_json::to_value(&parsed).unwrap(), old_wire);
         assert_eq!(serde_json::to_value(RulesPatch::default()).unwrap(), json!({}));
 
         let patch = RulesPatch {
+            follow_system_timezone: Some(true),
             notify_new_mail: Some(true),
             muted_accounts: Some(vec!["work".into()]),
             ..Default::default()
         };
         assert_eq!(
             serde_json::to_value(&patch).unwrap(),
-            json!({ "notify_new_mail": true, "muted_accounts": ["work"] })
+            json!({
+                "follow_system_timezone": true,
+                "notify_new_mail": true,
+                "muted_accounts": ["work"]
+            })
         );
     }
 

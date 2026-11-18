@@ -6,6 +6,7 @@ import type { Host } from '../host/host';
 import { useExternal, useStore } from '../host/hooks';
 import { phaseLabel } from '../settings/module';
 import { Icon } from './Icon';
+import { ErrorBoundary } from './ErrorBoundary';
 import { applyTheme } from './theme';
 import { BRAND } from '../brand';
 
@@ -130,7 +131,11 @@ export function App({ host }: { host: Host }) {
         {state.snapshot.identity_failure && active?.role !== 'settings' ? (
           <IdentityPanel snapshot={state.snapshot} />
         ) : (
-          ActiveView && <ActiveView active />
+          ActiveView && (
+            <ErrorBoundary resetKey={state.activeViewId}>
+              <ActiveView active />
+            </ErrorBoundary>
+          )
         )}
       </main>
       <div id="toast" className={state.toast ? 'show' : ''} role="status" aria-live="polite">

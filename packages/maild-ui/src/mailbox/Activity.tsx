@@ -8,6 +8,7 @@ import {
 } from "./activityController";
 import type { Operation } from "./types";
 import { Dialog } from "./Dialog";
+import { fullDate, isoDateTime } from "./format";
 import { BRAND } from "../brand";
 export function Activity({
   controller,
@@ -114,8 +115,8 @@ export function Activity({
                   </p>
                   {op.subject!==undefined&&op.subject!==null&&<p className="operation-subject" title={op.subject}>{op.subject||'（无主题）'}</p>}
                   <div className="operation-meta">
-                    <time>
-                      {new Date(op.created_at * 1000).toLocaleString()}
+                    <time dateTime={isoDateTime(op.created_at)}>
+                      {fullDate(op.created_at)}
                     </time>
                     <span>尝试 {op.attempts} 次</span>
                   </div>

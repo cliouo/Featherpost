@@ -19,7 +19,7 @@ use regex::Regex;
 use serde::Deserialize;
 
 use crate::events::{
-    MailFiltered, NotifyRoute, NotifyRouteEvent, OtpDetected, OtpHit, QuietHoursQuery,
+    MailFiltered, MailMessage, NotifyRoute, NotifyRouteEvent, OtpDetected, OtpHit, QuietHoursQuery,
     QuietHoursRequest,
 };
 use crate::frontend::OpenIntent;
@@ -28,6 +28,25 @@ use crate::rules::{RulesConfig, RulesSettings};
 use crate::store::Store;
 
 const MAX_OTP_CODE_BYTES: usize = 128;
+/// 验证码通知的新鲜度窗口（1 小时）：容忍延迟投递，同时拦截冷启动或历史同步带回的过期验证码。
+pub const OTP_STALE_AFTER_SECS: u64 = 60 * 60;
+
+/// 判定一封邮件是否仍有资格触发实时验证码通知（跳过已读、已删与超过 [`OTP_STALE_AFTER_SECS`] 的历史信）。
+pub fn otp_eligible(msg: &MailMessage, now_unix_secs: u64) -> bool {
+    if msg.seen || msg.deleted {
+        return false;
+    }
+    let effective_ts = msg
+        .date_at
+        .or_else(|| {
+            (msg.sort_at >= crate::mime::EARLIEST_PLAUSIBLE_DATE_SECS).then_some(msg.sort_at)
+        })
+        .or_else(|| {
+            (msg.received_at >= crate::mime::EARLIEST_PLAUSIBLE_DATE_SECS)
+                .then_some(msg.received_at)
+        });
+    !effective_ts.is_some_and(|ts| ts.saturating_add(OTP_STALE_AFTER_SECS) < now_unix_secs)
+}
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct OtpConfig {
@@ -108,6 +127,13 @@ impl Plugin for OtpPlugin {
 
         let ctx2 = ctx.clone();
         ctx.on_emit_scoped::<MailFiltered>(move |msg| {
+            let at_unix_secs = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|duration| duration.as_secs())
+                .unwrap_or(0);
+            if !otp_eligible(&msg, at_unix_secs) {
+                return;
+            }
             // 持久化去重：先查（emit 同步，「查→提取→标记」在单个监听器内无竞态）
             let store = match ctx2.get::<Store>() {
                 Some(s) => s,
@@ -155,10 +181,6 @@ impl Plugin for OtpPlugin {
                 subject: hit.subject.clone(),
                 from: hit.from.clone(),
             };
-            let at_unix_secs = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|duration| duration.as_secs())
-                .unwrap_or(0);
             let quiet = ctx2
                 .bail::<QuietHoursQuery>(QuietHoursRequest {
                     account: hit.account.clone(),
@@ -396,12 +418,20 @@ fn candidates(text: &[char]) -> Vec<Candidate> {
             continue;
         }
         let digits: String = text[start..end].iter().collect();
-        // 年份：1990..=2099 后接 `年` / `-` / `/`。
+        let next_inline_solid = text[end..]
+            .iter()
+            .take_while(|ch| !matches!(ch, '\n' | '\r'))
+            .find(|ch| !ch.is_whitespace())
+            .copied();
+        // 年份：1990..=2099 后接 `年`（允许同行空格如 `2026 年`）/ `-` / `/`，
+        // 或同行前约 20 字符内有英文月份名/缩写、`©`、`copyright`。
         if len == 4
-            && matches!(next, Some('年' | '-' | '/'))
             && digits
                 .parse::<u16>()
                 .is_ok_and(|year| (1990..=2099).contains(&year))
+            && (matches!(next, Some('-' | '/'))
+                || next_inline_solid == Some('年')
+                || preceded_by_western_date_or_copyright(text, start))
         {
             continue;
         }
@@ -409,13 +439,208 @@ fn candidates(text: &[char]) -> Vec<Candidate> {
         if len == 8 && looks_like_compact_date(&digits) {
             continue;
         }
-        // 金额（允许中间隔空白：`100000 元`、`¥ 1999`）。
-        let prev_solid = text[..start].iter().rev().find(|ch| !ch.is_whitespace());
-        let next_solid = text[end..].iter().find(|ch| !ch.is_whitespace());
-        if matches!(prev_solid, Some('¥' | '￥' | '$')) || matches!(next_solid, Some('元')) {
+        // 金额（允许同行隔空白：`100000 元`、`¥ 1999`、`€ 1234`、`£1234`，不跨行误伤如 `\n元旦`）。
+        let prev_inline_solid = text[..start]
+            .iter()
+            .rev()
+            .take_while(|ch| !matches!(ch, '\n' | '\r'))
+            .find(|ch| !ch.is_whitespace());
+        if matches!(prev_inline_solid, Some('¥' | '￥' | '$' | '€' | '£'))
+            || next_inline_solid == Some('元')
+        {
+            continue;
+        }
+        // URL / 查询参数里的数字（仅在连续 ASCII URL token 内识别，避免中文无空格标点误杀）。
+        if inside_url_token(text, start, end) {
             continue;
         }
         found.push(Candidate { start, end, digits });
     }
     found
+}
+
+fn inside_url_token(text: &[char], start: usize, end: usize) -> bool {
+    let is_url_char = |ch: char| {
+        ch.is_ascii_graphic()
+            && !matches!(ch, '<' | '>' | '"' | '\'' | '(' | ')' | '[' | ']')
+    };
+    let mut token_start = start;
+    while token_start > 0 && is_url_char(text[token_start - 1]) {
+        token_start -= 1;
+    }
+    let token: String = text[token_start..end]
+        .iter()
+        .map(|ch| ch.to_ascii_lowercase())
+        .collect();
+    token.contains("://") || token.starts_with("www.")
+}
+
+const WESTERN_YEAR_PREFIX_WORDS: &[&str] = &[
+    "jan",
+    "january",
+    "feb",
+    "february",
+    "mar",
+    "march",
+    "apr",
+    "april",
+    "may",
+    "jun",
+    "june",
+    "jul",
+    "july",
+    "aug",
+    "august",
+    "sep",
+    "sept",
+    "september",
+    "oct",
+    "october",
+    "nov",
+    "november",
+    "dec",
+    "december",
+    "copyright",
+];
+
+/// 检查 `start` 处的 4 位年份在同行前约 20 个字符内是否紧跟英文月份名/缩写、`©` 或 `copyright`。
+fn preceded_by_western_date_or_copyright(text: &[char], start: usize) -> bool {
+    const WINDOW_CHARS: usize = 20;
+    let line_start = text[..start]
+        .iter()
+        .rposition(|ch| matches!(ch, '\n' | '\r'))
+        .map(|pos| pos + 1)
+        .unwrap_or(0);
+    let window_start = start.saturating_sub(WINDOW_CHARS).max(line_start);
+    if text[window_start..start].contains(&'©') {
+        return true;
+    }
+    let mut cursor = line_start;
+    while cursor < start {
+        if !text[cursor].is_ascii_alphabetic() {
+            cursor += 1;
+            continue;
+        }
+        let word_start = cursor;
+        while cursor < start && text[cursor].is_ascii_alphabetic() {
+            cursor += 1;
+        }
+        let word_end = cursor;
+        if start - word_start <= WINDOW_CHARS {
+            let left_ok = word_start == 0 || !text[word_start - 1].is_ascii_alphanumeric();
+            let right_ok = word_end == text.len() || !text[word_end].is_ascii_alphanumeric();
+            if left_ok && right_ok {
+                let word: String = text[word_start..word_end]
+                    .iter()
+                    .map(|ch| ch.to_ascii_lowercase())
+                    .collect();
+                if WESTERN_YEAR_PREFIX_WORDS.contains(&word.as_str()) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn excludes_western_dates_copyright_and_euro_pound_amounts_but_keeps_mmddyyyy() {
+        assert_eq!(
+            extract_smart_otp("Sent on Nov 18, 2026. Your OTP is 849201.", ""),
+            Some("849201".into())
+        );
+        assert_eq!(
+            extract_smart_otp("Verification notice — Nov 18, 2026", ""),
+            None
+        );
+        assert_eq!(
+            extract_smart_otp("Verification notice — 18 November 2026", ""),
+            None
+        );
+        assert_eq!(
+            extract_smart_otp("Verification statement for Nov 2026", ""),
+            None
+        );
+        assert_eq!(
+            extract_smart_otp("Your verification receipt\n© 2026 Acme Corp", ""),
+            None
+        );
+        assert_eq!(
+            extract_smart_otp("Your verification receipt\nCopyright 2026 Acme Corp", ""),
+            None
+        );
+        assert_eq!(
+            extract_smart_otp("Verification payment €123456 confirmed", ""),
+            None
+        );
+        assert_eq!(
+            extract_smart_otp("Verification payment £ 4821 confirmed", ""),
+            None
+        );
+        // MMDDYYYY / DDMMYYYY must NOT be excluded.
+        assert_eq!(
+            extract_smart_otp("Your verification code is 11182026", ""),
+            Some("11182026".into())
+        );
+        assert_eq!(
+            extract_smart_otp("Your verification code is 18112026", ""),
+            Some("18112026".into())
+        );
+    }
+
+    #[test]
+    fn otp_eligibility_skips_seen_deleted_and_stale_messages() {
+        let now = 1_795_000_000_u64;
+        let fresh = MailMessage {
+            account: "a".into(),
+            uid: "1".into(),
+            date_at: Some(now - 300),
+            received_at: now,
+            sort_at: now - 300,
+            ..Default::default()
+        };
+        assert!(otp_eligible(&fresh, now));
+        assert!(!otp_eligible(
+            &MailMessage {
+                seen: true,
+                ..fresh.clone()
+            },
+            now
+        ));
+        assert!(!otp_eligible(
+            &MailMessage {
+                deleted: true,
+                ..fresh.clone()
+            },
+            now
+        ));
+        assert!(!otp_eligible(
+            &MailMessage {
+                date_at: Some(now - OTP_STALE_AFTER_SECS - 1),
+                ..fresh.clone()
+            },
+            now
+        ));
+        assert!(!otp_eligible(
+            &MailMessage {
+                date_at: None,
+                sort_at: now - OTP_STALE_AFTER_SECS - 1,
+                received_at: now - OTP_STALE_AFTER_SECS - 1,
+                ..fresh
+            },
+            now
+        ));
+        // Synthetic unit-test timestamps (< EARLIEST_PLAUSIBLE_DATE_SECS) stay eligible.
+        assert!(otp_eligible(
+            &MailMessage {
+                received_at: 42,
+                ..Default::default()
+            },
+            now
+        ));
+    }
 }

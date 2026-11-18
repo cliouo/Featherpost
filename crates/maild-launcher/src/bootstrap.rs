@@ -32,6 +32,7 @@ jitter_secs = 1
 [plugins.rules.config]
 show_sensitive = true
 silent_keywords = []
+follow_system_timezone = true
 # Notify for new unread inbox mail (OTP mail keeps its own notification; bursts are merged).
 notify_new_mail = true
 # Keep settings changed in @PRODUCT@ (quiet hours, previews, muted words) across restarts in
@@ -260,6 +261,7 @@ mod tests {
         assert!(text.contains("[plugins.external.config]"));
         assert!(text.contains("# [[accounts]]"));
         assert!(!text.contains("bearer_token"));
+        assert!(text.contains("follow_system_timezone = true"));
         assert!(text.contains("notify_new_mail = true"));
         assert!(text.contains("persist = true"));
         assert!(text.starts_with(&generated_config_header()));

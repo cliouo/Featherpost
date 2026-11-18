@@ -1,4 +1,5 @@
 import { useStore } from "../host/hooks";
+import { expiryLabel } from "../mailbox/format";
 import { Field } from "./Accounts";
 import type { SettingsController } from "./controller";
 export function Addresses({ controller }: { controller: SettingsController }) {
@@ -39,16 +40,16 @@ export function Addresses({ controller }: { controller: SettingsController }) {
           <span className="tag">主地址</span>
         </div>
       )}
-      {page?.addresses.map((a) => (
+      {page?.addresses.map((a) => {
+        const expiry = expiryLabel(a.expires_at);
+        return (
         <div className="setting-row address-row" key={a.id}>
           <div className="setting-copy">
             <strong>{a.address}</strong>
             <p>
               {a.label || "无备注"} ·{" "}
               {a.kind === "disposable" ? "一次性身份" : "别名"}
-              {a.expires_at
-                ? ` · ${new Date(a.expires_at * 1000).toLocaleDateString()} 到期`
-                : ""}
+              {expiry ? ` · ${expiry}` : ""}
             </p>
           </div>
           <span className={`tag${a.state === "active" ? "" : " warn"}`}>
@@ -84,7 +85,8 @@ export function Addresses({ controller }: { controller: SettingsController }) {
             </button>
           </div>
         </div>
-      ))}
+        );
+      })}
       {page && page.total > 100 && (
         <div className="settings-actions">
           <button

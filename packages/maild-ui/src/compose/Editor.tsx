@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Icon } from "../app/Icon";
 import { useStore } from "../host/hooks";
+import { clockTime } from "../mailbox/format";
 import type { ComposeController } from "./controller";
 const size = (n: number) =>
   n >= 1048576
@@ -52,14 +53,15 @@ export function Editor({
   ]);
   const sent = d.send_state === "sent",
     unknown = s.uncertain || d.send_state === "unknown",
-    sending = d.send_state === "sending";
+    sending = d.send_state === "sending",
+    savedClock = clockTime(d.updated_at);
   const status = s.closing
     ? "正在保存后关闭"
     : s.saving
       ? "正在保存"
       : s.revision !== s.savedRevision
         ? "尚未保存"
-        : `已保存到本机${d.updated_at ? " · " + new Date(d.updated_at * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : ""}`;
+        : `已保存到本机${savedClock ? ` · ${savedClock}` : ""}`;
   const field = (
     name: "to" | "cc" | "bcc" | "subject",
     label: string,

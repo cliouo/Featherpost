@@ -51,6 +51,12 @@ export const rules = (): Rules => ({
   quiet_hours: [],
   timezone_offset_minutes: 0,
 });
+export const modernRules = (): Rules => ({
+  ...rules(),
+  follow_system_timezone: false,
+  notify_new_mail: false,
+  muted_accounts: [],
+});
 export const preview = (): PackagePreview => ({
   kind: "plugin",
   id: "test.provider",

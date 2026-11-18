@@ -26,7 +26,8 @@ const MONTHS: [&str; 12] = [
 
 /// unix 秒 → RFC 5322 日期，恒用 `+0000`。
 ///
-/// 不引入日期库：为一个格式带进整套时区数据库不划算，civil-from-days 是可测的三十行。
+/// 外发 `Date:` 固定输出 `+0000`：保护发件人物理时区隐私，并保证 Sent `APPEND`
+/// 与持久写队列载荷确定一致（ADR-0028 决策 4）。
 pub fn rfc5322_date(unix_secs: u64) -> String {
     let days = (unix_secs / 86_400) as i64;
     let seconds_of_day = unix_secs % 86_400;
@@ -39,6 +40,31 @@ pub fn rfc5322_date(unix_secs: u64) -> String {
         seconds_of_day / 3600,
         (seconds_of_day % 3600) / 60,
         seconds_of_day % 60,
+    )
+}
+
+const ZH_WEEKDAYS: [&str; 7] = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+
+/// 回复/转发引用行使用的人读日期：在 `unix_secs` 合理且本地时间可拆解时，输出
+/// `2026年11月18日 周三 19:35（UTC+08:00）`；否则回退 [`rfc5322_date`]。
+pub fn attribution_date(unix_secs: u64) -> String {
+    if unix_secs >= crate::mime::EARLIEST_PLAUSIBLE_DATE_SECS {
+        if let Some(parts) = crate::localtime::local_parts(unix_secs) {
+            return format_attribution_parts(&parts);
+        }
+    }
+    rfc5322_date(unix_secs)
+}
+
+pub fn format_attribution_parts(parts: &crate::localtime::LocalDateTime) -> String {
+    let sign = if parts.utc_offset_minutes >= 0 { '+' } else { '-' };
+    let abs = parts.utc_offset_minutes.unsigned_abs();
+    let offset_hours = abs / 60;
+    let offset_minutes = abs % 60;
+    let weekday = ZH_WEEKDAYS[usize::from(parts.weekday).min(6)];
+    format!(
+        "{}年{}月{}日 {weekday} {:02}:{:02}（UTC{sign}{offset_hours:02}:{offset_minutes:02}）",
+        parts.year, parts.month, parts.day, parts.hour, parts.minute,
     )
 }
 
@@ -524,6 +550,67 @@ mod tests {
         // 2100-03-01：2100 不是闰年，2 月只有 28 天。
         assert_eq!(rfc5322_date(4_107_542_400), "Mon, 1 Mar 2100 00:00:00 +0000");
         assert_eq!(rfc5322_date(1_646_128_800), "Tue, 1 Mar 2022 10:00:00 +0000");
+    }
+
+    #[test]
+    fn attribution_date_formats_local_offsets_and_falls_back_for_synthetic_epochs() {
+        use crate::localtime::LocalDateTime;
+
+        assert_eq!(
+            format_attribution_parts(&LocalDateTime {
+                year: 2026,
+                month: 11,
+                day: 18,
+                weekday: 3,
+                hour: 19,
+                minute: 35,
+                second: 0,
+                utc_offset_minutes: 480,
+            }),
+            "2026年11月18日 周三 19:35（UTC+08:00）"
+        );
+        assert_eq!(
+            format_attribution_parts(&LocalDateTime {
+                year: 2026,
+                month: 11,
+                day: 18,
+                weekday: 0,
+                hour: 7,
+                minute: 5,
+                second: 0,
+                utc_offset_minutes: -360,
+            }),
+            "2026年11月18日 周日 07:05（UTC-06:00）"
+        );
+        assert_eq!(
+            format_attribution_parts(&LocalDateTime {
+                year: 2026,
+                month: 3,
+                day: 1,
+                weekday: 6,
+                hour: 0,
+                minute: 0,
+                second: 0,
+                utc_offset_minutes: 330,
+            }),
+            "2026年3月1日 周六 00:00（UTC+05:30）"
+        );
+        assert_eq!(
+            format_attribution_parts(&LocalDateTime {
+                year: 2026,
+                month: 1,
+                day: 2,
+                weekday: 5,
+                hour: 12,
+                minute: 30,
+                second: 0,
+                utc_offset_minutes: 0,
+            }),
+            "2026年1月2日 周五 12:30（UTC+00:00）"
+        );
+        // Synthetic timestamps < 1971 fall back to RFC 5322 UTC.
+        assert_eq!(attribution_date(0), "Thu, 1 Jan 1970 00:00:00 +0000");
+        assert_eq!(attribution_date(1234), rfc5322_date(1234));
     }
 
     #[test]

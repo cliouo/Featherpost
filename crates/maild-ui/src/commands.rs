@@ -444,8 +444,13 @@ pub(crate) async fn ui_server_search(
     account: String,
     folder: String,
     query: String,
+    since: Option<u64>,
+    until: Option<u64>,
 ) -> Result<Vec<crate::bridge::UiSummary>, UiError> {
-    state.bridge.server_search(account, folder, query).await
+    state
+        .bridge
+        .mailbox_server_search(account, folder, query, since, until)
+        .await
 }
 
 #[tauri::command(rename_all = "snake_case")]

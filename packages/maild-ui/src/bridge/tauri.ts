@@ -59,7 +59,7 @@ export const tauriBridge: MailBridge = {
         if (code === 'offline' || code === 'denied') throw error;
       }
     },
-    serverSearch:(account,folder,query)=>call('ui_server_search',{account,folder,query}),
+    serverSearch:(account,folder,query,options)=>call('ui_server_search',{account,folder,query,since:options?.since??null,until:options?.until??null}),
     fetchServerMessage:(account,folder,uid)=>call('ui_fetch_server_message',{account,folder,uid}),
   },
   compose: {

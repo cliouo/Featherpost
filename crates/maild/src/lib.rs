@@ -31,6 +31,7 @@ pub mod filters;
 pub mod folders;
 pub mod frontend;
 pub mod loader;
+pub mod localtime;
 pub mod menu;
 pub mod mime;
 pub mod notify;

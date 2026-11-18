@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { SettingsController } from "../src/settings/controller";
-import { FakeSettings, account, preview } from "./fakeSettings";
+import { FakeSettings, account, modernRules, preview } from "./fakeSettings";
 import { deferred, online } from "./fakeBridge";
 import type {
   AccountProfile,
@@ -444,5 +444,24 @@ describe("08-C management workflows", () => {
     await c.reconcilePackages();
     expect(bridge.packageWrites).toEqual([{ action: "refresh" }]);
     expect(c.store.getSnapshot().packages).toEqual(bridge.catalog);
+  });
+  it("preserves follow_system_timezone across load and save for new daemons while omitting it for old daemons", async () => {
+    const { bridge, c } = setup();
+    c.activate("maild.settings.notifications");
+    await c.load();
+    expect(c.store.getSnapshot().rules?.follow_system_timezone).toBeUndefined();
+    c.setRules({ ...c.store.getSnapshot().rules!, show_sensitive: true });
+    await c.saveRules();
+    expect("follow_system_timezone" in bridge.savedRules[0]!).toBe(false);
+
+    bridge.rules = async () => ({
+      rules: { ...modernRules(), follow_system_timezone: true },
+      persisted: true,
+    });
+    await c.load();
+    expect(c.store.getSnapshot().rules?.follow_system_timezone).toBe(true);
+    c.setRules({ ...c.store.getSnapshot().rules!, follow_system_timezone: false });
+    await c.saveRules();
+    expect(bridge.savedRules.at(-1)?.follow_system_timezone).toBe(false);
   });
 });

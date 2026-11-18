@@ -270,6 +270,34 @@ async fn tauri_frontend_syncs_discovers_and_pulls_server_history_into_an_isolate
     assert_eq!(hits[0].subject, "三年前的发票");
     assert!(
         bridge
+            .mailbox_server_search(
+                "legacy".into(),
+                "INBOX".into(),
+                "needle-history".into(),
+                Some(hits[0].sort_at + 1),
+                None,
+            )
+            .await
+            .unwrap()
+            .is_empty(),
+        "since 晚于命中邮件 sort_at 时应被服务端过滤"
+    );
+    assert_eq!(
+        bridge
+            .mailbox_server_search(
+                "legacy".into(),
+                "INBOX".into(),
+                "needle-history".into(),
+                Some(hits[0].sort_at),
+                Some(hits[0].sort_at),
+            )
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        bridge
             .get_message("legacy", "INBOX", "1")
             .await
             .is_err(),

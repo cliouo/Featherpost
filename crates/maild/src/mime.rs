@@ -23,7 +23,7 @@ pub const SNIPPET_CHARS: usize = 200;
 
 /// `Date` 头可信区间（决策 3）：早于 `received_at` 十年或晚于 24 小时即不可信。
 const DATE_PAST_TOLERANCE_SECS: u64 = 10 * 365 * 24 * 60 * 60;
-const DATE_FUTURE_TOLERANCE_SECS: u64 = 24 * 60 * 60;
+pub const DATE_FUTURE_TOLERANCE_SECS: u64 = 24 * 60 * 60;
 
 /// 头部长度上限（字节）。`recipient` 沿用 ADR-0022 的 512，不在此改动。
 pub const MAX_ADDRESS_LIST_BYTES: usize = 2048;
@@ -83,10 +83,12 @@ pub fn snippet_of(text: &str) -> String {
 
 /// RFC 822 早于 1971 年不存在。宽松的日期解析器对无法识别的输入会静默返回
 /// 纪元附近的值而不是报错（例如非英文的自由文本），因此下界比「非负」更可靠。
-const EARLIEST_PLAUSIBLE_DATE_SECS: u64 = 31_536_000;
+pub const EARLIEST_PLAUSIBLE_DATE_SECS: u64 = 31_536_000;
+/// 4 位年份上界 `9999-12-31T23:59:59Z`（防毫秒时间戳或伪造远未来年份溢出格式化）。
+pub const LATEST_PLAUSIBLE_DATE_SECS: u64 = 253_402_300_799;
 
-/// 解析 `Date` 头。不可解析、以及早于 [`EARLIEST_PLAUSIBLE_DATE_SECS`] 的结果
-/// 一律返回 `None`——把垃圾当成 1970 年显示给用户比不显示更糟。
+/// 解析 `Date` 头。不可解析、早于 [`EARLIEST_PLAUSIBLE_DATE_SECS`] 或晚于
+/// [`LATEST_PLAUSIBLE_DATE_SECS`] 的结果一律返回 `None`——把垃圾当成 1970 年或万年后显示比不显示更糟。
 pub fn parse_date_header(value: &str) -> Option<u64> {
     if value.trim().is_empty() {
         return None;
@@ -94,7 +96,19 @@ pub fn parse_date_header(value: &str) -> Option<u64> {
     mailparse::dateparse(value)
         .ok()
         .and_then(|secs| u64::try_from(secs).ok())
-        .filter(|secs| *secs >= EARLIEST_PLAUSIBLE_DATE_SECS)
+        .filter(|secs| (EARLIEST_PLAUSIBLE_DATE_SECS..=LATEST_PLAUSIBLE_DATE_SECS).contains(secs))
+}
+
+/// 校验服务端到达时间（如 IMAP `INTERNALDATE` 或 provider `received_at`）：
+/// 落在 `[EARLIEST_PLAUSIBLE_DATE_SECS, now_unix + 24h]` 内时采用，否则回退 `now_unix`。
+pub fn sanitize_arrival_secs(candidate: u64, now_unix: u64) -> u64 {
+    if candidate >= EARLIEST_PLAUSIBLE_DATE_SECS
+        && candidate <= now_unix.saturating_add(DATE_FUTURE_TOLERANCE_SECS)
+    {
+        candidate
+    } else {
+        now_unix
+    }
 }
 
 /// 排序键（决策 3）：可信的 `date_at`，否则回退投递观测时间。
@@ -448,4 +462,34 @@ fn normalize_text(raw: &str) -> String {
         lines.pop();
     }
     lines.join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_date_header_bounds_to_four_digit_years_and_sanitizes_arrival() {
+        assert_eq!(
+            parse_date_header("Fri, 31 Dec 9999 23:59:59 +0000"),
+            Some(LATEST_PLAUSIBLE_DATE_SECS)
+        );
+        assert_eq!(
+            parse_date_header("Sat, 01 Jan 10000 00:00:00 +0000"),
+            None
+        );
+        assert_eq!(parse_date_header("Thu, 01 Jan 1970 00:00:00 +0000"), None);
+
+        let now = 1_795_000_000_u64;
+        assert_eq!(sanitize_arrival_secs(1_273_912_200, now), 1_273_912_200);
+        assert_eq!(
+            sanitize_arrival_secs(now + DATE_FUTURE_TOLERANCE_SECS, now),
+            now + DATE_FUTURE_TOLERANCE_SECS
+        );
+        assert_eq!(
+            sanitize_arrival_secs(now + DATE_FUTURE_TOLERANCE_SECS + 1, now),
+            now
+        );
+        assert_eq!(sanitize_arrival_secs(0, now), now);
+    }
 }

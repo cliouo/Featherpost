@@ -1311,8 +1311,8 @@ fn apply_notification(
             state.messages.push(MessageSummary::from(message.as_ref()));
             state.messages.sort_by(|left, right| {
                 right
-                    .received_at
-                    .cmp(&left.received_at)
+                    .sort_at
+                    .cmp(&left.sort_at)
                     .then_with(|| right.uid.cmp(&left.uid))
             });
             state.messages.truncate(limit as usize);
@@ -1707,6 +1707,7 @@ mod tests {
         });
         state.total_messages = 4;
         for uid in ["1", "2", "3"] {
+            let at = uid.parse().unwrap();
             apply_notification(
                 &mut state,
                 &ServerNotification::MessageReceived(Box::new(MailMessage {
@@ -1716,7 +1717,8 @@ mod tests {
                     recipient: String::new(),
                     subject: uid.into(),
                     body: String::new(),
-                    received_at: uid.parse().unwrap(),
+                    received_at: at,
+                    sort_at: at,
                     ..Default::default()
                 })),
                 2,
@@ -1738,12 +1740,40 @@ mod tests {
                 subject: duplicate.subject,
                 body: String::new(),
                 received_at: duplicate.received_at,
+                sort_at: duplicate.sort_at,
                 ..Default::default()
             })),
             2,
             true,
         );
         assert_eq!(state.total_messages, 7);
+
+        // Historical sync mail observed later (`received_at` = 999) with an older `sort_at`
+        // must NOT jump ahead of newer `sort_at` mail.
+        apply_notification(
+            &mut state,
+            &ServerNotification::MessageReceived(Box::new(MailMessage {
+                account: "personal".into(),
+                uid: "99".into(),
+                sender: "sender@example.com".into(),
+                recipient: String::new(),
+                subject: "historical".into(),
+                body: String::new(),
+                received_at: 999,
+                sort_at: 1,
+                ..Default::default()
+            })),
+            3,
+            true,
+        );
+        assert_eq!(
+            state
+                .messages
+                .iter()
+                .map(|m| m.uid.as_str())
+                .collect::<Vec<_>>(),
+            vec!["3", "2", "99"]
+        );
 
         assert!(!apply_notification(
             &mut state,
@@ -1892,7 +1922,8 @@ mod tests {
                 "sender": "sender@example.com",
                 "subject": "newest",
                 "body": "preview",
-                "received_at": 10
+                "received_at": 10,
+                "sort_at": 10
             }],
             "total": 10
         })));
@@ -1904,6 +1935,7 @@ mod tests {
             subject: "older".into(),
             body: "preview".into(),
             received_at: 9,
+            sort_at: 9,
             ..Default::default()
         })));
         tracker
