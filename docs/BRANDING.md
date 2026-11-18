@@ -85,7 +85,7 @@ macOS 打包模板（`packaging/macos/templates/*.in`）本身是品牌中立的
 
 ## CI 门禁
 
-- `.github/workflows/ci.yml` 的 `brand` job 运行 `bash scripts/sync-brand.sh --check`，有漂移就打印 diff 并失败。
+- `.github/workflows/ci.yml` 的 `brand` job 运行 `bash scripts/sync-brand.sh --check`，有漂移就打印 diff 并失败。CI 已改为仅手动触发，提交前请在本机运行该命令。
 - 打包测试（`packaging/macos/tests/test_bundle.sh`）包含一个「换牌」夹具：把 `packaging/macos` 复制到临时目录、换上
   另一份 `brand.env`（产品名 `Quill & Ink`），不改任何脚本就能生成并验证完整 bundle。
 - `ci.yml` 与 `release-macos.yml` 中所有产物名都从 `brand.env` 读取；发布所需的 secrets / variables 都是品牌中立的

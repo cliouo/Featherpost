@@ -248,7 +248,7 @@ packaging/macos/manage-app.sh --development uninstall --confirm-unregistered
 
 ### macOS 发布 workflow 的仓库配置
 
-`.github/workflows/release-macos.yml` 只在受保护的 `macos-release` Environment 中、推送 `vX.Y.Z` tag 时运行，产物名
+`.github/workflows/release-macos.yml` 只在受保护的 `macos-release` Environment 中运行；为节省 GitHub Actions 额度已关闭 tag 推送自动触发，需在 Actions 页手动 `workflow_dispatch` 并选择 `vX.Y.Z` tag 作为 ref。产物名
 （`<product_name>-vX.Y.Z-universal2.zip` 等）从 `brand.env` 读取。所需配置均为品牌中立名字，改品牌时无需改动：
 
 | 类型 | 名称 | 内容 |
@@ -493,7 +493,7 @@ target/release/examples/footprint_bench
 clippy 与 `x86_64-pc-windows-gnu` 组件，两条 clippy 门禁可改用装有它们的同版本 rustup（`RUSTUP_HOME=~/.rustup`），
 `CARGO_HOME` 保持不变以复用离线 crate 缓存与 `--locked`。
 
-`.github/workflows/ci.yml` 的 `brand` job 运行 `bash scripts/sync-brand.sh --check`；`rust` job 在 macOS 和 Windows
+`.github/workflows/ci.yml` 已关闭 push / PR 自动触发（节省 GitHub Actions 额度），仅保留手动 `workflow_dispatch`；日常门禁在本机跑。其 `brand` job 运行 `bash scripts/sync-brand.sh --check`；`rust` job 在 macOS 和 Windows
 运行 workspace 测试与 clippy，并在 macOS 构建、复验 actual universal2 bundle、Preview DMG（名字取自 `brand.env`）
 和全部 hermetic packaging fixtures。Windows
 named pipe 的真实 ACL/连接行为以 Windows job 为准；本机交叉编译只能证明目标代码可编译。
