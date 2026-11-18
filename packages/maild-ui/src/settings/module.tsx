@@ -270,7 +270,7 @@ export function settingsModule(
     const Section = active?.render;
     return (
       <div className="page settings-page">
-        <div className="page-toolbar">
+        <div className="page-toolbar" data-tauri-drag-region="deep">
           <button
             type="button"
             className="text-button"

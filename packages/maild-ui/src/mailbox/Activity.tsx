@@ -31,7 +31,7 @@ export function Activity({
   }, [controller]);
   return (
     <section className="page activity-page">
-      <header className="activity-heading">
+      <header className="activity-heading" data-tauri-drag-region="deep">
         <div>
           <h1>同步活动</h1>
           <p>本机已接受的操作，以及服务器返回的结果。</p>

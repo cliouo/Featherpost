@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main-window",
-  "description": "主窗口：核心事件 + 显式列出的桥命令。没有文件、shell、HTTP、进程或窗口管理权限（保存附件与打开链接都经 Rust 命令校验后执行，webview 拿不到路径或 URL 权限）；第三方扩展视图（E02）另建 capability，不复用本条。",
+  "description": "主窗口：核心事件 + 显式列出的桥命令。窗口管理只开 start_dragging（隐藏标题栏后由 data-tauri-drag-region 拖动窗口），没有文件、shell、HTTP、进程或其他窗口管理权限（保存附件与打开链接都经 Rust 命令校验后执行，webview 拿不到路径或 URL 权限）；第三方扩展视图（E02）另建 capability，不复用本条。",
   "windows": [
     "main"
   ],
@@ -23,6 +23,7 @@
     "allow-ui-settings-pick-package",
 
     "core:default",
+    "core:window:allow-start-dragging",
     "allow-ui-snapshot",
     "allow-ui-list-folders",
     "allow-ui-list-messages",

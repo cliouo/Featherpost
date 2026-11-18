@@ -25,7 +25,7 @@ export function sampleExcerptModule(host: Host): Bundle {
     const items = useStore(excerpts);
     return (
       <div className="page">
-        <div className="page-toolbar">
+        <div className="page-toolbar" data-tauri-drag-region="deep">
           <button type="button" className="text-button" onClick={() => host.openRole('mailbox')}>
             <Icon name="back" /> 返回邮件
           </button>

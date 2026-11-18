@@ -45,7 +45,7 @@ export function composeModule(
     }, []);
     return (
       <section className="page drafts-page">
-        <header className="compose-heading">
+        <header className="compose-heading" data-tauri-drag-region="deep">
           <div className="compose-title">
             <h1>本机草稿</h1>
             <span className="compose-save">{state.draftTotal} 份</span>

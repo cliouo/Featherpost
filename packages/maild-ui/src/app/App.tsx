@@ -82,7 +82,7 @@ export function App({ host }: { host: Host }) {
     <div className="shell">
       <a className="skip-link" href="#workspace">跳到工作区</a>
       <aside className="sidebar">
-        <div className="brandbar" data-tauri-drag-region>
+        <div className="brandbar" data-tauri-drag-region="deep">
           <span className="brand">{BRAND.productName}</span>
         </div>
         {navigationCommands.map(({ value }) => (

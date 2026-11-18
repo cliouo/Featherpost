@@ -60,10 +60,11 @@ function OverflowMenu({
         return;
       setOpen(false);
     };
-    document.addEventListener("mousedown", close);
+    // 捕获阶段：工具栏是拖动区，Tauri drag.js 会在冒泡阶段 stopImmediatePropagation。
+    document.addEventListener("mousedown", close, true);
     document.addEventListener("keydown", close);
     return () => {
-      document.removeEventListener("mousedown", close);
+      document.removeEventListener("mousedown", close, true);
       document.removeEventListener("keydown", close);
     };
   }, [open]);
@@ -81,7 +82,7 @@ function OverflowMenu({
         <Icon name="more" />
       </button>
       {open && (
-        <div className="menu" role="menu">
+        <div className="menu" role="menu" data-tauri-drag-region="false">
           {commands.map((command) => (
             <div
               key={command.id}
@@ -139,7 +140,7 @@ export function Reader({ host, controller, documents, composer }: ReaderProps) {
 
   return (
     <section className="reader" aria-label="邮件正文">
-      <div className="reader-toolbar">
+      <div className="reader-toolbar" data-tauri-drag-region="deep">
         <button
           type="button"
           className="icon-button back-to-list"

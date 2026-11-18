@@ -102,7 +102,10 @@ export function Editor({
       }}
       aria-label={inline ? "回复编辑器" : "写信编辑器"}
     >
-      <div className="compose-heading">
+      <div
+        className="compose-heading"
+        data-tauri-drag-region={inline ? undefined : "deep"}
+      >
         <div className="compose-title">
           <Icon name={inline ? "reply" : "drafts"} />
           <h1>{sent ? "邮件已发送" : inline ? "回复邮件" : "写邮件"}</h1>
