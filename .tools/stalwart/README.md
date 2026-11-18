@@ -7,6 +7,7 @@
 ## 一键启动
 
 ```sh
+mise install          # 仓库根执行一次，装好固定版本的 stalwart
 cd .tools/stalwart
 ./start.sh
 ```
@@ -18,11 +19,11 @@ cd .tools/stalwart
 
 ## 手动步骤（start.sh 做了什么）
 
-1. 下载二进制（断点续传，GitHub release 慢）：
+1. 二进制由 mise 安装（仓库根 `mise.toml` 固定 `github:stalwartlabs/stalwart` 0.15.5，含补可执行位的
+   postinstall）：
    ```sh
-   curl -L -C - -o stalwart015.tar.gz \
-     https://github.com/stalwartlabs/stalwart/releases/download/v0.15.5/stalwart-aarch64-apple-darwin.tar.gz
-   tar xzf stalwart015.tar.gz stalwart && chmod +x stalwart
+   mise install          # 仓库根执行一次
+   mise which stalwart   # start.sh 用它定位二进制
    ```
    > ⚠️ 用 **0.15.5**（TOML 配置）。**0.16+ 配置层已重构**（config.json + JMAP 管理 +
    > 独立 CLI），无 TOML，本地快速验证反而更繁琐。
@@ -39,7 +40,7 @@ cd .tools/stalwart
 
 4. 启动：
    ```sh
-   ./stalwart -c /tmp/swmail/config.toml
+   mise exec -- stalwart -c /tmp/swmail/config.toml
    ```
 
 ## 跑交叉验证测试

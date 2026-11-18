@@ -163,7 +163,7 @@ packaging/macos/tests/test_lifecycle.sh
 无密钥 CI 使用 locked release 构建同时生成 `arm64`、`x86_64` 两个 slice：
 
 ```sh
-rustup target add aarch64-apple-darwin x86_64-apple-darwin
+# aarch64-apple-darwin 与 x86_64-apple-darwin 已在仓库根 mise.toml 声明，mise install 时装好
 packaging/macos/build-universal.sh --output /private/tmp/featherpost/Featherpost.app
 ```
 

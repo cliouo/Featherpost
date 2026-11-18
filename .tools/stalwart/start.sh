@@ -4,16 +4,13 @@
 set -e
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$DIR"  # 让 mise 解析仓库根的 mise.toml
 DATA="/tmp/swmail"
 
-# 下载二进制（断点续传，跳过已存在）
-if [ ! -f "$DIR/stalwart" ]; then
-  echo "=== 下载 Stalwart 0.15.5 ==="
-  curl -L -C - -o "$DIR/stalwart.tar.gz" \
-    "https://github.com/stalwartlabs/stalwart/releases/download/v0.15.5/stalwart-aarch64-apple-darwin.tar.gz"
-  tar xzf "$DIR/stalwart.tar.gz" stalwart -C "$DIR"
-  rm -f "$DIR/stalwart.tar.gz"
-  chmod +x "$DIR/stalwart"
+# 二进制由 mise 按仓库根 mise.toml 固定的 0.15.5 安装（mise install）
+if ! STALWART="$(mise which stalwart 2>/dev/null)"; then
+  echo "找不到 stalwart：先在仓库根执行 mise install（版本固定在 mise.toml）" >&2
+  exit 1
 fi
 
 # 生成自签证书
@@ -82,4 +79,4 @@ echo "  SMTP: 127.0.0.1:1025"
 echo "  IMAP: 127.0.0.1:1143 (STARTTLS)"
 echo "  账号: dev / devpass → dev@maild.test"
 echo ""
-exec "$DIR/stalwart" -c "$DATA/config.toml"
+exec "$STALWART" -c "$DATA/config.toml"

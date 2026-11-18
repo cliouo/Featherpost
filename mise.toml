@@ -1,0 +1,18 @@
+# 本仓库所有开发工具的唯一版本来源（https://mise.jdx.dev）。
+#
+#   mise trust && mise install      # 首次进入仓库
+#
+# 之后在仓库内 cargo / pnpm / node / python3 / stalwart 都解析到这里固定的版本。
+# 只有平台自带、mise 无法管理的工具不在此列：macOS 的 Xcode Command Line Tools（swift、lipo、
+# codesign、xcrun、iconutil、sips）与 Windows GNU 交叉 Clippy 用的 mingw-w64（见 docs/operations）。
+
+[tools]
+# components / targets 覆盖全部门禁：clippy 与 rustfmt、universal2 打包、x86_64-pc-windows-gnu 交叉 Clippy。
+rust = { version = "1.97.1", components = "clippy,rustfmt", targets = "aarch64-apple-darwin,x86_64-apple-darwin,x86_64-pc-windows-gnu" }
+node = "24.21.0"
+# 与 package.json 的 packageManager 保持一致；由 mise 提供，不再需要 corepack。
+pnpm = "11.21.0"
+# scripts/sync-brand.sh 需要 tomllib（≥ 3.11）；与 CI brand job 同为 3.12。
+python = "3.12.16"
+# 真服务器交叉验证（.tools/stalwart/start.sh）。上游 tarball 里的二进制没有可执行位，安装后补上。
+"github:stalwartlabs/stalwart" = { version = "0.15.5", postinstall = "chmod +x \"$MISE_TOOL_INSTALL_PATH/stalwart\"" }

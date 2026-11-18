@@ -86,8 +86,15 @@ footprint_bench`），完整口径与原始数据见 [docs/testing/README.md](do
 
 ## 快速开始
 
-需要 Rust stable（见 [`Cargo.toml`](Cargo.toml) 的 workspace 设置）、Node.js 与 pnpm 11
-（`corepack enable` 即可按 `package.json` 的 `packageManager` 获取）。中国大陆网络可选配 crates.io 镜像，见
+开发工具（Rust 及 clippy / 打包与交叉编译 target、Node.js、pnpm、Python、Stalwart）统一由
+[mise](https://mise.jdx.dev) 按仓库根 [`mise.toml`](mise.toml) 固定版本安装：
+
+```sh
+mise trust && mise install
+```
+
+平台自带、mise 管不了的只有 macOS 的 Xcode Command Line Tools（打包与图标渲染）和 Windows GNU 交叉 Clippy
+用的 mingw-w64。中国大陆网络可选配 crates.io 镜像，见
 [运维手册](docs/operations/README.md#可选国内-cratesio-镜像)。
 
 ```sh
@@ -131,7 +138,7 @@ cargo run -p maild-ui -- --socket <dev_stack 打印的路径>
 打包脚本的所有名字（`Featherpost.app`、bundle ID、二进制名、图标）都从 `packaging/macos/brand.env` 读取：
 
 ```sh
-rustup target add aarch64-apple-darwin x86_64-apple-darwin
+# 两个 Apple target 已在 mise.toml 声明，mise install 时随工具链装好
 packaging/macos/build-universal.sh --output "$PWD/dist/macos/Featherpost.app"   # universal2，未签名
 packaging/macos/verify-bundle.sh "$PWD/dist/macos/Featherpost.app"
 packaging/macos/build-preview-dmg.sh \

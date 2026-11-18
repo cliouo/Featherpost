@@ -13,9 +13,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      # Tool versions come from mise.toml.
+      - uses: jdx/mise-action@v5
         with:
-          python-version: '3.12'
+          install_args: python
       - name: Check generated brand files are in sync with brand.toml
         run: bash scripts/sync-brand.sh --check
 
@@ -28,9 +29,10 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      # Rust (with clippy and the universal2 targets), Node, and pnpm are pinned in mise.toml.
+      - uses: jdx/mise-action@v5
         with:
-          components: clippy
+          install_args: ${{ runner.os == 'macOS' && 'rust node pnpm' || 'rust' }}
       - uses: Swatinem/rust-cache@v2
       - name: Test workspace
         run: cargo test --workspace --all-targets --locked
@@ -39,7 +41,6 @@ jobs:
       - name: Test Tauri UI webview package
         if: runner.os == 'macOS'
         run: |
-          corepack enable
           pnpm --dir packages/maild-ui install --frozen-lockfile
           pnpm --dir packages/maild-ui exec tsc --noEmit -p tsconfig.json
           pnpm --dir packages/maild-ui test
@@ -50,9 +51,6 @@ jobs:
           packaging/macos/tests/test_bundle.sh
           packaging/macos/tests/test_release.sh
           packaging/macos/tests/test_lifecycle.sh
-      - name: Add universal2 Rust targets
-        if: runner.os == 'macOS'
-        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
       - name: Build and verify actual universal2 bundle
         if: runner.os == 'macOS'
         shell: bash
