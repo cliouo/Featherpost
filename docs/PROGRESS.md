@@ -348,14 +348,11 @@ docs/                         README（索引）、ROADMAP、PROGRESS、BRANDING
 
 ## 环境与工具链（重要）
 
-- **Rust 装在仓库内**（不碰系统）：`.rustup/` + `.cargo-home/`（git 忽略）。任何 cargo 命令前先：
-  ```sh
-  export RUSTUP_HOME="$PWD/.rustup"
-  export CARGO_HOME="$PWD/.cargo-home"
-  export PATH="$CARGO_HOME/bin:$PATH"
-  ```
+- **开发工具统一由 mise 管理**：仓库根 `mise.toml` 固定 Rust 1.97.1（含 clippy、rustfmt 与 universal2 / windows-gnu
+  target）、Node 24.21.0、pnpm 11.21.0、Python 3.12、Stalwart 0.15.5。首次进入仓库 `mise trust && mise install`，
+  此后在仓库内直接用 cargo / pnpm / python3；不再使用仓库内 `.rustup/` + `.cargo-home/`。
 - 仓库不再提交 `.cargo/config.toml`（ADR-0047），默认直连 crates.io；国内网络在用户级 `~/.cargo/config.toml` 自配 rsproxy 等镜像，见[运维手册](operations/README.md#可选国内-cratesio-镜像)。切换源后本地 registry 缓存按源分目录，`--offline` 前需在当前源下 `cargo fetch --locked` 一次。
-- 跑测试：`CARGO_INCREMENTAL=0 cargo test --workspace --all-targets --locked`（2026-11-17 收官基线：795 passed / 0 failed / 2 ignored（webview Vitest 191 passed / 12 文件）；ignored 为 Stalwart 真服务器与 macOS Keychain 冒烟，需显式 `--ignored`）。Clippy 门禁：`cargo clippy --workspace --all-targets --locked -- -D warnings` 与 `--target x86_64-pc-windows-gnu`；仓库内 `.rustup` 缺 clippy 与 windows-gnu 组件时改用装有它们的同版本 `RUSTUP_HOME=~/.rustup`（`CARGO_HOME` 仍指向仓库内以复用离线缓存与 `--locked`）。
+- 跑测试：`CARGO_INCREMENTAL=0 cargo test --workspace --all-targets --locked`（2026-11-17 收官基线：795 passed / 0 failed / 2 ignored（webview Vitest 191 passed / 12 文件）；ignored 为 Stalwart 真服务器与 macOS Keychain 冒烟，需显式 `--ignored`）。Clippy 门禁：`cargo clippy --workspace --all-targets --locked -- -D warnings` 与 `--target x86_64-pc-windows-gnu`（后者另需 mise 之外的 mingw-w64）。
 - webview 侧门禁：`pnpm install`（仓库根，单一 lockfile）→ `pnpm --dir packages/maild-ui typecheck && pnpm --dir packages/maild-ui test && pnpm --dir packages/maild-ui build`；内嵌形态 `cargo build -p maild-ui --features embedded`（需先 build 出 `dist`）。默认形态的 `cargo test --workspace` 不需要 Node。
 - 体验 Tauri 壳而不碰真实安装：`cargo run -p maild-ui --example dev_stack`（预置假数据的临时 daemon）→ 按它打印的命令起壳；细节见 `crates/maild-ui/README.md`。
 - 守护进程：`cargo run -p maild --bin maild -- --config maild.example.toml`；`maild paths` 查看默认目录。
@@ -434,7 +431,7 @@ docs/                         README（索引）、ROADMAP、PROGRESS、BRANDING
 
 1. **Keychain 冒烟（本机即可）**
    ```sh
-   export RUSTUP_HOME="$PWD/.rustup" CARGO_HOME="$PWD/.cargo-home"; export PATH="$CARGO_HOME/bin:$PATH"
+   mise install   # 工具链由仓库根 mise.toml 固定
    cargo test -p maild --lib credential::tests::macos_real_keychain -- --ignored
    ```
    会写当前用户 login keychain（随机 acct_，测试自清理）。记录通过/失败与 macOS 版本。

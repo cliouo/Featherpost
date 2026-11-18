@@ -489,9 +489,9 @@ cargo build --release -p maild --examples --bins --locked
 target/release/examples/footprint_bench
 ```
 
-若使用仓库内的独立工具链（`RUSTUP_HOME="$PWD/.rustup"`、`CARGO_HOME="$PWD/.cargo-home"`，均被 git 忽略）且它没有
-clippy 与 `x86_64-pc-windows-gnu` 组件，两条 clippy 门禁可改用装有它们的同版本 rustup（`RUSTUP_HOME=~/.rustup`），
-`CARGO_HOME` 保持不变以复用离线 crate 缓存与 `--locked`。
+以上命令用到的 cargo / clippy / pnpm / python3 都由仓库根 `mise.toml` 固定版本（`mise install` 一次装齐，含 clippy、
+rustfmt 与 `aarch64-apple-darwin`、`x86_64-apple-darwin`、`x86_64-pc-windows-gnu` 三个 target）。Windows GNU 交叉
+Clippy 还需要 mise 之外的 mingw-w64 C 工具链（macOS 上 `brew install mingw-w64`），供带 C 代码的依赖的 build script 使用。
 
 `.github/workflows/ci.yml` 已关闭 push / PR 自动触发（节省 GitHub Actions 额度），仅保留手动 `workflow_dispatch`；日常门禁在本机跑。其 `brand` job 运行 `bash scripts/sync-brand.sh --check`；`rust` job 在 macOS 和 Windows
 运行 workspace 测试与 clippy，并在 macOS 构建、复验 actual universal2 bundle、Preview DMG（名字取自 `brand.env`）
