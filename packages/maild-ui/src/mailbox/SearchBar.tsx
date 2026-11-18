@@ -66,7 +66,7 @@ export function SearchBar({ controller }: { controller: MailboxController }) {
     }
   }
   return (
-    <div className="mail-search">
+    <div className="mail-search" data-tauri-drag-region="deep">
       <form
         onSubmit={(e) => {
           e.preventDefault();

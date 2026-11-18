@@ -181,7 +181,7 @@ export function MessageList({ controller }: { controller: MailboxController }) {
       );
   return (
     <section className="list-pane" aria-label="邮件列表">
-      <header className="list-title">
+      <header className="list-title" data-tauri-drag-region="deep">
         <h1>{scopeTitle(s.scope)}</h1>
         <span className="total">{s.total} 封</span>
       </header>
