@@ -121,9 +121,11 @@ impl BundledFrontend {
         Ok(PreinstallOutcome::Installed)
     }
 
-    /// App upgrade: replace the installed bundled frontend only when the bundled copy has a strictly
-    /// newer numeric version. Absent (user-removed), unreadable, equal or newer packages are
-    /// left alone; the default selection is never touched. Historical `protocol_version` values
+    /// App upgrade: replace the installed bundled frontend when the bundled copy has a strictly
+    /// newer numeric version, or the same version with a different executable (a rebuilt or
+    /// re-signed app installed over the old one, which the launcher would otherwise route to
+    /// native recovery). Absent (user-removed), unreadable, newer, and same-version packages
+    /// whose bytes already match are left alone; the default selection is never touched. Historical `protocol_version` values
     /// (`1..=API_PROTOCOL_VERSION`) are accepted so upgrades across a protocol bump still advance
     /// the installed copy. The old package is retained in `.repair-backups`. Caller owns the
     /// frontend-directory lease (Agent startup).
@@ -149,10 +151,21 @@ impl BundledFrontend {
             return Ok(RefreshOutcome::Kept);
         };
         let bundled = self.bundled_version()?;
-        match (parse_version(&installed_version), parse_version(&bundled)) {
-            (Some(old), Some(new)) if new > old => {}
+        let same_version = match (parse_version(&installed_version), parse_version(&bundled)) {
+            (Some(old), Some(new)) if new > old => false,
+            // Same version, different build (rebuilt or re-signed app installed over the old
+            // one): the installed copy is stale, not damaged, so it follows the bundled bytes.
+            (Some(old), Some(new))
+                if new == old
+                    && crate::frontend::installed_bundled_frontend_is_stale(
+                        &target,
+                        &self.source,
+                    ) =>
+            {
+                true
+            }
             _ => return Ok(RefreshOutcome::Kept),
-        }
+        };
         let (_stage, staged, version) = self.stage(root)?;
         let backups = root.join(BACKUPS);
         files::ensure_directory(&backups)?;
@@ -174,6 +187,9 @@ impl BundledFrontend {
             return Err("前端升级发布失败，已保留原包".into());
         }
         files::sync_directory(root)?;
+        if same_version {
+            return Ok(RefreshOutcome::Resynced { version });
+        }
         Ok(RefreshOutcome::Upgraded {
             from: installed_version,
             to: version,
@@ -311,6 +327,8 @@ pub enum RefreshOutcome {
     Absent,
     Kept,
     Upgraded { from: String, to: String },
+    /// Same version, but the installed executable no longer matches the bundled checksum.
+    Resynced { version: String },
 }
 
 /// `X`, `X.Y` or `X.Y.Z` numeric versions (the bundle's CFBundleShortVersionString form).

@@ -3,8 +3,10 @@ use maild_client::{
     BUILTIN_RECOVERY_FRONTEND,
 };
 use serde_json::{json, Value};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
+
+const UNSUPPORTED_BY_AGENT: &str = "后台版本不支持此操作，请先退出旧后台并使用完整的新版本应用";
 
 #[derive(Clone, Debug)]
 pub struct Status {
@@ -75,7 +77,7 @@ impl NativeController {
             }).await
                 .map_err(|_| "操作尚未确认，请刷新状态；不要重复执行修复")?
                 .map_err(|error| match error.rpc_code {
-                    Some(-32601) => "后台版本不支持此操作，请先退出旧后台并使用完整的新版本应用",
+                    Some(-32601) => UNSUPPORTED_BY_AGENT,
                     Some(-32017) => "修复未完整确认。请检查安装包、目录占用与磁盘空间；如磁盘已恢复，请重启后台后检查。不要自动重试。",
                     _ => "后台未确认操作，请刷新状态并检查版本；修复或停止请求可能仍在执行，不要自动重试",
                 })
@@ -191,16 +193,45 @@ impl NativeController {
         let installed = paths
             .frontend_dir
             .join(maild::recovery::BUNDLED_FRONTEND_ID);
-        match maild::frontend::check_installed_bundled_frontend(
-            &installed,
-            &layout.bundled_frontend_payload(),
-        ) {
+        let payload = layout.bundled_frontend_payload();
+        let mut check = maild::frontend::check_installed_bundled_frontend(&installed, &payload);
+        if check.is_err()
+            && maild::frontend::installed_bundled_frontend_is_stale(&installed, &payload)
+            && self.resync_stale_bundled_frontend(layout)
+        {
+            check = maild::frontend::check_installed_bundled_frontend(&installed, &payload);
+        }
+        match check {
             Ok(()) => (InPlace::Ready, Some(exe)),
             Err(error) => {
                 eprintln!("{}: {error}", maild_brand::LAUNCHER_BIN);
                 (InPlace::Damaged, None)
             }
         }
+    }
+
+    /// Same version, different build: this app was rebuilt or reinstalled while an Agent kept
+    /// running, so the installed copy is the previous build. Ask that Agent to rerun its startup
+    /// refresh, but only when it runs from this very app bundle, whose payload the check compares.
+    /// Agents that predate `resyncBuiltinFrontend` fall back to `repairBuiltinFrontend`, which
+    /// also persists the bundled frontend as default (it already is the default on this route).
+    fn resync_stale_bundled_frontend(&self, layout: &NativeAppLayout) -> bool {
+        let Ok(info) = self.call("getAgentInfo", json!({}), Duration::from_secs(2)) else {
+            return false;
+        };
+        let same_bundle = info["executable_path"]
+            .as_str()
+            .is_some_and(|path| Path::new(path).starts_with(layout.app_bundle()));
+        if !same_bundle {
+            return false;
+        }
+        let response = match self.call("resyncBuiltinFrontend", json!({}), Duration::from_secs(60)) {
+            Err(error) if error == UNSUPPORTED_BY_AGENT => {
+                self.call("repairBuiltinFrontend", json!({}), Duration::from_secs(60))
+            }
+            other => other,
+        };
+        response.is_ok_and(|response| response["id"] == maild::recovery::BUNDLED_FRONTEND_ID)
     }
 
     fn request_mailbox(&self, target: &MailboxTarget) -> Result<Value, &'static str> {

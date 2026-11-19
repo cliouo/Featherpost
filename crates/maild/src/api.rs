@@ -660,7 +660,8 @@ fn method_policy(method: &str) -> MethodPolicy {
         "providerRegister" => MethodPolicy::Capability("transport_provider"),
         // 提权防线（ADR-0018 决策 1，ADR-0030 决策 6 保留并加强）：持有一份凭证的主体不得
         // 铸造凭证，否则声明上限可以自己给自己改。ADR-0039 另保留原生恢复维护例外。
-        "revealPluginToken" | "repairBuiltinFrontend" | "stopManagedAgent" => MethodPolicy::UserOnly,
+        "revealPluginToken" | "repairBuiltinFrontend" | "resyncBuiltinFrontend"
+        | "stopManagedAgent" => MethodPolicy::UserOnly,
         // fail-closed 默认：未登记的方法对插件主体一律拒绝。
         _ => MethodPolicy::UserOnly,
     }
@@ -846,6 +847,7 @@ pub async fn dispatch_with_session(
         "previewPluginPackage" => preview_plugin_package(ctx, &request.params).await,
         "setDefaultFrontend" => set_default_frontend(ctx, &request.params).await,
         "repairBuiltinFrontend" => repair_builtin_frontend(ctx, origin, &request.params).await,
+        "resyncBuiltinFrontend" => resync_builtin_frontend(ctx, origin, &request.params).await,
         "stopManagedAgent" => stop_managed_agent(ctx, origin, &request.params),
         "commitPluginInstall" => commit_plugin_install(ctx, &request.params).await,
         "removePlugin" => remove_plugin(ctx, &request.params).await,
@@ -3200,6 +3202,56 @@ fn frontend_mutation_lease(
     Ok(Some(lease))
 }
 
+/// Native launcher only: rerun the startup refresh (newer or same-version-different-build bundled
+/// frontend) for an Agent that outlived an app reinstall. Unlike repair, the persisted default
+/// selection is left untouched.
+async fn resync_builtin_frontend(
+    ctx: &Context,
+    origin: RequestOrigin,
+    params: &Value,
+) -> HandlerResult {
+    if !matches!(origin, RequestOrigin::UnixSocket | RequestOrigin::NamedPipe) {
+        return Err(invalid_params("内置前端同步只接受同用户本地 IPC"));
+    }
+    require_empty_params(params)?;
+    let transaction = PLUGIN_MUTATION.lock().await;
+    let source = ctx
+        .get::<crate::recovery::BundledFrontend>()
+        .ok_or_else(|| unavailable("bundled frontend recovery"))?;
+    let root = install_root_of(ctx, crate::plugin_transactions::TxKind::Frontend)?;
+    let broker = ctx
+        .get::<crate::frontend::FrontendBroker>()
+        .ok_or_else(|| unavailable("frontend"))?;
+    let directory_lease = ctx
+        .get::<crate::frontend::FrontendDirectoryLease>()
+        .ok_or_else(|| unavailable("frontend directory lease"))?;
+    tokio::task::spawn_blocking(move || {
+        let _transaction = transaction;
+        let _directory_lease = directory_lease;
+        let outcome = match source.refresh(&root) {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                // A failure past the backup rename can leave the package missing on disk; never
+                // keep advertising it from the stale in-memory catalog.
+                let _ = broker.reload_from_disk(Some(&root));
+                return Err(transaction_error(error));
+            }
+        };
+        let replaced = !matches!(
+            outcome,
+            crate::recovery::RefreshOutcome::Absent | crate::recovery::RefreshOutcome::Kept
+        );
+        if replaced {
+            broker.reload_from_disk(Some(&root)).map_err(|_| {
+                transaction_error("前端已同步到磁盘，后台目录刷新失败，请重启后台".into())
+            })?;
+        }
+        Ok(json!({"id": crate::recovery::BUNDLED_FRONTEND_ID, "replaced": replaced}))
+    })
+    .await
+    .map_err(|_| transaction_error("同步执行中断，磁盘状态不确定，请检查后台后再操作".into()))?
+}
+
 /// Native maintenance only: no package path supplied by a webview, plugin, HTTP or stdio caller.
 async fn repair_builtin_frontend(
     ctx: &Context,
@@ -5239,6 +5291,7 @@ mod tests {
             // 可以自己给自己改。
             ("revealPluginToken", UserOnly),
             ("repairBuiltinFrontend", UserOnly),
+            ("resyncBuiltinFrontend", UserOnly),
             ("stopManagedAgent", UserOnly),
         ];
         for (method, expected) in cases {
