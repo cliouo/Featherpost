@@ -11,6 +11,16 @@ use std::ffi::OsString;
 use std::io::{Read as _, Write as _};
 use std::path::PathBuf;
 
+#[cfg(target_os = "macos")]
+use dispatch2::DispatchQueue;
+#[cfg(target_os = "macos")]
+use objc2::MainThreadMarker;
+#[cfg(target_os = "macos")]
+use objc2_app_kit::{
+    NSApplication, NSApplicationActivationPolicy, NSEvent, NSEventModifierFlags, NSEventType,
+};
+#[cfg(target_os = "macos")]
+use objc2_foundation::NSPoint;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt as _;
 
@@ -48,8 +58,7 @@ enum AgentCommand {
     },
 }
 
-#[tokio::main(flavor = "current_thread")]
-async fn main() {
+fn main() {
     let arguments = AgentArgs::parse();
 
     let app_paths = match AppPaths::discover() {
@@ -172,15 +181,8 @@ async fn main() {
         None => {}
     }
 
-    // 只有常驻守护路径需要 GUI 会话，维护子命令都是短命辅助进程（`maintenance-exec` 还会
-    // exec 掉自己），不应该顺手建立 WindowServer 连接。
-    #[cfg(target_os = "macos")]
-    maild::notify::prepare_macos_gui_session();
-
-    // 常驻收信是后台工作（ADR-0041 决策 6）：只在长驻守护路径上降到 UTILITY QoS。
-    maild::daemon::apply_background_qos();
     clear_interactive_overrides();
-    let _lifecycle =
+    let lifecycle =
         match AgentLifecycleLock::acquire(lifecycle_root(&app_paths), &app_paths.runtime_dir) {
             Ok(lock) => lock,
             Err(_) => {
@@ -190,13 +192,90 @@ async fn main() {
         };
     let config_path = app_paths.config_file.clone();
     let options = match DaemonOptions::new(config_path, app_paths) {
-        Ok(options) => options.with_managed_socket_recovery().with_managed_agent_control(),
+        Ok(options) => options
+            .with_managed_socket_recovery()
+            .with_managed_agent_control(),
         Err(_) => {
             eprintln!("[maild-agent] 配置停止: 平台路径不是有效的绝对路径");
             return;
         }
     };
 
+    let code = run_agent(options);
+    drop(lifecycle);
+    std::process::exit(code);
+}
+
+#[cfg(not(target_os = "macos"))]
+#[tokio::main(flavor = "current_thread")]
+async fn run_agent(options: DaemonOptions) -> i32 {
+    daemon_exit_code(options).await
+}
+
+#[cfg(target_os = "macos")]
+fn run_agent(options: DaemonOptions) -> i32 {
+    let mtm = MainThreadMarker::new().expect("Agent must start on the main thread");
+    maild::notify::prepare_macos_gui_session();
+    let application = NSApplication::sharedApplication(mtm);
+    application.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
+
+    let worker = match std::thread::Builder::new()
+        .name("maild-agent-daemon".into())
+        .spawn(move || {
+            let _stop = StopApplicationOnDrop;
+            maild::daemon::apply_background_qos();
+            match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(runtime) => runtime.block_on(daemon_exit_code(options)),
+                Err(_) => {
+                    eprintln!("[maild-agent] 意外故障: 无法创建后台运行环境");
+                    1
+                }
+            }
+        }) {
+        Ok(worker) => worker,
+        Err(_) => {
+            eprintln!("[maild-agent] 意外故障: 无法启动后台线程");
+            return 1;
+        }
+    };
+    application.run();
+    worker
+        .join()
+        .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+}
+
+#[cfg(target_os = "macos")]
+struct StopApplicationOnDrop;
+
+#[cfg(target_os = "macos")]
+impl Drop for StopApplicationOnDrop {
+    fn drop(&mut self) {
+        DispatchQueue::main().exec_async(|| {
+            let mtm = MainThreadMarker::new().expect("main queue runs on the main thread");
+            let application = NSApplication::sharedApplication(mtm);
+            application.stop(None);
+            // stop: alone does not wake AppKit's event fetch.
+            let event = NSEvent::otherEventWithType_location_modifierFlags_timestamp_windowNumber_context_subtype_data1_data2(
+                NSEventType::ApplicationDefined,
+                NSPoint::new(0.0, 0.0),
+                NSEventModifierFlags::empty(),
+                0.0,
+                0,
+                None,
+                0,
+                0,
+                0,
+            )
+            .expect("application-defined wake event");
+            application.postEvent_atStart(&event, true);
+        });
+    }
+}
+
+async fn daemon_exit_code(options: DaemonOptions) -> i32 {
     // Handled configuration/runtime ownership failures are a clean configuration stop. A Login
     // Item must not turn them into an automatic restart loop. Panics and process crashes retain
     // their normal non-zero status.
@@ -210,9 +289,10 @@ async fn main() {
             );
         } else {
             eprintln!("[maild-agent] 意外故障: 无法安装后台运行环境");
-            std::process::exit(1);
+            return 1;
         }
     }
+    0
 }
 
 fn lifecycle_root(paths: &AppPaths) -> &std::path::Path {

@@ -3437,6 +3437,7 @@ dependencies = [
  "block2 0.6.2",
  "clap",
  "cordis",
+ "dispatch2",
  "futures",
  "getrandom 0.4.3",
  "libc",

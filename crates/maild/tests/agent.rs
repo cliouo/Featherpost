@@ -288,6 +288,16 @@ fn agent_ignores_cwd_and_config_environment_and_disposes_on_sigterm() {
     assert_eq!(busy.status.code(), Some(3));
     assert!(String::from_utf8_lossy(&busy.stderr).contains("busy"));
 
+    let client = maild_client::RpcClient::new(maild_client::Endpoint::Unix {
+        path: socket.clone(),
+    })
+    .unwrap();
+    let status_reply = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(client.status());
+
     let result = unsafe { libc::kill(child.id() as i32, libc::SIGTERM) };
     assert_eq!(result, 0);
     let status =
@@ -296,6 +306,10 @@ fn agent_ignores_cwd_and_config_environment_and_disposes_on_sigterm() {
             child.wait().unwrap()
         });
     assert!(status.success(), "SIGTERM should produce an orderly exit");
+    assert!(
+        status_reply.is_ok(),
+        "Agent status failed: {status_reply:?}"
+    );
     assert!(!socket.exists(), "owned Unix socket is removed on shutdown");
     assert!(database.exists());
 
