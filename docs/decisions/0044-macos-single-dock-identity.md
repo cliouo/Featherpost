@@ -36,12 +36,12 @@
 | 默认是 `com.maild.ui`，但本包没有合法的 `maild-ui`（旧包、开发二进制、自定义连接） | 照旧 `openFrontend(Inbox)`，由 Agent 激活 |
 | 默认是第三方前端 | `openFrontend(Inbox)` 后静默退出（未初始化 AppKit，无 Dock 闪烁） |
 | 默认是 `builtin-repair`（内置前端被移除或无法加载）、或默认不在目录中 | 原生修复窗口 |
-| 已装 `com.maild.ui` 与随包载荷**同版本但可执行文件字节不一致**，且清单与可执行文件本身合法（同版本重打包覆盖安装留下的旧构建） | 请求运行于本应用包的 Agent `repairBuiltinFrontend` 同步后原位打开；同步失败或 Agent 不在本包内才进原生修复窗口 |
+| 已装 `com.maild.ui` 与随包载荷**同版本但可执行文件字节不一致**，且清单与可执行文件本身合法（同版本重打包覆盖安装留下的旧构建） | 请求运行于本应用包的 Agent `resyncBuiltinFrontend`（旧 Agent 不支持时退回 `repairBuiltinFrontend`）同步后原位打开；同步失败或 Agent 不在本包内才进原生修复窗口 |
 | 已装 `com.maild.ui` 可执行文件缺失、无执行位或清单无效 | 原生修复窗口（ADR-0039/0040 故障隔离） |
 
 已装包检查由 `maild::frontend::check_installed_bundled_frontend(installed, bundled)` 完成：`listFrontends` 已证明包存在、未被移除、权限合规且协议代兼容；此处再按 `load_package_at` 重新加载已装清单，要求其 `Maild UI.app/Contents/MacOS/maild-ui` 是当前用户所有、非组/其他可写、可执行的普通文件；若与随包 `frontend.toml` 版本相同，其 SHA-256 必须等于随包 `recovery.sha256`。版本不同（待升级、回滚）不比字节；随包载荷不可读不归咎于已装包。校验和读取与计算抽成 `read_recovery_checksum` / `executable_checksum`，与 `inspect_bundled_frontend` 共用。
 
-同版本字节不一致的修订：本地开发每次改代码重打包、或同一版本号重签名发布，`frontend.toml` 版本都不变而 UI 可执行文件变化。此前 Agent 启动的 `refresh` 只在随包版本严格更高时替换，覆盖安装后已装包永远停在旧构建，每次打开都被当作损坏弹出修复窗口，用户手动“恢复内置前端”后才正常。现在 `installed_bundled_frontend_is_stale` 识别“合法但来自另一构建”的已装包：`refresh` 对其整包重发布（旧包照常备份，结果为 `RefreshOutcome::Resynced`）；覆盖安装时旧 Agent 仍在运行（不会重启、也就不会 `refresh`）的情况由启动器在原位检查前请求同包 Agent 执行 `repairBuiltinFrontend`。可执行文件缺失、无执行位、清单无效等真实损坏仍走原生修复窗口。
+同版本字节不一致的修订：本地开发每次改代码重打包、或同一版本号重签名发布，`frontend.toml` 版本都不变而 UI 可执行文件变化。此前 Agent 启动的 `refresh` 只在随包版本严格更高时替换，覆盖安装后已装包永远停在旧构建，每次打开都被当作损坏弹出修复窗口，用户手动“恢复内置前端”后才正常。现在 `installed_bundled_frontend_is_stale` 识别“合法但来自另一构建”的已装包：`refresh` 对其整包重发布（旧包照常备份，结果为 `RefreshOutcome::Resynced`）；覆盖安装时旧 Agent 仍在运行（不会重启、也就不会 `refresh`）的情况由启动器在原位检查前请求同包 Agent 执行 `resyncBuiltinFrontend`：它重跑同一 `refresh`，不写默认前端状态；此前构建的 Agent 没有该方法（-32601），退回 `repairBuiltinFrontend`，后者会把已是默认的内置前端写入持久选择。校验和无法区分“另一构建”与“同版本字节被改坏”，两者都从已校验的随包载荷重发布并保留旧包备份，不会运行被改坏的字节；可执行文件缺失、无执行位、清单无效仍走原生修复窗口。
 
 原位分支：
 

@@ -281,7 +281,7 @@ async fn management_methods_deny_a_read_only_frontend_before_side_effects() {
     std::fs::write(paths.frontend_dir.join(FRONTEND_ID).join("frontend.toml"),format!("schema_version=2\nprotocol_version=1\nid=\"{FRONTEND_ID}\"\nname=\"Readonly\"\nversion=\"0.1.0\"\nlifecycle=\"independent\"\ncapabilities=[\"inbox\"]\npermissions=[]\n")).unwrap();
     let (mut task,shutdown)=spawn_daemon(&paths);let socket=paths.runtime_dir.join("mail.sock");wait_socket_or_fail(&mut task,&socket).await;
     let bridge=Bridge::spawn(Endpoint::Unix{path:socket}).unwrap();wait_for(&bridge,|s|s.phase=="online").await;
-    for method in ["listAccountProfiles","getPluginInstallRoot","previewPluginPackage","setDefaultFrontend","commitPluginInstall","rollbackPlugin","setSettings","listAddresses","repairBuiltinFrontend","stopManagedAgent"] {
+    for method in ["listAccountProfiles","getPluginInstallRoot","previewPluginPackage","setDefaultFrontend","commitPluginInstall","rollbackPlugin","setSettings","listAddresses","repairBuiltinFrontend","resyncBuiltinFrontend","stopManagedAgent"] {
         assert_eq!(bridge.raw(method,serde_json::json!({})).await.unwrap_err().rpc_code,Some(-32016),"{method}");
     }
     assert!(!paths.frontend_dir.join(".default.json").exists());
