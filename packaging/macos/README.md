@@ -200,7 +200,7 @@ workflow 仅上传 Actions artifact，不创建 GitHub Release。签名身份与
 ## 本地 Preview DMG
 
 公开仓库的 `.github/workflows/release-macos-preview.yml` 在推送 `v*` tag 时自动构建 universal DMG，
-也可通过 `workflow_dispatch` 的 `tag` 输入重建已有 tag。它在标准 `macos-14` runner 上运行，不使用
+也可通过 `workflow_dispatch` 的 `tag` 输入重建已有 tag。它在标准 `macos-15` runner 上运行，不使用
 Actions cache 或 artifact，直接将 `${BRAND_SLUG}-<version>-macos-universal.dmg` 和 `.sha256` 上传到
 对应的 GitHub Release（同名文件覆盖）；Release 不存在时创建，版本含 `-` 时标记为 prerelease。
 这些体验包仅 ad-hoc 签名、未经公证，不代替正式的 Developer ID 发布流程；私有仓库会跳过该 job。
