@@ -864,6 +864,32 @@ fn executable_checksum(exe: &Path) -> Result<String, String> {
 /// Other versions (pending upgrade, rollback) are not byte-compared. An unreadable bundled
 /// payload is not the installed package's fault and never blocks the window.
 pub fn check_installed_bundled_frontend(installed: &Path, bundled: &Path) -> Result<(), String> {
+    match inspect_installed_bundled_frontend(installed, bundled)? {
+        InstalledBundled::Intact => Ok(()),
+        InstalledBundled::Stale => Err("已装内置前端与同版本打包校验和不一致".into()),
+    }
+}
+
+/// The installed bundled frontend is a valid, launchable package of the SAME version as the
+/// bundled payload, but its executable comes from a different build. A rebuilt or re-signed app
+/// installed over the old one leaves exactly this behind (the version number did not move);
+/// resyncing it from the bundled payload is an upgrade, not a repair of damage.
+pub fn installed_bundled_frontend_is_stale(installed: &Path, bundled: &Path) -> bool {
+    matches!(
+        inspect_installed_bundled_frontend(installed, bundled),
+        Ok(InstalledBundled::Stale)
+    )
+}
+
+enum InstalledBundled {
+    Intact,
+    Stale,
+}
+
+fn inspect_installed_bundled_frontend(
+    installed: &Path,
+    bundled: &Path,
+) -> Result<InstalledBundled, String> {
     let record = load_package_at(installed, Some(crate::recovery::BUNDLED_FRONTEND_ID))?;
     let LaunchTarget::MacosApplication(app) = &record.launch else {
         return Err("installed bundled frontend launch shape is invalid".into());
@@ -882,18 +908,18 @@ pub fn check_installed_bundled_frontend(installed: &Path, bundled: &Path) -> Res
         }
     }
     let Ok(reference) = load_package_at(bundled, Some(crate::recovery::BUNDLED_FRONTEND_ID)) else {
-        return Ok(());
+        return Ok(InstalledBundled::Intact);
     };
     if reference.info.version != record.info.version {
-        return Ok(());
+        return Ok(InstalledBundled::Intact);
     }
     let Ok(expected) = read_recovery_checksum(bundled) else {
-        return Ok(());
+        return Ok(InstalledBundled::Intact);
     };
     if executable_checksum(&exe)?.as_bytes() != expected {
-        return Err("已装内置前端与同版本打包校验和不一致".into());
+        return Ok(InstalledBundled::Stale);
     }
-    Ok(())
+    Ok(InstalledBundled::Intact)
 }
 
 impl FrontendBroker {
@@ -1243,6 +1269,9 @@ impl Plugin for FrontendPlugin {
                     match source.refresh(&root.0) {
                         Ok(crate::recovery::RefreshOutcome::Upgraded { from, to }) => {
                             eprintln!("[maild/frontend] 内置前端已从 {from} 升级到 {to}，旧包已备份");
+                        }
+                        Ok(crate::recovery::RefreshOutcome::Resynced { version }) => {
+                            eprintln!("[maild/frontend] 内置前端 {version} 已同步为随包构建，旧包已备份");
                         }
                         Ok(_) => {}
                         Err(_) => eprintln!("[maild/frontend] 内置前端升级未完成，继续使用已安装版本"),
@@ -1724,6 +1753,7 @@ mod tests {
         bytes[100] ^= 0xff;
         fs::write(&exe, &bytes).unwrap();
         assert!(check_installed_bundled_frontend(&installed, &bundled).is_err());
+        assert!(installed_bundled_frontend_is_stale(&installed, &bundled));
 
         // A different installed version (pending upgrade/rollback) is not byte-compared.
         let manifest = installed.join(MANIFEST_FILE);
@@ -1735,6 +1765,7 @@ mod tests {
         // Missing executable or a removed package is always rejected.
         fs::remove_file(&exe).unwrap();
         assert!(check_installed_bundled_frontend(&installed, &bundled).is_err());
+        assert!(!installed_bundled_frontend_is_stale(&installed, &bundled));
         fs::remove_dir_all(&installed).unwrap();
         assert!(check_installed_bundled_frontend(&installed, &bundled).is_err());
     }

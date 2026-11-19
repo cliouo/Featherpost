@@ -719,6 +719,38 @@ fn refresh_leaves_newer_unparseable_and_damaged_packages_alone() {
     assert!(!root.path().join(BACKUPS).exists());
 }
 
+/// A rebuilt app installed over the old one keeps the frontend version but changes the UI bytes;
+/// refresh resyncs that stale copy (keeping a backup) instead of leaving it for native recovery.
+#[cfg(unix)]
+#[test]
+fn refresh_resyncs_a_same_version_copy_from_a_different_build() {
+    let bundle = tempfile::tempdir().unwrap();
+    let source = source_fixture(bundle.path());
+    let root = tempfile::tempdir().unwrap();
+    source.preinstall(root.path()).unwrap();
+    let installed = root.path().join(BUNDLED_FRONTEND_ID);
+    let exe = ui_exe_in(&installed);
+    let mut bytes = fs::read(&exe).unwrap();
+    bytes[100] ^= 0xff;
+    fs::write(&exe, &bytes).unwrap();
+    assert!(crate::frontend::check_installed_bundled_frontend(&installed, &source.source).is_err());
+
+    assert_eq!(
+        source.refresh(root.path()).unwrap(),
+        RefreshOutcome::Resynced {
+            version: "0.1.0".into()
+        }
+    );
+    crate::frontend::check_installed_bundled_frontend(&installed, &source.source).unwrap();
+    assert!(root.path().join(BACKUPS).exists(), "the previous build is kept as a backup");
+    assert_eq!(source.refresh(root.path()).unwrap(), RefreshOutcome::Kept, "idempotent");
+
+    // A copy that is broken rather than stale is still left for explicit repair.
+    fs::remove_file(ui_exe_in(&installed)).unwrap();
+    assert_eq!(source.refresh(root.path()).unwrap(), RefreshOutcome::Kept);
+    assert!(!ui_exe_in(&installed).exists());
+}
+
 /// Agent startup applies the refresh under its lease, after the one-time preinstall.
 #[cfg(unix)]
 #[test]

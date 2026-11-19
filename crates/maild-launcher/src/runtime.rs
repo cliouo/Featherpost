@@ -3,7 +3,7 @@ use maild_client::{
     BUILTIN_RECOVERY_FRONTEND,
 };
 use serde_json::{json, Value};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 #[derive(Clone, Debug)]
@@ -191,16 +191,38 @@ impl NativeController {
         let installed = paths
             .frontend_dir
             .join(maild::recovery::BUNDLED_FRONTEND_ID);
-        match maild::frontend::check_installed_bundled_frontend(
-            &installed,
-            &layout.bundled_frontend_payload(),
-        ) {
+        let payload = layout.bundled_frontend_payload();
+        let mut check = maild::frontend::check_installed_bundled_frontend(&installed, &payload);
+        if check.is_err()
+            && maild::frontend::installed_bundled_frontend_is_stale(&installed, &payload)
+            && self.resync_stale_bundled_frontend(layout)
+        {
+            check = maild::frontend::check_installed_bundled_frontend(&installed, &payload);
+        }
+        match check {
             Ok(()) => (InPlace::Ready, Some(exe)),
             Err(error) => {
                 eprintln!("{}: {error}", maild_brand::LAUNCHER_BIN);
                 (InPlace::Damaged, None)
             }
         }
+    }
+
+    /// Same version, different build: this app was rebuilt or reinstalled while an Agent kept
+    /// running (or the Agent predates refresh-on-start resync), so the installed copy is the
+    /// previous build, not damage. Ask the Agent to republish it from its bundled payload, but
+    /// only when that Agent runs from this very app bundle, whose payload the check compares.
+    fn resync_stale_bundled_frontend(&self, layout: &NativeAppLayout) -> bool {
+        let Ok(info) = self.call("getAgentInfo", json!({}), Duration::from_secs(2)) else {
+            return false;
+        };
+        let same_bundle = info["executable_path"]
+            .as_str()
+            .is_some_and(|path| Path::new(path).starts_with(layout.app_bundle()));
+        same_bundle
+            && self
+                .call("repairBuiltinFrontend", json!({}), Duration::from_secs(60))
+                .is_ok_and(|response| response["id"] == maild::recovery::BUNDLED_FRONTEND_ID)
     }
 
     fn request_mailbox(&self, target: &MailboxTarget) -> Result<Value, &'static str> {
