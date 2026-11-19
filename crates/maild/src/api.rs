@@ -3228,8 +3228,17 @@ async fn resync_builtin_frontend(
     tokio::task::spawn_blocking(move || {
         let _transaction = transaction;
         let _directory_lease = directory_lease;
+        let outcome = match source.refresh(&root) {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                // A failure past the backup rename can leave the package missing on disk; never
+                // keep advertising it from the stale in-memory catalog.
+                let _ = broker.reload_from_disk(Some(&root));
+                return Err(transaction_error(error));
+            }
+        };
         let replaced = !matches!(
-            source.refresh(&root).map_err(transaction_error)?,
+            outcome,
             crate::recovery::RefreshOutcome::Absent | crate::recovery::RefreshOutcome::Kept
         );
         if replaced {
