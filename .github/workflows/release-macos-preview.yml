@@ -1,0 +1,83 @@
+name: macOS Preview Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag to rebuild (for example v0.1.0-preview.1)
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: macos-preview-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.event.repository.private == false
+    runs-on: macos-14
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Validate release tag
+        id: release
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]
+          printf 'tag=%s\n' "$TAG" >>"$GITHUB_OUTPUT"
+          printf 'version=%s\n' "${TAG#v}" >>"$GITHUB_OUTPUT"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: refs/tags/${{ steps.release.outputs.tag }}
+          persist-credentials: false
+      - uses: jdx/mise-action@236a21c3b91f5db6d4e174b348674a0f0caac06d # v5.2.9
+        with:
+          install_args: rust node pnpm
+          cache: false
+      - name: Build and verify universal preview DMG
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          . packaging/macos/brand.env
+          package_dir="$RUNNER_TEMP/$BRAND_SLUG-preview-package"
+          app="$package_dir/$BRAND_APP_BUNDLE"
+          dmg="$package_dir/$BRAND_SLUG-$VERSION-macos-universal.dmg"
+          mkdir -p "$package_dir"
+          chmod 0700 "$package_dir"
+          pnpm --dir packages/maild-ui install --frozen-lockfile
+          packaging/macos/build-universal.sh --output "$app"
+          packaging/macos/verify-bundle.sh "$app"
+          packaging/macos/build-preview-dmg.sh --app "$app" --output "$dmg"
+          hdiutil verify "$dmg"
+          (cd "$package_dir" && shasum -a 256 "$(basename "$dmg")" >"$(basename "$dmg").sha256")
+          (cd "$package_dir" && shasum -a 256 -c "$(basename "$dmg").sha256")
+      - name: Publish release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ steps.release.outputs.tag }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          . packaging/macos/brand.env
+          dmg="$RUNNER_TEMP/$BRAND_SLUG-preview-package/$BRAND_SLUG-$VERSION-macos-universal.dmg"
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            flags=()
+            if [[ "$VERSION" == *-* ]]; then
+              flags+=(--prerelease)
+            fi
+            gh release create "$TAG" --verify-tag --title "$BRAND_PRODUCT_NAME $VERSION" \
+              --notes 'macOS universal preview DMG: ad-hoc signed only, not Developer ID signed or notarized.' \
+              "${flags[@]}"
+          fi
+          gh release upload "$TAG" "$dmg" "$dmg.sha256" --clobber
