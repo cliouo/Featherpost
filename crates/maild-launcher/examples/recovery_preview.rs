@@ -34,7 +34,7 @@ impl Controller for Preview {
     }
 }
 fn main() {
-    maild_launcher::show_recovery(&mut Preview {
+    let _ = maild_launcher::show_recovery(&mut Preview {
         online: false,
         repaired: false,
     });

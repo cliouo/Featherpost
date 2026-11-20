@@ -71,9 +71,15 @@ pub fn run(repair: bool) {
                     }
                 }
             }
-            show_recovery(&mut controller);
+            let mailbox_host = show_recovery(&mut controller);
+            drop(controller);
             #[cfg_attr(not(target_os = "macos"), allow(clippy::drop_non_drop))]
             drop(window_owner);
+            if let Some(exe) = mailbox_host {
+                if let Err(message) = host_in_place(&exe) {
+                    ui::show_error(message);
+                }
+            }
         }
         Err(message) => {
             ui::show_error(message);
@@ -120,4 +126,3 @@ fn acquire_window() -> Option<window_owner::WindowOwner> {
         }
     }
 }
-
