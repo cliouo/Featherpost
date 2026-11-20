@@ -300,6 +300,7 @@ fn launch_route(catalog: &Value, in_place: impl FnOnce() -> InPlace) -> LaunchRo
 
 fn recovery_mailbox_host(
     catalog: &Value,
+    main_window_running: bool,
     in_place: impl FnOnce() -> (InPlace, Option<PathBuf>),
 ) -> Result<Option<PathBuf>, &'static str> {
     let mut exe = None;
@@ -308,7 +309,8 @@ fn recovery_mailbox_host(
         exe = path;
         check
     }) {
-        LaunchRoute::InPlace => Ok(exe),
+        LaunchRoute::InPlace if !main_window_running => Ok(exe),
+        LaunchRoute::InPlace => Ok(None),
         LaunchRoute::Frontend(_) => Ok(None),
         LaunchRoute::Recovery => Err("邮件前端尚不可用，请先恢复内置前端或启动后台"),
     }
@@ -365,7 +367,9 @@ fn mailbox_response(
 impl Controller for NativeController {
     fn mailbox_host(&mut self) -> Result<Option<PathBuf>, &'static str> {
         let catalog = self.call("listFrontends", json!({}), Duration::from_secs(2))?;
-        recovery_mailbox_host(&catalog, || self.in_place_ui())
+        recovery_mailbox_host(&catalog, super::platform::main_window_pid().is_some(), || {
+            self.in_place_ui()
+        })
     }
 
     fn status(&mut self) -> Status {
@@ -480,25 +484,35 @@ mod tests {
     fn recovery_hands_off_healthy_bundled_ui_without_workspace_activation() {
         let exe = PathBuf::from("/app/Contents/MacOS/ui");
         assert_eq!(
-            recovery_mailbox_host(&catalog(maild_brand::BUNDLED_FRONTEND_ID), || {
+            recovery_mailbox_host(&catalog(maild_brand::BUNDLED_FRONTEND_ID), false, || {
                 (InPlace::Ready, Some(exe.clone()))
             }),
             Ok(Some(exe))
         );
         assert_eq!(
-            recovery_mailbox_host(&catalog("org.example.reader"), || panic!("third-party")),
+            recovery_mailbox_host(&catalog("org.example.reader"), false, || panic!("third-party")),
             Ok(None)
         );
         assert_eq!(
-            recovery_mailbox_host(&catalog(maild_brand::BUNDLED_FRONTEND_ID), || {
+            recovery_mailbox_host(&catalog(maild_brand::BUNDLED_FRONTEND_ID), false, || {
                 (InPlace::Unavailable, None)
             }),
             Ok(None)
         );
-        assert!(recovery_mailbox_host(&json!({}), || panic!("no default")).is_err());
-        assert!(recovery_mailbox_host(&catalog(maild_brand::BUNDLED_FRONTEND_ID), || {
+        assert!(recovery_mailbox_host(&json!({}), false, || panic!("no default")).is_err());
+        assert!(recovery_mailbox_host(&catalog(maild_brand::BUNDLED_FRONTEND_ID), false, || {
             (InPlace::Damaged, None)
         }).is_err());
+    }
+
+    #[test]
+    fn recovery_uses_inbox_activation_for_an_existing_main_window() {
+        assert_eq!(
+            recovery_mailbox_host(&catalog(maild_brand::BUNDLED_FRONTEND_ID), true, || {
+                (InPlace::Ready, Some(PathBuf::from("/app/Contents/MacOS/ui")))
+            }),
+            Ok(None)
+        );
     }
 
     #[test]
