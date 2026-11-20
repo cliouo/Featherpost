@@ -7,16 +7,21 @@ fn title() -> String {
     format!("{} 修复与后台管理", maild_brand::PRODUCT_NAME)
 }
 
-pub fn show_recovery(controller: &mut dyn Controller) {
+pub fn show_recovery(controller: &mut dyn Controller) -> Option<std::path::PathBuf> {
     super::platform::prepare_ui();
     loop {
         let status = controller.status();
         match choose(&status_text(&status), ["打开邮箱", "修复选项…", "关闭"]) {
-            Some(0) => result(controller.perform(Operation::OpenMailbox)),
+            Some(0) => match controller.mailbox_host() {
+                Ok(Some(exe)) => return Some(exe),
+                Ok(None) => result(controller.perform(Operation::OpenMailbox)),
+                Err(message) => result(Err(message)),
+            },
             Some(1) => repair_options(controller),
             _ => break,
         }
     }
+    None
 }
 
 fn status_text(status: &Status) -> String {

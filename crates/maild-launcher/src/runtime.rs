@@ -31,6 +31,9 @@ pub enum Operation {
 pub trait Controller {
     fn status(&mut self) -> Status;
     fn perform(&mut self, operation: Operation) -> Result<&'static str, &'static str>;
+    fn mailbox_host(&mut self) -> Result<Option<PathBuf>, &'static str> {
+        Ok(None)
+    }
 }
 
 pub struct NativeController {
@@ -295,6 +298,22 @@ fn launch_route(catalog: &Value, in_place: impl FnOnce() -> InPlace) -> LaunchRo
     }
 }
 
+fn recovery_mailbox_host(
+    catalog: &Value,
+    in_place: impl FnOnce() -> (InPlace, Option<PathBuf>),
+) -> Result<Option<PathBuf>, &'static str> {
+    let mut exe = None;
+    match launch_route(catalog, || {
+        let (check, path) = in_place();
+        exe = path;
+        check
+    }) {
+        LaunchRoute::InPlace => Ok(exe),
+        LaunchRoute::Frontend(_) => Ok(None),
+        LaunchRoute::Recovery => Err("邮件前端尚不可用，请先恢复内置前端或启动后台"),
+    }
+}
+
 #[derive(Debug)]
 struct MailboxTarget {
     id: String,
@@ -344,6 +363,11 @@ fn mailbox_response(
 }
 
 impl Controller for NativeController {
+    fn mailbox_host(&mut self) -> Result<Option<PathBuf>, &'static str> {
+        let catalog = self.call("listFrontends", json!({}), Duration::from_secs(2))?;
+        recovery_mailbox_host(&catalog, || self.in_place_ui())
+    }
+
     fn status(&mut self) -> Status {
         let online = self.online();
         let mailbox_available = online && self.mailbox_target().is_ok();
@@ -452,6 +476,31 @@ impl Controller for NativeController {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn recovery_hands_off_healthy_bundled_ui_without_workspace_activation() {
+        let exe = PathBuf::from("/app/Contents/MacOS/ui");
+        assert_eq!(
+            recovery_mailbox_host(&catalog(maild_brand::BUNDLED_FRONTEND_ID), || {
+                (InPlace::Ready, Some(exe.clone()))
+            }),
+            Ok(Some(exe))
+        );
+        assert_eq!(
+            recovery_mailbox_host(&catalog("org.example.reader"), || panic!("third-party")),
+            Ok(None)
+        );
+        assert_eq!(
+            recovery_mailbox_host(&catalog(maild_brand::BUNDLED_FRONTEND_ID), || {
+                (InPlace::Unavailable, None)
+            }),
+            Ok(None)
+        );
+        assert!(recovery_mailbox_host(&json!({}), || panic!("no default")).is_err());
+        assert!(recovery_mailbox_host(&catalog(maild_brand::BUNDLED_FRONTEND_ID), || {
+            (InPlace::Damaged, None)
+        }).is_err());
+    }
+
     #[test]
     fn independent_delivery_is_queued_and_managed_activation_is_only_a_request() {
         let mut target = MailboxTarget {
