@@ -1,0 +1,25 @@
+name: Studio macOS preview
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  studio:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v5
+        with:
+          install_args: rust node pnpm
+      - uses: Swatinem/rust-cache@v2
+      - run: pnpm install --frozen-lockfile
+      - run: bash packaging/macos/build-studio.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: featherpost-studio-macos-universal
+          path: |
+            dist/studio/*.zip
+            dist/studio/*.sha256

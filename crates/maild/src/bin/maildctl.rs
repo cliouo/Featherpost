@@ -114,6 +114,11 @@ enum Command {
     RequestNotificationAuthorization,
     /// List installed frontend packages and the configured default.
     Frontends,
+    /// Select an installed frontend for menu-bar, notification, and compose intents.
+    SetDefaultFrontend {
+        #[arg(long)]
+        id: String,
+    },
     /// List installed external process plugins and their lifecycle state.
     Plugins,
     /// Reveal (and rotate) one plugin's auth token; print it exactly once.
@@ -640,6 +645,7 @@ async fn run(cli: Cli) -> Result<(), AppError> {
             ("requestNotificationAuthorization", json!({}))
         }
         Command::Frontends => ("listFrontends", json!({})),
+        Command::SetDefaultFrontend { id } => ("setDefaultFrontend", json!({"id": id})),
         Command::Plugins => ("listExternalPlugins", json!({})),
         Command::Send {
             from,
@@ -2383,6 +2389,22 @@ mod tests {
             "smtp.example.test",
         ])
         .is_err());
+    }
+
+    #[test]
+    fn selecting_a_frontend_requires_an_explicit_package_id() {
+        let cli = Cli::try_parse_from([
+            maild_brand::CLI_CTL,
+            "set-default-frontend",
+            "--id",
+            "dev.featherpost.studio",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::SetDefaultFrontend { id } if id == "dev.featherpost.studio"
+        ));
+        assert!(Cli::try_parse_from([maild_brand::CLI_CTL, "set-default-frontend"]).is_err());
     }
 
     #[test]

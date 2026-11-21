@@ -44,6 +44,7 @@ jobs:
           pnpm --dir packages/maild-ui install --frozen-lockfile
           pnpm --dir packages/maild-ui exec tsc --noEmit -p tsconfig.json
           pnpm --dir packages/maild-ui test
+          pnpm --dir packages/featherpost-studio build
       - name: Test macOS packaging scripts
         if: runner.os == 'macOS'
         run: |
