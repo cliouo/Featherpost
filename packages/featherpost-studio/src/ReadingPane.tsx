@@ -1,0 +1,308 @@
+import type { Host } from "../../maild-ui/src/host/host";
+import { useStore } from "../../maild-ui/src/host/hooks";
+import { Icon } from "../../maild-ui/src/app/Icon";
+import { compatBlocksWrites } from "../../maild-ui/src/bridge/types";
+import {
+  messageKey,
+  type MailboxController,
+} from "../../maild-ui/src/mailbox/controller";
+import {
+  presentation,
+  type DocumentController,
+} from "../../maild-ui/src/mailbox/document";
+import {
+  displayName,
+  addressOnly,
+  fullDate,
+} from "../../maild-ui/src/mailbox/format";
+import {
+  AttachmentStrip,
+  LinkSheet,
+  OtpBar,
+  RemoteBanner,
+} from "../../maild-ui/src/mailbox/ReaderParts";
+import { Thread } from "../../maild-ui/src/mailbox/Thread";
+import { detectOtpCode } from "../../maild-ui/src/mailbox/otp";
+import {
+  sourceKey,
+  type ComposeController,
+} from "../../maild-ui/src/compose/controller";
+import { Editor } from "../../maild-ui/src/compose/Editor";
+
+export function ReadingPane({
+  host,
+  controller,
+  documents,
+  composer,
+}: {
+  host: Host;
+  controller: MailboxController;
+  documents: DocumentController;
+  composer: ComposeController;
+}) {
+  const s = useStore(controller.store),
+    d = useStore(documents.store),
+    compose = useStore(composer.store);
+  const row = s.selectedRow,
+    detail = s.detail,
+    body = presentation(detail, d);
+  const writable =
+    s.snapshot.phase === "online" && !compatBlocksWrites(s.snapshot) && !s.busy;
+  const otp = row
+    ? detectOtpCode(row.subject, detail?.body || row.snippet)
+    : null;
+  const index = row
+    ? s.rows.findIndex((r) => messageKey(r) === messageKey(row))
+    : -1;
+  const profile = row
+    ? s.profiles.find((p) => p.id === row.account)
+    : undefined;
+  const inline = !!row && compose.inline && compose.source === sourceKey(row);
+  return (
+    <section className="reader-column" aria-label="邮件正文">
+      <div className="reader-actions">
+        <button
+          className="icon-button back-button"
+          aria-label="返回邮件列表"
+          onClick={() => controller.clearSelection()}
+        >
+          <Icon name="back" />
+        </button>
+        <button
+          className="text-button"
+          title="归档"
+          aria-label="归档"
+          disabled={!row || !writable}
+          onClick={() => void controller.perform({ action: "archive" })}
+        >
+          <Icon name="archive" />
+          <span>归档</span>
+        </button>
+        <button
+          className="icon-button"
+          title="删除"
+          aria-label="删除"
+          disabled={!row || !writable}
+          onClick={() => controller.requestAction("delete")}
+        >
+          <Icon name="trash" />
+        </button>
+        <span className="toolbar-divider" />
+        <button
+          className="text-button"
+          title="移动到文件夹"
+          aria-label="移动到文件夹"
+          disabled={!row || !writable}
+          onClick={() => controller.requestAction("move")}
+        >
+          <Icon name="folder" />
+          <span>移动到</span>
+        </button>
+        <button
+          className={`icon-button ${row?.flagged ? "starred" : ""}`}
+          title="切换星标"
+          aria-label="切换星标"
+          aria-pressed={row?.flagged ?? false}
+          disabled={!row || !writable}
+          onClick={() => void controller.toggleSelected("flagged")}
+        >
+          <Icon name="star" />
+        </button>
+        <details
+          className="reader-menu"
+          key={row ? messageKey(row) : "empty"}
+          data-shortcuts-off
+        >
+          <summary
+            className="icon-button"
+            aria-label="更多邮件操作"
+            title="更多邮件操作"
+          >
+            <Icon name="more" />
+          </summary>
+          <div className="reader-menu-panel">
+            <button
+              disabled={!row || !writable}
+              onClick={(e) => {
+                e.currentTarget.closest("details")?.removeAttribute("open");
+                void controller.toggleSelected("seen");
+              }}
+            >
+              {row?.seen ? "标为未读" : "标为已读"}
+            </button>
+            <button
+              disabled={!row || s.snapshot.phase !== "online"}
+              onClick={(e) => {
+                e.currentTarget.closest("details")?.removeAttribute("open");
+                void controller.openThread();
+              }}
+            >
+              {s.threadOpen ? "收起会话" : "查看会话"}
+            </button>
+          </div>
+        </details>
+        <span className="spacer" />
+        <span className="reader-position">
+          {index >= 0 ? `${index + 1} / ${s.total}` : row ? "会话" : ""}
+        </span>
+        <button
+          className="icon-button previous-mail"
+          title="上一封"
+          aria-label="上一封"
+          disabled={!row || index <= 0}
+          onClick={() => controller.step(-1)}
+        >
+          <Icon name="back" />
+        </button>
+        <button
+          className="icon-button next-mail"
+          title="下一封"
+          aria-label="下一封"
+          disabled={
+            !row || (index >= s.rows.length - 1 && !controller.canLoadMore)
+          }
+          onClick={() => controller.step(1)}
+        >
+          <Icon name="back" />
+        </button>
+      </div>
+      {!row ? (
+        <div className="reader-empty">
+          <Icon name="mail" />
+          <h2>选择一封邮件</h2>
+          <p>在这里阅读和回复</p>
+          <div className="empty-shortcuts">
+            <span>
+              <kbd>⌘ N</kbd> 写邮件
+            </span>
+            <span>
+              <kbd>⌘ K</kbd> 搜索
+            </span>
+          </div>
+        </div>
+      ) : (
+        <div className="letter-scroll">
+          <div className="letter-content">
+            <header className="letter-heading">
+              <h2>{row.subject || "（无主题）"}</h2>
+              <div className="letter-sender">
+                <div>
+                  <strong>{displayName(row.sender) || row.sender}</strong>
+                  <span className="sender-address">
+                    {addressOnly(row.sender)}
+                  </span>
+                  <p>
+                    发至 {row.recipient || "—"}
+                    {detail?.cc ? ` · 抄送 ${detail.cc}` : ""}
+                  </p>
+                </div>
+                <time>{fullDate(row.sort_at)}</time>
+              </div>
+              {otp && (
+                <OtpBar code={otp} notify={(text) => host.notify(text)} />
+              )}
+              {s.detailError && (
+                <div className="notice error" role="alert">
+                  {s.detailError}
+                </div>
+              )}
+              {d.error && (
+                <div className="notice error" role="alert">
+                  {d.error}
+                </div>
+              )}
+              {detail && (
+                <RemoteBanner
+                  host={host}
+                  detail={detail}
+                  state={d}
+                  documents={documents}
+                  onPolicyChanged={() => controller.reloadSelected()}
+                />
+              )}
+            </header>
+            {s.loadingDetail || body.mode === "loading" ? (
+              <div className="body-loading" role="status">
+                正在读取正文…
+              </div>
+            ) : detail && body.mode === "html" ? (
+              <iframe
+                className="studio-mail-frame"
+                key={body.token}
+                src={body.url}
+                sandbox=""
+                referrerPolicy="no-referrer"
+                title="邮件正文（隔离显示）"
+              />
+            ) : (
+              detail && (
+                <>
+                  <pre className="studio-letter">
+                    {detail.body || "（正文为空）"}
+                  </pre>
+                  {body.mode === "text" && body.note && detail.has_html && (
+                    <p className="body-note">{body.note}</p>
+                  )}
+                </>
+              )
+            )}
+            {detail && (
+              <AttachmentStrip
+                bridge={host.bridge}
+                detail={detail}
+                notify={(text) => host.notify(text)}
+              />
+            )}
+            {s.threadOpen && <Thread controller={controller} />}
+            <section className="reply-section" aria-label="回复邮件">
+              <p className="reply-identity">
+                使用 {controller.label(row.account)} ·{" "}
+                {profile?.address || row.account}
+              </p>
+              {!inline && (
+                <div className="reply-bar">
+                  <button
+                    className="primary-button"
+                    disabled={!writable}
+                    onClick={() => void composer.reply(row, "reply")}
+                  >
+                    <Icon name="reply" />
+                    回复
+                  </button>
+                  <button
+                    className="text-button"
+                    disabled={!writable}
+                    onClick={() => void composer.reply(row, "reply_all")}
+                  >
+                    <Icon name="reply" />
+                    回复全部
+                  </button>
+                  <button
+                    className="text-button"
+                    disabled={!writable}
+                    onClick={() => void composer.reply(row, "forward")}
+                  >
+                    <Icon name="forward" />
+                    转发
+                  </button>
+                </div>
+              )}
+              {inline && <Editor controller={composer} inline />}
+            </section>
+          </div>
+        </div>
+      )}
+      {d.pendingLink && (
+        <LinkSheet
+          link={d.pendingLink}
+          documents={documents}
+          notify={(text) => host.notify(text)}
+          compose={(address) => {
+            documents.dismissLink();
+            void composer.create(address);
+          }}
+        />
+      )}
+    </section>
+  );
+}

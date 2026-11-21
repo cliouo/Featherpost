@@ -95,9 +95,11 @@ export interface MailboxBridge {
   fetchServerMessage?(account: string, folder: string, uid: string): Promise<UiMessage | null>;
 }
 export type SmartFolder = "inbox" | "all" | "unread" | "starred";
-export type Scope =
+export type ListScope =
   | { kind: "smart"; name: SmartFolder }
-  | { kind: "folder"; account: string; folder: string; title: string }
+  | { kind: "folder"; account: string; folder: string; title: string };
+export type Scope = ListScope
+  | { kind: "unread"; base: ListScope }
   | { kind: "search"; query: MailboxQuery };
 export type MailAction =
   | { action: "mark"; flag: "seen" | "flagged"; value: boolean }

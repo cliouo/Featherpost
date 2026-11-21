@@ -7,7 +7,7 @@ import { SettingsController } from "../../maild-ui/src/settings/controller";
 import { settingsModule } from "../../maild-ui/src/settings/module";
 import { ErrorBoundary } from "../../maild-ui/src/app/ErrorBoundary";
 import { studioMailbox } from "./mailbox";
-import { Studio } from "./Studio";
+import { Studio } from "./Shell";
 import "../../maild-ui/src/styles/tokens.css";
 import "../../maild-ui/src/settings/settings.css";
 import "../../maild-ui/src/compose/compose.css";

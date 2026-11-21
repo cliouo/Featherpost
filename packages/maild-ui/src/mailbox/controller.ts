@@ -111,6 +111,7 @@ function boundedSet<K, V>(cache: Map<K, V>, key: K, value: V, limit: number) {
   while (cache.size > limit) cache.delete(cache.keys().next().value as K);
 }
 export function queryOf(scope: Scope): MailboxQuery {
+  if (scope.kind === "unread") return { ...queryOf(scope.base), seen: false };
   if (scope.kind === "search") return { ...scope.query, search: true };
   if (scope.kind === "folder")
     return { account: scope.account, folder: scope.folder };
@@ -123,6 +124,7 @@ export function queryOf(scope: Scope): MailboxQuery {
         : {};
 }
 export function scopeTitle(scope: Scope) {
+  if (scope.kind === "unread") return scopeTitle(scope.base);
   return scope.kind === "folder"
     ? scope.title
     : scope.kind === "search"
@@ -302,7 +304,7 @@ export class MailboxController {
         if (folders.some((f) => f.account !== account))
           throw new Error("scope mismatch");
         this.folders.set(account, folders);
-        const current = this.state.scope;
+        const current = this.state.scope.kind === "unread" ? this.state.scope.base : this.state.scope;
         this.patch(
           current.kind === "folder" && current.account === account
             ? {
@@ -365,6 +367,14 @@ export class MailboxController {
     this.previousSearch = null;
     this.changeScope({ kind: "smart", name });
   }
+  /** List filters use listMessageSummaries, never the full-text search protocol. */
+  setUnreadFilter(unread: boolean) {
+    const current = this.state.scope;
+    if (current.kind === "search") return;
+    const base = current.kind === "unread" ? current.base : current;
+    this.previousSearch = null;
+    this.changeScope(unread ? { kind: "unread", base } : base.kind === "smart" && base.name === "unread" ? { kind: "smart", name: "all" } : base);
+  }
   selectFolder(folder: UiFolder) {
     this.previousSearch = null;
     this.changeScope({
@@ -380,15 +390,16 @@ export class MailboxController {
     this.remoteRequests.invalidate();
     this.clearSelection();
     const cached = this.rows.get(scopeKey(scope));
-    const account = scope.kind === "folder" ? scope.account : "";
+    const source = scope.kind === "unread" ? scope.base : scope;
+    const account = source.kind === "folder" ? source.account : "";
     const folders = this.foldersOf(account);
     this.patch({
       scope,
       account,
       folders,
       folder:
-        scope.kind === "folder"
-          ? (folders.find((f) => f.name === scope.folder) ?? null)
+        source.kind === "folder"
+          ? (folders.find((f) => f.name === source.folder) ?? null)
           : null,
       rows: cached?.rows ?? [],
       total: cached?.total ?? 0,
@@ -654,13 +665,7 @@ export class MailboxController {
    */
   syncNow = async () => {
     if (this.state.snapshot.phase !== "online" || this.stopped || this.state.syncing) return;
-    const scope = this.state.scope;
-    const account =
-      scope.kind === "folder"
-        ? scope.account
-        : scope.kind === "search"
-          ? scope.query.account
-          : undefined;
+    const account = queryOf(this.state.scope).account;
     this.patch({ syncing: true, syncError: null });
     let syncError: string | null = null;
     try {
