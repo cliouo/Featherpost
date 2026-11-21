@@ -41,9 +41,14 @@ export function Appearance({ host }: { host: Host }) {
           { value: "comfortable", label: "舒适", copy: "保留更宽松的行间距" },
         ] as const).map(density => (
           <label key={density.value} className={`studio-density-option ${density.value}${preferences.density === density.value ? " selected" : ""}`}>
-            <input type="radio" name="studio-density" value={density.value} checked={preferences.density === density.value}
-              onChange={() => update({ density: density.value })} />
-            <span><strong>{density.label}</strong><small>{density.copy}</small></span>
+            <span className="studio-density-copy">
+              <span className="studio-density-heading">
+                <input type="radio" name="studio-density" value={density.value} checked={preferences.density === density.value}
+                  onChange={() => update({ density: density.value })} />
+                <strong>{density.label}</strong>
+              </span>
+              <small>{density.copy}</small>
+            </span>
             <span className="studio-density-lines" aria-hidden="true">
               {(density.value === "compact" ? [0,1,2] : [0,1]).map(n => <i key={n} />)}
             </span>
