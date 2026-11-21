@@ -189,6 +189,12 @@
   line-height: 1.7;
   padding: 15px 9px;
 }
+.message-folder-context {
+  margin: 0 8px 9px;
+  color: var(--studio-secondary);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
 .group-filters {
   margin-top: 23px;
 }

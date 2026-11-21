@@ -9,6 +9,18 @@ import {
 import { FakeBridge, online, folder, summary, flush } from "./fakeBridge";
 
 const controllers: MailboxController[] = [];
+it("identifies a unified message's real folder without changing its search/list scope", () => {
+  const scope = { kind: "search" as const, query: { query: "Account 17" } };
+  const row = { account: "qa17", folder: "QA Projects" };
+  expect(selectedFolder(scope, "qa17", "QA Projects", row)).toBe(true);
+  expect(selectedFolder(scope, "qa17", "INBOX", row)).toBe(false);
+  expect(selectedFolder(scope, "other", "QA Projects", row)).toBe(false);
+  expect(selectedFolder(scope, "qa17", "QA Projects")).toBe(false);
+  expect(
+    selectedFolder(scope, "qa17", "INBOX", { ...row, folder: "INBOX" }),
+  ).toBe(true);
+  expect(scope).toEqual({ kind: "search", query: { query: "Account 17" } });
+});
 afterEach(() => controllers.splice(0).forEach((c) => c.stop()));
 async function ready() {
   const bridge = new FakeBridge();

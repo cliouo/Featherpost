@@ -248,6 +248,7 @@ export function Studio({
                 nodes={folderTree(mailbox.foldersOf(account))}
                 depth={0}
                 filter={filter}
+                messageContext={view === "unified"}
                 active={state.activeViewId === MAIL}
                 mailbox={mailbox}
                 open={(folder) =>
@@ -307,6 +308,7 @@ function FolderBranches({
   depth,
   filter,
   active,
+  messageContext,
   mailbox,
   open,
 }: {
@@ -314,11 +316,19 @@ function FolderBranches({
   depth: number;
   filter: string;
   active: boolean;
+  messageContext?: boolean;
   mailbox: MailboxController;
   open(folder: FolderNode["folder"]): void;
 }) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
-  const { scope } = useStore(mailbox.store);
+  const { scope, selectedRow } = useStore(mailbox.store);
+  const current = (account: string, name: string) =>
+    selectedFolder(
+      scope,
+      account,
+      name,
+      messageContext ? selectedRow : undefined,
+    );
   const matches = (n: FolderNode): boolean =>
     !filter ||
     `${n.folder.name} ${n.folder.display_name}`
@@ -339,7 +349,7 @@ function FolderBranches({
         return (
           <div key={folder.name}>
             <div
-              className={`folder-row ${active && selectedFolder(scope, folder.account, folder.name) ? "is-active" : ""}`}
+              className={`folder-row ${active && current(folder.account, folder.name) ? "is-active" : ""}`}
               style={{ "--depth": depth } as CSSProperties}
             >
               {children.length > 0 ? (
@@ -367,7 +377,7 @@ function FolderBranches({
               <button
                 className="folder-link"
                 aria-current={
-                  active && selectedFolder(scope, folder.account, folder.name)
+                  active && current(folder.account, folder.name)
                     ? "page"
                     : undefined
                 }
@@ -384,6 +394,7 @@ function FolderBranches({
               <FolderBranches
                 nodes={children}
                 depth={depth + 1}
+                messageContext={messageContext}
                 filter={filter}
                 active={active}
                 mailbox={mailbox}

@@ -393,6 +393,15 @@ export function MailboxNavigation({
             <strong>{label(focused)}</strong>
             <small>{address(focused)}</small>
           </div>
+          {mail.selectedRow && (
+            <p className="message-folder-context">
+              所在文件夹 ·{" "}
+              {mailbox
+                .foldersOf(focused)
+                .find((f) => f.name === mail.selectedRow!.folder)
+                ?.display_name || mail.selectedRow.folder}
+            </p>
+          )}
           {folders(focused, "")}
           {!mailbox.foldersOf(focused).some((f) => f.present) && (
             <p className="nav-no-results">尚未获取文件夹</p>

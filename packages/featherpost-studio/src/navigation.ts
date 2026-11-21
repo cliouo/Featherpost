@@ -61,7 +61,13 @@ export function folderIcon(folder: UiFolder): IconName {
     )[folder.role] ?? "folder"
   );
 }
-export function selectedFolder(scope: Scope, account: string, name: string) {
+export function selectedFolder(
+  scope: Scope,
+  account: string,
+  name: string,
+  message?: { account: string; folder: string } | null,
+): boolean {
+  if (message) return message.account === account && message.folder === name;
   if (scope.kind === "unread") return selectedFolder(scope.base, account, name);
   return scope.kind === "folder"
     ? scope.account === account && scope.folder === name
