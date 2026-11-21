@@ -3,7 +3,7 @@ import { Host } from "../src/host/host";
 import { ComposeController, COMPOSE_VIEW } from "../src/compose/controller";
 import { composeModule } from "../src/compose/module";
 import { SettingsController } from "../src/settings/controller";
-import { settingsModule } from "../src/settings/module";
+import { settingsModule } from "../../featherpost-studio/src/settings/module";
 import {
   studioMailbox,
   MAIL,
