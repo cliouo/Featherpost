@@ -129,7 +129,12 @@ export function studioMailbox(
       },
     ],
     settings: [
-      { id: "maild.mailbox.reading-privacy", title: "阅读与隐私", order: 15, render: Privacy },
+      {
+        id: "maild.mailbox.reading-privacy",
+        title: "阅读与隐私",
+        order: 15,
+        render: Privacy,
+      },
     ],
     dispose: () => {
       stopState();
