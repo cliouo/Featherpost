@@ -1692,24 +1692,6 @@ kbd {
   .studio-search {
     margin-left: 12px;
   }
-  .settings-layout {
-    display: flex;
-    flex-direction: column;
-  }
-  .settings-nav {
-    display: flex;
-    gap: 5px;
-    padding: 8px;
-    flex: none;
-    border-right: 0;
-    border-bottom: 1px solid var(--studio-border);
-  }
-  .settings-nav button {
-    width: auto;
-    white-space: nowrap;
-    margin: 0;
-    padding: 8px 10px;
-  }
   .letter-content {
     max-width: 820px;
     width: 100%;
