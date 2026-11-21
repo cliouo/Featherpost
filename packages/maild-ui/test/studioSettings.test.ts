@@ -1,7 +1,7 @@
 import { createElement, type ReactElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, expect, it, vi } from "vitest";
-import { Accounts } from "../../featherpost-studio/src/settings/Accounts";
+import { Accounts, AccountMore } from "../../featherpost-studio/src/settings/Accounts";
 import { Appearance } from "../../featherpost-studio/src/settings/Appearance";
 import { settingsModule } from "../../featherpost-studio/src/settings/module";
 import { settingsModule as legacySettings } from "../src/settings/module";
@@ -71,6 +71,26 @@ it("preserves independently configured plugin transports and separate SMTP crede
   const plugin = renderToStaticMarkup(createElement(Accounts, { controller: c }));
   expect(plugin).not.toContain("SMTP 服务器");
   expect(plugin).toContain("send.service");
+  c.dispose();
+});
+
+it("closes a clean editor before account actions and never drops dirty input", () => {
+  const c = new SettingsController(new FakeSettings());
+  c.connection(online);
+  c.beginAccount(account());
+  const action = () => {
+    const { elements } = capture(() => AccountMore({ profile: account(), controller: c }));
+    return elements.find(el => el.type === "button" && el.props.children === "暂停同步")!.props.onClick as () => void;
+  };
+  c.setDisplayName("正在编辑");
+  action()();
+  expect(c.store.getSnapshot().editor?.draft.display_name).toBe("正在编辑");
+  expect(c.store.getSnapshot().confirm).toBeNull();
+  c.beginAccount(account());
+  action()();
+  expect(c.store.getSnapshot().editor).toBeNull();
+  expect(c.store.getSnapshot().confirm?.title).toContain("暂停");
+  c.cancelConfirmation();
   c.dispose();
 });
 

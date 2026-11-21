@@ -510,13 +510,15 @@ function Editor({ controller }: { controller: SettingsController }) {
             )}
           </div>
         )}
+      </fieldset>
         <div className="studio-editor-options"><span>重新探测连接需要输入密码</span>{saved && <AccountMore profile={saved} controller={controller} disabled={controller.dirty} />}</div>
         <div className="settings-actions studio-account-save">
           <span>保存后应用到账户；不会改变服务器上的邮件</span>
-          <button type="button" className="secondary" onClick={end}>取消</button>
+          <button type="button" className="secondary" disabled={s.busy || s.closeLocked} onClick={end}>取消</button>
           <button
             type="button"
             className="secondary"
+            disabled={!s.online || s.busy || s.closeLocked}
             onClick={() => void controller.probe()}
           >
             探测连接
@@ -525,9 +527,9 @@ function Editor({ controller }: { controller: SettingsController }) {
             type="submit"
             className="primary"
             disabled={
-              !e.id &&
+              !s.online || s.busy || s.closeLocked || (!e.id &&
               (!s.probe?.incoming.ok ||
-                (!!draft.outgoing && !s.probe?.outgoing?.ok))
+                (!!draft.outgoing && !s.probe?.outgoing?.ok)))
             }
           >
             {s.busy ? "处理中…" : e.id ? "保存更改" : "保存并连接"}
@@ -536,18 +538,23 @@ function Editor({ controller }: { controller: SettingsController }) {
         {!e.id && <p className="group-note">
           凭据只保存在系统钥匙串；关闭窗口后，后台以极低内存静默收信。
         </p>}
-      </fieldset>
     </form>
   );
 }
 
-function AccountMore({ profile, controller, disabled = false }: { profile: AccountProfile; controller: SettingsController; disabled?: boolean }) {
+export function AccountMore({ profile, controller, disabled = false }: { profile: AccountProfile; controller: SettingsController; disabled?: boolean }) {
   const s = useStore(controller.store);
+  const confirm = (remove: boolean) => {
+    if (disabled || controller.dirty || !s.online || s.busy || s.closeLocked) return;
+    // Account actions refresh profile revisions. Never retain an obsolete editor.
+    controller.discard();
+    controller.confirmAccount(profile, remove);
+  };
   return <details className="account-more">
     <summary aria-label={`${profile.display_name} 的更多操作`}>更多账户操作 <Icon name="more" /></summary>
     <div>
-      <button type="button" disabled={disabled || !s.online || s.busy || s.closeLocked} onClick={() => controller.confirmAccount(profile, false)}>{profile.enabled ? "暂停同步" : "启用"}</button>
-      <button type="button" className="danger" disabled={disabled || !s.online || s.busy || s.closeLocked} onClick={() => controller.confirmAccount(profile, true)}>移除账户</button>
+      <button type="button" disabled={disabled || !s.online || s.busy || s.closeLocked} onClick={() => confirm(false)}>{profile.enabled ? "暂停同步" : "启用"}</button>
+      <button type="button" className="danger" disabled={disabled || !s.online || s.busy || s.closeLocked} onClick={() => confirm(true)}>移除账户</button>
       {disabled && <small>先保存或取消更改</small>}
       <small>账户 ID：{profile.id} · 版本 {profile.revision}</small>
       <small>{profile.credentials.incoming === "saved" ? "收信凭据已保存在系统钥匙串" : "未保存收信凭据"}；关闭窗口不影响后台收信</small>
