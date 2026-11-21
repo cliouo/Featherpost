@@ -4,14 +4,15 @@ import { Host } from "../../maild-ui/src/host/host";
 import { ComposeController } from "../../maild-ui/src/compose/controller";
 import { composeModule } from "../../maild-ui/src/compose/module";
 import { SettingsController } from "../../maild-ui/src/settings/controller";
-import { settingsModule } from "../../maild-ui/src/settings/module";
+import { settingsModule } from "./settings/module";
 import { ErrorBoundary } from "../../maild-ui/src/app/ErrorBoundary";
 import { studioMailbox } from "./mailbox";
 import { Studio } from "./Shell";
 import "../../maild-ui/src/styles/tokens.css";
-import "../../maild-ui/src/settings/settings.css";
+import "./settings/forms.css";
 import "../../maild-ui/src/compose/compose.css";
 import "./studio.css";
+import "./settings/settings.css";
 
 const host = new Host(tauriBridge);
 const composer = new ComposeController(
