@@ -142,11 +142,13 @@ function Mailbox({
   setup(): void;
 }) {
   const s = useStore(controller.store);
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useState(() =>
+    s.scope.kind === "search" ? s.scope.query.query ?? "" : "",
+  );
   const title = scopeTitle(s.scope).replace("统一收件箱", "收件箱");
   const rows = s.rows;
   useEffect(() => {
-    if (s.scope.kind !== "search") setSearch("");
+    setSearch(s.scope.kind === "search" ? s.scope.query.query ?? "" : "");
   }, [s.scope]);
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
