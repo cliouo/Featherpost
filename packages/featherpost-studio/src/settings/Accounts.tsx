@@ -137,6 +137,7 @@ function Editor({ controller }: { controller: SettingsController }) {
             value={e.secrets[role] ?? ""}
             maxLength={8192}
             aria-label={label}
+            placeholder={saved?.credentials[role] === "saved" ? "留空以保留已保存的密码" : `输入${label}`}
             autoComplete="new-password"
             autoCapitalize="none"
             spellCheck={false}
