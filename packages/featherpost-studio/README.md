@@ -23,7 +23,11 @@ pnpm --dir packages/featherpost-studio dev
 TAURI_CONFIG="$(cat crates/maild-ui/tauri.studio.conf.json)" cargo run -p maild-ui --features studio
 ```
 
-For an isolated seeded daemon, run `cargo run -p maild-ui --example dev_stack --features studio`, then pass the printed `--socket` argument to the UI. Production data is not required. The existing fixture includes offline cached mail and a local fake SMTP/IMAP account.
+For an isolated seeded daemon, run the following, then pass its printed `--socket` argument to the UI command above. Production data is not required. The fixture includes offline cached mail and a local fake SMTP/IMAP account.
+
+```sh
+TAURI_CONFIG="$(cat crates/maild-ui/tauri.studio.conf.json)" cargo run -p maild-ui --example dev_stack --features studio
+```
 
 ## Design reference
 

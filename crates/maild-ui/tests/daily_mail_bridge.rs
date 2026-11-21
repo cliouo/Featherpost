@@ -84,7 +84,11 @@ fn install_frontend_package(paths: &AppPaths) {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("package/frontend.toml"),
     )
     .unwrap();
-    std::fs::write(package.join("frontend.toml"), manifest).unwrap();
+    std::fs::write(
+        package.join("frontend.toml"),
+        manifest.replace(maild_brand::BUNDLED_FRONTEND_ID, FRONTEND_ID),
+    )
+    .unwrap();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;

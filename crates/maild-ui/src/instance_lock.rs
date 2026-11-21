@@ -31,7 +31,14 @@ pub fn claim(custom_connection: bool) -> InstanceClaim {
     // Studio is a separately installed frontend; it must not focus the legacy window.
     let runtime_dir = if cfg!(feature = "studio") {
         let path = paths.runtime_dir.join("studio");
-        if let Err(error) = std::fs::create_dir_all(&path) {
+        let mut builder = std::fs::DirBuilder::new();
+        builder.recursive(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt as _;
+            builder.mode(0o700);
+        }
+        if let Err(error) = builder.create(&path) {
             eprintln!("maild-ui: cannot prepare Studio runtime: {error}");
             return InstanceClaim::Owner(None);
         }

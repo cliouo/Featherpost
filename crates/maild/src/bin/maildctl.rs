@@ -2392,6 +2392,22 @@ mod tests {
     }
 
     #[test]
+    fn selecting_a_frontend_requires_an_explicit_package_id() {
+        let cli = Cli::try_parse_from([
+            maild_brand::CLI_CTL,
+            "set-default-frontend",
+            "--id",
+            "dev.featherpost.studio",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::SetDefaultFrontend { id } if id == "dev.featherpost.studio"
+        ));
+        assert!(Cli::try_parse_from([maild_brand::CLI_CTL, "set-default-frontend"]).is_err());
+    }
+
+    #[test]
     fn json_error_shape_is_stable() {
         let error = AppError::from(ClientError {
             kind: ErrorKind::Rpc,

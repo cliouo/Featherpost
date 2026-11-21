@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import type { Host } from "../../maild-ui/src/host/host";
 import { useExternal, useStore } from "../../maild-ui/src/host/hooks";
 import { Icon } from "../../maild-ui/src/app/Icon";
-import { applyTheme } from "../../maild-ui/src/app/theme";
+import { applyTheme, useDarkShell } from "../../maild-ui/src/app/theme";
 import type { MailboxController } from "../../maild-ui/src/mailbox/controller";
 import type { ComposeController } from "../../maild-ui/src/compose/controller";
 import { DRAFTS_VIEW } from "../../maild-ui/src/compose/controller";
@@ -40,10 +40,19 @@ export function Studio({
   )?.value;
   const View = active?.render;
   const online = state.snapshot.phase === "online";
+  const dark = useDarkShell(state.preferences.theme);
   const unread = mail.folders
     .filter((f) => f.role === "inbox")
     .reduce((n, f) => n + f.unseen, 0);
   useEffect(() => applyTheme(state.preferences), [state.preferences]);
+  useEffect(() => {
+    document.documentElement.dataset.studioTheme = dark ? "dark" : "light";
+  }, [dark]);
+  const openMailbox = async (action: () => void) => {
+    const current = mailbox.navigationGuard();
+    if (!(await host.approveNavigation(MAIL)) || !current()) return;
+    if (host.openView(MAIL)) action();
+  };
   useEffect(() => {
     document.title = "Featherpost Studio";
     void host.bridge.compose.ready().catch(() => {});
@@ -59,17 +68,14 @@ export function Studio({
         e.preventDefault();
         host.openRole("settings");
       }
-      if (e.key.toLowerCase() === "n") {
-        e.preventDefault();
-        void composer.create();
-      }
       if (e.key.toLowerCase() === "k") {
         e.preventDefault();
-        host.openView(MAIL);
-        requestAnimationFrame(() =>
-          document
-            .querySelector<HTMLInputElement>("[data-mail-search]")
-            ?.focus(),
+        void openMailbox(() =>
+          requestAnimationFrame(() =>
+            document
+              .querySelector<HTMLInputElement>("[data-mail-search]")
+              ?.focus(),
+          ),
         );
       }
     };
@@ -77,8 +83,7 @@ export function Studio({
     return () => window.removeEventListener("keydown", key);
   }, [host, composer]);
   const nav = (id: SmartFolder) => {
-    host.openView(MAIL);
-    mailbox.selectSmart(id);
+    void openMailbox(() => mailbox.selectSmart(id));
   };
   return (
     <div className="studio">
@@ -158,8 +163,7 @@ export function Studio({
                     key={folder.name}
                     className={`side-link folder-link ${mail.scope.kind === "folder" && mail.scope.account === folder.account && mail.scope.folder === folder.name && state.activeViewId === MAIL ? "is-active" : ""}`}
                     onClick={() => {
-                      host.openView(MAIL);
-                      mailbox.selectFolder(folder);
+                      void openMailbox(() => mailbox.selectFolder(folder));
                     }}
                   >
                     <Icon

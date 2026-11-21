@@ -51,8 +51,23 @@ export function studioMailbox(
   const activity = new ActivityController(host.bridge.mailbox);
   const stopDocuments = documents.bindTo(controller.store);
   void documents.start();
+  let seen = { revision: -2, epoch: -1 };
+  let lastView = host.state.getSnapshot().activeViewId;
   const sync = () => {
     const s = host.state.getSnapshot();
+    if (s.activeViewId !== lastView) {
+      lastView = s.activeViewId;
+      controller.invalidateNavigation();
+    }
+    if (
+      s.snapshot.revision === seen.revision &&
+      s.snapshot.connection_epoch === seen.epoch
+    )
+      return;
+    seen = {
+      revision: s.snapshot.revision,
+      epoch: s.snapshot.connection_epoch,
+    };
     controller.acceptSnapshot(s.snapshot);
     activity.setConnection(
       s.snapshot.phase === "online",
@@ -143,12 +158,12 @@ function Mailbox({
 }) {
   const s = useStore(controller.store);
   const [search, setSearch] = useState(() =>
-    s.scope.kind === "search" ? s.scope.query.query ?? "" : "",
+    s.scope.kind === "search" ? (s.scope.query.query ?? "") : "",
   );
   const title = scopeTitle(s.scope).replace("统一收件箱", "收件箱");
   const rows = s.rows;
   useEffect(() => {
-    setSearch(s.scope.kind === "search" ? s.scope.query.query ?? "" : "");
+    setSearch(s.scope.kind === "search" ? (s.scope.query.query ?? "") : "");
   }, [s.scope]);
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
@@ -228,20 +243,34 @@ function Mailbox({
           {s.syncError}
         </div>
       )}
-      <div className={`mail-columns ${s.selected ? "has-selection" : ""}`}>
+      <div
+        className={`mail-columns ${s.selected ? "has-selection" : ""} ${s.snapshot.phase === "online" && !s.snapshot.accounts.length ? "is-onboarding" : ""}`}
+      >
         <section className="message-column" aria-label="邮件列表">
           <div className="list-controls">
             <div className="filter-tabs" aria-label="切换邮件视图">
               <button
-                className={s.scope.kind === "smart" && s.scope.name === "all" ? "selected" : ""}
-                aria-pressed={s.scope.kind === "smart" && s.scope.name === "all"}
+                className={
+                  s.scope.kind === "smart" && s.scope.name === "all"
+                    ? "selected"
+                    : ""
+                }
+                aria-pressed={
+                  s.scope.kind === "smart" && s.scope.name === "all"
+                }
                 onClick={() => controller.selectSmart("all")}
               >
                 全部邮件
               </button>
               <button
-                className={s.scope.kind === "smart" && s.scope.name === "unread" ? "selected" : ""}
-                aria-pressed={s.scope.kind === "smart" && s.scope.name === "unread"}
+                className={
+                  s.scope.kind === "smart" && s.scope.name === "unread"
+                    ? "selected"
+                    : ""
+                }
+                aria-pressed={
+                  s.scope.kind === "smart" && s.scope.name === "unread"
+                }
                 onClick={() => controller.selectSmart("unread")}
               >
                 未读邮件
