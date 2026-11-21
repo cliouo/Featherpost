@@ -304,7 +304,8 @@ export class MailboxController {
         if (folders.some((f) => f.account !== account))
           throw new Error("scope mismatch");
         this.folders.set(account, folders);
-        const current = this.state.scope.kind === "unread" ? this.state.scope.base : this.state.scope;
+        const current = this.state.scope.kind === "unread"
+          ? this.state.scope.base : this.state.scope;
         this.patch(
           current.kind === "folder" && current.account === account
             ? {
@@ -373,7 +374,8 @@ export class MailboxController {
     if (current.kind === "search") return;
     const base = current.kind === "unread" ? current.base : current;
     this.previousSearch = null;
-    this.changeScope(unread ? { kind: "unread", base } : base.kind === "smart" && base.name === "unread" ? { kind: "smart", name: "all" } : base);
+    this.changeScope(unread ? { kind: "unread", base }
+      : base.kind === "smart" && base.name === "unread" ? { kind: "smart", name: "all" } : base);
   }
   selectFolder(folder: UiFolder) {
     this.previousSearch = null;

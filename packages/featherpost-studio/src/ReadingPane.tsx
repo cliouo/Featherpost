@@ -51,8 +51,11 @@ export function ReadingPane({
   const otp = row
     ? detectOtpCode(row.subject, detail?.body || row.snippet)
     : null;
+  const remote = !!row && controller.isRemote(row);
+  const navigationRows = remote ? s.remote.rows : s.rows;
+  const navigationTotal = remote ? navigationRows.length : s.total;
   const index = row
-    ? s.rows.findIndex((r) => messageKey(r) === messageKey(row))
+    ? navigationRows.findIndex((r) => messageKey(r) === messageKey(row))
     : -1;
   const profile = row
     ? s.profiles.find((p) => p.id === row.account)
@@ -143,7 +146,7 @@ export function ReadingPane({
         </details>
         <span className="spacer" />
         <span className="reader-position">
-          {index >= 0 ? `${index + 1} / ${s.total}` : row ? "会话" : ""}
+          {index >= 0 ? `${index + 1} / ${navigationTotal}` : row ? "会话" : ""}
         </span>
         <button
           className="icon-button previous-mail"
@@ -159,7 +162,9 @@ export function ReadingPane({
           title="下一封"
           aria-label="下一封"
           disabled={
-            !row || (index >= s.rows.length - 1 && !controller.canLoadMore)
+            !row ||
+            (index >= navigationRows.length - 1 &&
+              (remote || !controller.canLoadMore))
           }
           onClick={() => controller.step(1)}
         >

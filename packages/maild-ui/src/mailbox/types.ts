@@ -98,7 +98,8 @@ export type SmartFolder = "inbox" | "all" | "unread" | "starred";
 export type ListScope =
   | { kind: "smart"; name: SmartFolder }
   | { kind: "folder"; account: string; folder: string; title: string };
-export type Scope = ListScope
+export type Scope =
+  | ListScope
   | { kind: "unread"; base: ListScope }
   | { kind: "search"; query: MailboxQuery };
 export type MailAction =
