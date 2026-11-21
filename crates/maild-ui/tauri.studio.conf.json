@@ -1,6 +1,7 @@
 {
   "productName": "Featherpost Studio",
   "identifier": "dev.featherpost.studio",
+  "version": "0.2.0",
   "build": {
     "devUrl": "http://127.0.0.1:1421",
     "frontendDist": "../../packages/featherpost-studio/dist",
