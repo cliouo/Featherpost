@@ -990,7 +990,7 @@ kbd {
   width: 100%;
   height: clamp(300px, 50vh, 600px);
   border: 0;
-  background: #fff;
+  background: var(--studio-surface);
   display: block;
 }
 .body-loading {

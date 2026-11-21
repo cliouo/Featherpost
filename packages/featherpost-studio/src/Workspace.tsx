@@ -96,7 +96,7 @@ export function Workspace({
                   className="search-return text-button"
                   onClick={() => controller.exitSearch()}
                 >
-                  返回{context.name}
+                  返回原邮件列表
                 </button>
               ) : (
                 <div className="filter-tabs" aria-label="邮件筛选">

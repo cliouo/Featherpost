@@ -2,7 +2,7 @@
 # Build the separately installable Studio frontend; never replace the recovery UI.
 set -euo pipefail
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
-output="$repo_root/dist/studio"
+output="${STUDIO_OUTPUT_DIR:-$repo_root/dist/studio}"
 target_dir="${CARGO_TARGET_DIR:-$repo_root/target}"
 case "$target_dir" in /*) ;; *) target_dir="$repo_root/$target_dir" ;; esac
 export MACOSX_DEPLOYMENT_TARGET=13.0

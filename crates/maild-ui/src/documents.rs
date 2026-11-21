@@ -207,7 +207,12 @@ pub fn navigation_verdict(
     Verdict::Deny
 }
 
-pub fn document_response(document: &Document) -> Response<Vec<u8>> {
+pub fn document_response(document: &Document, dark: bool) -> Response<Vec<u8>> {
+    let html = if dark {
+        crate::html::dark_reading_html(&document.html)
+    } else {
+        document.html.clone()
+    };
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
@@ -215,7 +220,7 @@ pub fn document_response(document: &Document) -> Response<Vec<u8>> {
         .header(header::REFERRER_POLICY, "no-referrer")
         .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff")
         .header(header::CACHE_CONTROL, "no-store")
-        .body(document.html.clone().into_bytes())
+        .body(html.into_bytes())
         .expect("静态头部合法")
 }
 
@@ -388,7 +393,7 @@ mod tests {
     #[test]
     fn responses_carry_isolation_headers() {
         let doc = document("1");
-        let response = document_response(&doc);
+        let response = document_response(&doc, false);
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(
             response.headers()[header::CONTENT_TYPE],
@@ -401,6 +406,14 @@ mod tests {
         assert_eq!(response.headers()[header::REFERRER_POLICY], "no-referrer");
         assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
         assert_eq!(response.body(), b"<p>1</p>");
+        let dark = document_response(&doc, true);
+        assert_eq!(
+            dark.headers(),
+            response.headers(),
+            "appearance must not relax isolation headers"
+        );
+        assert!(String::from_utf8_lossy(dark.body()).contains("#1b1b23"));
+        assert_eq!(doc.html, "<p>1</p>", "the cached original stays unchanged");
 
         let part = part_response("image/png", vec![1, 2, 3]);
         assert_eq!(part.headers()[header::CONTENT_TYPE], "image/png");

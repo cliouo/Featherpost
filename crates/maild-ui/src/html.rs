@@ -231,7 +231,10 @@ impl Rewriter<'_> {
         }
         let index = state.links.len();
         state.links.push(classify_href(value));
-        let target = format!("{}/{LINK_PATH}/{}/{index}", self.part_url_prefix, self.token);
+        let target = format!(
+            "{}/{LINK_PATH}/{}/{index}",
+            self.part_url_prefix, self.token
+        );
         let _ = el.set_attribute("href", &target);
     }
 
@@ -504,6 +507,31 @@ impl State {
     }
 }
 
+/// Optional reading palette for an already-rewritten document. Never invert image
+/// pixels, change resource URLs, or alter the stored original / its capabilities.
+pub fn dark_reading_html(html: &str) -> String {
+    let adapted = lol_html::rewrite_str(html, RewriteStrSettings {
+        element_content_handlers: vec![element!("*", |el| {
+            let tag = el.tag_name().to_ascii_lowercase();
+            if el.namespace_uri() != "http://www.w3.org/1999/xhtml"
+                || ["img", "head", "style", "meta", "link"].contains(&tag.as_str()) {
+                return Ok(());
+            }
+            let original = el.get_attribute("style").unwrap_or_default();
+            let background = if tag == "html" || tag == "body" { "#1b1b23" }
+                else if el.get_attribute("bgcolor").is_some() || original.to_ascii_lowercase().contains("background") { "#252530" }
+                else { "transparent" };
+            let foreground = if tag == "a" || tag == "area" { "#b1ccff" } else { "#e4e4ed" };
+            let style = format!("{original};background-color:{background}!important;background-image:none!important;color:{foreground}!important;border-color:#454550!important;box-shadow:none!important;");
+            let _ = el.set_attribute("style", &style);
+            Ok(())
+        })],
+        ..RewriteStrSettings::new()
+    }).unwrap_or_else(|_| html.to_owned());
+    // Fragments may have no explicit html/body tags for the element handler.
+    format!("<style>html:root,html:root body{{background-color:#1b1b23!important;color:#e4e4ed!important;color-scheme:dark}}html:root{{min-height:100%}}</style>{adapted}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -537,6 +565,49 @@ mod tests {
             allow_remote,
         })
         .expect("重写成功")
+    }
+
+    #[test]
+    fn dark_reading_overrides_authored_white_and_preserves_resources_and_links() {
+        let prepared = run(
+            r##"<body bgcolor="#ffffff" style="background:white!important;color:black">
+            <table bgcolor="#fff"><tr><td style="color:#000!important">Readable</td></tr></table>
+            <a href="https://example.com">Link</a><img src="cid:logo@maild" style="width:80px">
+            <img src="https://remote.example/pixel.png"><script>alert(1)</script></body>"##,
+            false,
+        );
+        let dark = dark_reading_html(&prepared.html);
+        assert!(dark.contains("background-color:#1b1b23!important"));
+        assert!(dark.contains("color:#e4e4ed!important"));
+        assert!(dark.contains("color:#b1ccff!important"));
+        assert!(dark.contains(&format!(
+            "src=\"{}/part/{TOKEN}/3\" style=\"width:80px\"",
+            prefix()
+        )));
+        assert!(dark.contains(&format!("href=\"{}/link/{TOKEN}/0\"", prefix())));
+        assert!(!dark.contains(" src=\"https://"));
+        assert!(!dark.contains("<script"));
+        assert!(
+            !dark.contains("filter:"),
+            "image pixels must not be inverted"
+        );
+        assert_eq!(prepared.remote_refs, 1);
+        assert!(!prepared.allow_remote);
+    }
+
+    #[test]
+    fn dark_reading_handles_fragments_and_already_dark_mail_without_color_inversion() {
+        for source in [
+            "<p>Fragment</p>",
+            "<body style=\"background:black;color:white\"><p>Dark mail</p></body>",
+        ] {
+            let prepared = run(source, false);
+            let dark = dark_reading_html(&prepared.html);
+            assert!(dark.contains("html:root"));
+            assert!(dark.contains("background-color:#1b1b23!important"));
+            assert!(dark.contains("color:#e4e4ed!important"));
+            assert!(!dark.contains("invert("));
+        }
     }
 
     /// 敌意样本；`@SCHEME@` 由 [`hostile`] 换成品牌协议名。
@@ -799,10 +870,19 @@ mod tests {
         );
         assert_eq!(classify_href("mailto:a@b.c").kind, LinkKind::Mailto);
         // 实体解码：`&amp;` 还原；藏在实体里的 `javascript&colon;` 仍然不是 http(s)，归 Other。
-        assert_eq!(decode_entities("a?x=1&amp;y=&#50;&#x33;&quot;"), "a?x=1&y=23\"");
+        assert_eq!(
+            decode_entities("a?x=1&amp;y=&#50;&#x33;&quot;"),
+            "a?x=1&y=23\""
+        );
         assert_eq!(decode_entities("&unknown; & &amp"), "&unknown; & &amp");
-        assert_eq!(classify_href("javascript&colon;alert(1)").kind, LinkKind::Other);
-        assert_eq!(classify_href("&#106;avascript:alert(1)").kind, LinkKind::Other);
+        assert_eq!(
+            classify_href("javascript&colon;alert(1)").kind,
+            LinkKind::Other
+        );
+        assert_eq!(
+            classify_href("&#106;avascript:alert(1)").kind,
+            LinkKind::Other
+        );
         assert_eq!(classify_href("data:text/html,hi").kind, LinkKind::Other);
     }
 

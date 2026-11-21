@@ -1,4 +1,7 @@
+import { useState } from "react";
 import type { Host } from "../../maild-ui/src/host/host";
+import { useDarkShell } from "../../maild-ui/src/app/theme";
+import { readingDocumentUrl } from "./readingTheme";
 import { useStore } from "../../maild-ui/src/host/hooks";
 import { Icon } from "../../maild-ui/src/app/Icon";
 import { compatBlocksWrites } from "../../maild-ui/src/bridge/types";
@@ -46,6 +49,9 @@ export function ReadingPane({
   const row = s.selectedRow,
     detail = s.detail,
     body = presentation(detail, d);
+  const dark = useDarkShell(useStore(host.state).preferences.theme);
+  const [originalFor, setOriginalFor] = useState<string | null>(null);
+  const originalColors = !!row && originalFor === messageKey(row);
   const writable =
     s.snapshot.phase === "online" && !compatBlocksWrites(s.snapshot) && !s.busy;
   const otp = row
@@ -145,6 +151,17 @@ export function ReadingPane({
           </div>
         </details>
         <span className="spacer" />
+        {dark && row && body.mode === "html" && (
+          <button
+            className="text-button reading-theme"
+            title={originalColors ? "切换到深色正文" : "查看邮件的原始配色"}
+            onClick={() =>
+              setOriginalFor(originalColors ? null : messageKey(row))
+            }
+          >
+            {originalColors ? "深色阅读" : "原始配色"}
+          </button>
+        )}
         <span className="reader-position">
           {index >= 0 ? `${index + 1} / ${navigationTotal}` : row ? "会话" : ""}
         </span>
@@ -234,7 +251,7 @@ export function ReadingPane({
               <iframe
                 className="studio-mail-frame"
                 key={body.token}
-                src={body.url}
+                src={readingDocumentUrl(body.url, dark && !originalColors)}
                 sandbox=""
                 referrerPolicy="no-referrer"
                 title="邮件正文（隔离显示）"
