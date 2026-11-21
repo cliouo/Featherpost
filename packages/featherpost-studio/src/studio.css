@@ -944,6 +944,114 @@ kbd {
   margin: 0 auto;
   padding: 32px;
 }
+.page-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-height: 88px;
+  padding: 28px 26px 12px;
+  border-bottom: 1px solid var(--studio-border);
+  flex-shrink: 0;
+}
+.page-toolbar small {
+  margin-left: auto;
+  color: var(--studio-muted);
+}
+.settings-layout {
+  display: grid;
+  grid-template-columns: 170px minmax(0, 1fr);
+  flex: 1;
+  min-height: 0;
+}
+.settings-nav {
+  overflow: auto;
+  padding: 24px 12px;
+  background: var(--studio-sidebar);
+  border-right: 1px solid var(--studio-border);
+}
+.settings-nav button {
+  display: block;
+  width: 100%;
+  padding: 11px 13px;
+  text-align: left;
+  border-radius: 6px;
+  margin-bottom: 4px;
+  color: var(--studio-muted);
+}
+.settings-nav button.active {
+  color: var(--studio-accent);
+  background: var(--studio-tint);
+  font-weight: 600;
+}
+.settings-content {
+  min-height: 0;
+  overflow: auto;
+}
+.settings-content .page-column {
+  max-width: 760px;
+  padding: 32px;
+}
+.setting-row {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 18px 0;
+  border-bottom: 1px solid var(--studio-border);
+}
+.setting-copy {
+  flex: 1;
+  min-width: 0;
+}
+.setting-copy p {
+  font-size: 12px;
+  color: var(--studio-muted);
+  margin-top: 5px;
+}
+.toggle {
+  padding: 10px 0;
+}
+.toggle-track {
+  display: block;
+  width: 34px;
+  height: 20px;
+  border-radius: 20px;
+  background: var(--studio-border);
+  padding: 3px;
+}
+.toggle-track::after {
+  content: "";
+  display: block;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--studio-surface);
+  box-shadow: 0 1px 3px #0002;
+}
+.toggle[aria-checked="true"] .toggle-track {
+  background: var(--studio-accent);
+}
+.toggle[aria-checked="true"] .toggle-track::after {
+  transform: translateX(14px);
+}
+@media (max-width: 1050px) {
+  .settings-layout {
+    display: flex;
+    flex-direction: column;
+  }
+  .settings-nav {
+    display: flex;
+    gap: 5px;
+    flex-shrink: 0;
+    padding: 8px;
+    border-right: 0;
+    border-bottom: 1px solid var(--studio-border);
+  }
+  .settings-nav button {
+    width: auto;
+    white-space: nowrap;
+    margin: 0;
+  }
+}
 .page h1 {
   font-size: 22px;
 }
