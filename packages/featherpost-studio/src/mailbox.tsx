@@ -37,7 +37,7 @@ import { Editor } from "../../maild-ui/src/compose/Editor";
 import { sourceKey } from "../../maild-ui/src/compose/controller";
 
 export const MAIL = "maild.mailbox.workspace";
-export const ACTIVITY = "studio.activity";
+export const ACTIVITY = "maild.mailbox.activity";
 
 export function studioMailbox(
   host: Host,
@@ -116,7 +116,7 @@ export function studioMailbox(
     );
   }
   const bundle: Bundle = {
-    moduleId: "featherpost.studio.mailbox",
+    moduleId: "maild.mailbox",
     apiVersion: 1,
     title: "Studio 邮箱",
     views: [
@@ -129,7 +129,7 @@ export function studioMailbox(
       },
     ],
     settings: [
-      { id: "studio.reading", title: "阅读与隐私", order: 15, render: Privacy },
+      { id: "maild.mailbox.reading-privacy", title: "阅读与隐私", order: 15, render: Privacy },
     ],
     dispose: () => {
       stopState();

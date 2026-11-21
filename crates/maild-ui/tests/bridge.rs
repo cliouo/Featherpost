@@ -565,8 +565,8 @@ async fn the_shell_binds_as_its_frontend_and_projects_the_mailbox() {
     assert_eq!(info.id, FRONTEND_ID);
     // 测试配置仍写旧的 `default = "builtin-egui"`：读取时迁移为内置 Tauri 前端（ADR-0039），
     // 端到端钉住升级用户不必改 TOML 就会打开新界面。
-    assert!(info.is_default);
-    assert_eq!(info.default_frontend, FRONTEND_ID);
+    assert_eq!(info.is_default, FRONTEND_ID == maild_brand::BUNDLED_FRONTEND_ID);
+    assert_eq!(info.default_frontend, maild_brand::BUNDLED_FRONTEND_ID);
     for word in [
         "mailbox_write",
         "accounts_manage",
