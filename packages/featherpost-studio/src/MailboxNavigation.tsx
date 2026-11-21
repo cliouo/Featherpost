@@ -114,8 +114,10 @@ export function MailboxNavigation({
     accountMatches(id) ||
     mailbox
       .foldersOf(id)
-      .some((f) =>
-        `${f.name} ${f.display_name}`.toLocaleLowerCase().includes(needle),
+      .some(
+        (f) =>
+          f.present &&
+          `${f.name} ${f.display_name}`.toLocaleLowerCase().includes(needle),
       );
   const count = (id: string) =>
     mailbox
@@ -293,6 +295,7 @@ export function MailboxNavigation({
           className="account-directory"
           ref={directory}
           onKeyDown={(e) => {
+            if (!e.metaKey && !e.ctrlKey) e.stopPropagation();
             if (e.key === "Escape") {
               e.preventDefault();
               e.stopPropagation();
