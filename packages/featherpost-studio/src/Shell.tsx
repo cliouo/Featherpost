@@ -7,6 +7,8 @@ import type { MailboxController } from "../../maild-ui/src/mailbox/controller";
 import type { ComposeController } from "../../maild-ui/src/compose/controller";
 import { DRAFTS_VIEW } from "../../maild-ui/src/compose/controller";
 import { MAIL, ACTIVITY } from "./views";
+import { MailboxNavigation, type NavigationHandle } from "./MailboxNavigation";
+import { readStudioView, saveStudioView, type StudioView } from "./layout";
 import {
   folderTree,
   folderIcon,
@@ -40,15 +42,12 @@ export function Studio({
   const View = active?.render;
   const dark = useDarkShell(state.preferences.theme);
   const online = state.snapshot.phase === "online";
-  const [filter, setFilter] = useState("");
+  const [view, setView] = useState(readStudioView);
   const [search, setSearch] = useState("");
   const [allMail, setAllMail] = useState(false);
   const [searchScope, setSearchScope] = useState(mail.scope);
   const searchInput = useRef<HTMLInputElement>(null),
-    navInput = useRef<HTMLInputElement>(null);
-  const context = scopeContext(mailbox);
-  const navigationScope =
-    mail.scope.kind === "unread" ? mail.scope.base : mail.scope;
+    navigation = useRef<NavigationHandle>(null);
   const searchContext = scopeContext(mailbox, searchScope);
   const searchText =
     mail.scope.kind === "search" ? (mail.scope.query.query ?? "") : "";
@@ -74,6 +73,12 @@ export function Studio({
     if (!(await host.approveNavigation(MAIL)) || !current()) return;
     if (host.openView(MAIL)) action();
   };
+  const changeView = (next: StudioView) =>
+    void openMailbox(() => {
+      setView(next);
+      saveStudioView(next);
+      if (next === "unified" && view !== next) mailbox.selectSmart("inbox");
+    });
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       if (
@@ -89,8 +94,7 @@ export function Studio({
       }
       if (e.key.toLowerCase() === "l") {
         e.preventDefault();
-        navInput.current?.focus();
-        navInput.current?.select();
+        navigation.current?.focus();
       }
       if (e.key === ",") {
         e.preventDefault();
@@ -109,9 +113,8 @@ export function Studio({
         .reduce((m, f) => m + f.unseen, 0),
     0,
   );
-  const needle = filter.trim().toLocaleLowerCase();
   return (
-    <div className="studio">
+    <div className={`studio studio-${view}`} data-studio-view={view}>
       <a className="skip-link" href="#workspace">
         跳到邮件内容
       </a>
@@ -148,7 +151,11 @@ export function Studio({
           />
           <select
             aria-label="搜索范围"
-            value={allMail || !searchContext.account ? "all" : "current"}
+            value={
+              allMail || (!searchContext.account && !searchContext.accounts)
+                ? "all"
+                : "current"
+            }
             onChange={(e) => {
               const all = e.target.value === "all";
               setAllMail(all);
@@ -158,8 +165,12 @@ export function Studio({
                 );
             }}
           >
-            {searchContext.account && (
-              <option value="current">{searchContext.label}</option>
+            {(searchContext.account || searchContext.accounts) && (
+              <option value="current">
+                {searchContext.accounts
+                  ? `${searchContext.group ?? "所选分组"}的所有邮件`
+                  : searchContext.label}
+              </option>
             )}
             <option value="all">所有邮件</option>
           </select>
@@ -179,6 +190,20 @@ export function Studio({
           )}
         </form>
         <div className="topbar-actions">
+          <div className="view-switch" role="group" aria-label="邮箱视图">
+            <button
+              aria-pressed={view === "standard"}
+              onClick={() => changeView("standard")}
+            >
+              标准
+            </button>
+            <button
+              aria-pressed={view === "unified"}
+              onClick={() => changeView("unified")}
+            >
+              统一收件
+            </button>
+          </div>
           <button
             className={`sync-status ${mail.syncing ? "spinning" : ""}`}
             disabled={!online || mail.syncing}
@@ -210,123 +235,27 @@ export function Studio({
       </header>
       <aside className="studio-sidebar" aria-label="账户和文件夹">
         <div className="sidebar-scroll">
-          <div className="section-label">快捷访问</div>
-          <nav className="smart-folders" aria-label="快捷访问">
-            <button
-              className={`side-link ${navigationScope.kind === "smart" && navigationScope.name === "inbox" && state.activeViewId === MAIL ? "is-active" : ""}`}
-              onClick={() =>
-                void openMailbox(() => mailbox.selectSmart("inbox"))
-              }
-            >
-              <Icon name="inbox" />
-              <span>全部收件箱</span>
-              <small>{unread || ""}</small>
-            </button>
-            <button
-              className={`side-link ${navigationScope.kind === "smart" && navigationScope.name === "starred" && state.activeViewId === MAIL ? "is-active" : ""}`}
-              onClick={() =>
-                void openMailbox(() => mailbox.selectSmart("starred"))
-              }
-            >
-              <Icon name="star" />
-              <span>星标邮件</span>
-            </button>
-          </nav>
-          <label className="account-filter">
-            <Icon name="search" />
-            <input
-              ref={navInput}
-              aria-label="筛选账户或文件夹"
-              placeholder="筛选账户或文件夹"
-              value={filter}
-              onChange={(e) => setFilter(e.target.value)}
-            />
-            {filter ? (
-              <button aria-label="清除账户筛选" onClick={() => setFilter("")}>
-                ×
-              </button>
-            ) : (
-              <kbd>⌘ L</kbd>
+          <MailboxNavigation
+            mailbox={mailbox}
+            view={view}
+            active={state.activeViewId === MAIL}
+            unread={unread}
+            navigate={openMailbox}
+            focusRef={navigation}
+            setup={setup}
+            folders={(account, filter) => (
+              <FolderBranches
+                nodes={folderTree(mailbox.foldersOf(account))}
+                depth={0}
+                filter={filter}
+                active={state.activeViewId === MAIL}
+                mailbox={mailbox}
+                open={(folder) =>
+                  void openMailbox(() => mailbox.selectFolder(folder))
+                }
+              />
             )}
-          </label>
-          <div className="section-label account-label">
-            <span>账户</span>
-            <span>{state.snapshot.accounts.length}</span>
-          </div>
-          {state.snapshot.accounts.map((account) => {
-            const profile = mail.profiles.find((p) => p.id === account.account);
-            const label = mailbox.label(account.account),
-              address = profile?.address || account.account;
-            const accountMatches =
-              !needle ||
-              `${label} ${address}`.toLocaleLowerCase().includes(needle);
-            const nodes = folderTree(mailbox.foldersOf(account.account));
-            const matches = (n: FolderNode): boolean =>
-              `${n.folder.name} ${n.folder.display_name}`
-                .toLocaleLowerCase()
-                .includes(needle) || n.children.some(matches);
-            if (!accountMatches && !nodes.some(matches)) return null;
-            const total = mailbox
-              .foldersOf(account.account)
-              .filter((f) => f.role === "inbox")
-              .reduce((n, f) => n + f.unseen, 0);
-            const selected =
-              context.account === account.account &&
-              state.activeViewId === MAIL;
-            return (
-              <details
-                className={`account-tree ${selected ? "account-selected" : ""}`}
-                key={`${account.account}:${needle}`}
-                open
-              >
-                <summary title={account.detail || account.state}>
-                  <span className="chevron" aria-hidden="true">
-                    ⌄
-                  </span>
-                  <span className="account-mark">
-                    {label.slice(0, 1).toLocaleUpperCase()}
-                  </span>
-                  <span className="account-identity">
-                    <strong>{label}</strong>
-                    <small>{address}</small>
-                  </span>
-                  <span className="account-count">{total || ""}</span>
-                </summary>
-                <FolderBranches
-                  nodes={nodes}
-                  depth={0}
-                  filter={accountMatches ? "" : needle}
-                  active={state.activeViewId === MAIL}
-                  mailbox={mailbox}
-                  open={(folder) =>
-                    void openMailbox(() => mailbox.selectFolder(folder))
-                  }
-                />
-              </details>
-            );
-          })}
-          {!state.snapshot.accounts.length && (
-            <div className="sidebar-empty">
-              还没有连接邮箱
-              <button className="text-button" onClick={setup}>
-                添加账户
-              </button>
-            </div>
-          )}
-          {needle &&
-            !state.snapshot.accounts.some(
-              (a) =>
-                `${mailbox.label(a.account)} ${mail.profiles.find((p) => p.id === a.account)?.address || a.account}`
-                  .toLocaleLowerCase()
-                  .includes(needle) ||
-                mailbox
-                  .foldersOf(a.account)
-                  .some((f) =>
-                    `${f.name} ${f.display_name}`
-                      .toLocaleLowerCase()
-                      .includes(needle),
-                  ),
-            ) && <p className="nav-no-results">没有匹配的账户或文件夹</p>}
+          />
         </div>
         <footer className="sidebar-footer">
           <button className="add-account" onClick={setup}>

@@ -82,7 +82,10 @@ export function Workspace({
         <section className="message-column" aria-label="邮件列表">
           <header className="list-heading">
             <div className="breadcrumb">
-              {context.account ? controller.label(context.account) : "全部账户"}
+              {context.account
+                ? controller.label(context.account)
+                : (context.group ??
+                  (context.accounts ? "所选分组" : "全部账户"))}
               <span>›</span>
               {context.name}
             </div>

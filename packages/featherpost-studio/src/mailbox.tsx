@@ -9,6 +9,7 @@ import { followMailIntent } from "../../maild-ui/src/mailbox/navigation";
 import type { ComposeController } from "../../maild-ui/src/compose/controller";
 import { Workspace } from "./Workspace";
 import { MAIL, ACTIVITY } from "./views";
+import { groupedBridge } from "./groupQuery";
 export { MAIL, ACTIVITY } from "./views";
 
 export function studioMailbox(
@@ -16,8 +17,9 @@ export function studioMailbox(
   composer: ComposeController,
   setup: () => void,
 ) {
-  const controller = new MailboxController(host.bridge, (selection) =>
-    host.setSelection(selection),
+  const controller = new MailboxController(
+    groupedBridge(host.bridge),
+    (selection) => host.setSelection(selection),
   );
   const documents = new DocumentController(host.bridge);
   const activity = new ActivityController(host.bridge.mailbox);

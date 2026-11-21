@@ -115,16 +115,18 @@ export function queryOf(scope: Scope): MailboxQuery {
   if (scope.kind === "search") return { ...scope.query, search: true };
   if (scope.kind === "folder")
     return { account: scope.account, folder: scope.folder };
-  return scope.name === "inbox"
+  const filters = scope.name === "inbox"
     ? { role: "inbox" }
     : scope.name === "unread"
       ? { seen: false }
       : scope.name === "starred"
         ? { flagged: true }
         : {};
+  return { ...filters, ...(scope.group ? { accounts: scope.group.accounts } : {}) };
 }
 export function scopeTitle(scope: Scope) {
   if (scope.kind === "unread") return scopeTitle(scope.base);
+  if (scope.kind === "smart" && scope.group) return `${scope.group.name} · 收件箱`;
   return scope.kind === "folder"
     ? scope.title
     : scope.kind === "search"
@@ -367,6 +369,11 @@ export class MailboxController {
   selectSmart(name: SmartFolder) {
     this.previousSearch = null;
     this.changeScope({ kind: "smart", name });
+  }
+  selectGroup(id: string, name: string, accounts: string[], unread = false) {
+    this.previousSearch = null;
+    const base = { kind: "smart" as const, name: "inbox" as const, group: { id, name, accounts } };
+    this.changeScope(unread ? { kind: "unread", base } : base);
   }
   /** List filters use listMessageSummaries, never the full-text search protocol. */
   setUnreadFilter(unread: boolean) {
@@ -626,6 +633,7 @@ export class MailboxController {
         page.messages.some(
           (r) =>
             (q.account && r.account !== q.account) ||
+            (q.accounts && !q.accounts.includes(r.account)) ||
             (q.folder && r.folder !== q.folder),
         )
       )
@@ -693,7 +701,7 @@ export class MailboxController {
     if (scope.query.account)
       return [{ account: scope.query.account, folder: scope.query.folder ?? inbox(scope.query.account) }];
     return this.state.snapshot.accounts
-      .filter((a) => a.state === "online")
+      .filter((a) => a.state === "online" && (!scope.query.accounts || scope.query.accounts.includes(a.account)))
       .map((a) => ({ account: a.account, folder: inbox(a.account) }));
   }
   get canSearchServer() {

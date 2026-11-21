@@ -1,0 +1,329 @@
+/* Both workflows keep exactly three columns; the directory is temporary. */
+.studio.studio-unified {
+  --nav-width: 226px;
+  --list-width: 420px;
+}
+.view-switch {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  background: var(--studio-soft-border);
+  border-radius: 7px;
+  flex-shrink: 0;
+}
+.view-switch button {
+  font-size: 10px;
+  padding: 5px 9px;
+  border-radius: 4px;
+  color: var(--studio-muted);
+  white-space: nowrap;
+}
+.view-switch button[aria-pressed="true"] {
+  background: var(--studio-surface);
+  color: var(--studio-text);
+  box-shadow: 0 1px 4px #00000012;
+}
+.group-manage {
+  font-size: 10px;
+  color: var(--studio-secondary);
+  padding: 2px 0 2px 8px;
+}
+.mailbox-group {
+  margin-bottom: 8px;
+}
+.group-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 31px;
+  text-align: left;
+  color: var(--studio-muted);
+  padding: 5px 7px;
+}
+.group-toggle strong {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--studio-secondary);
+}
+.group-toggle small {
+  font-size: 9px;
+}
+.group-toggle .group-count {
+  margin-left: auto;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+.group-toggle[aria-expanded="false"] .chevron {
+  transform: rotate(-90deg);
+}
+.grouped-account {
+  margin: 0;
+  border: 0;
+  padding: 0 0 0 8px;
+}
+.grouped-account .account-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  width: 100%;
+  text-align: left;
+  padding: 7px 4px;
+}
+.grouped-account .account-heading > .chevron {
+  font-size: 12px;
+  flex-shrink: 0;
+}
+.grouped-account .account-heading .collapsed {
+  transform: rotate(-90deg);
+}
+.grouped-account .account-identity {
+  flex: 1;
+  min-width: 0;
+}
+.grouped-account .account-identity strong {
+  font-size: 11px;
+  font-weight: 450;
+}
+.grouped-account .account-identity small {
+  display: none;
+}
+.grouped-account.account-expanded .account-identity strong {
+  font-weight: 600;
+}
+.grouped-account.account-expanded .account-identity small,
+.directory-body .grouped-account .account-identity small {
+  display: block;
+  font-size: 9px;
+  margin-top: 3px;
+}
+.grouped-account.account-selected .account-mark {
+  background: var(--studio-primary);
+  color: var(--studio-on-primary);
+}
+.grouped-account .folder-tree {
+  margin: 2px 0 9px;
+}
+.empty-group {
+  margin: 3px 8px 12px 24px;
+  font-size: 10px;
+  color: var(--studio-muted);
+  line-height: 1.6;
+}
+.account-directory {
+  margin: 0 0 19px;
+  padding-bottom: 15px;
+  border-bottom: 1px solid var(--studio-border);
+}
+.account-directory > summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+  padding: 3px 7px;
+  list-style: none;
+  font-size: 11px;
+}
+.account-directory > summary::-webkit-details-marker {
+  display: none;
+}
+.account-directory > summary .icon {
+  width: 14px;
+  height: 14px;
+}
+.account-directory > summary strong {
+  font-weight: 550;
+  flex: 1;
+}
+.account-directory > p {
+  margin: 5px 7px 0;
+  font-size: 9px;
+  color: var(--studio-muted);
+}
+.directory-body {
+  margin-top: 10px;
+  max-height: min(420px, 46vh);
+  overflow: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--studio-border);
+  border-radius: 7px;
+  padding: 7px;
+  background: var(--studio-surface);
+}
+.directory-body .account-filter {
+  margin: 0 0 7px;
+}
+.directory-body .section-label {
+  margin-top: 12px;
+}
+.directory-body .grouped-account {
+  padding-left: 2px;
+}
+.focused-mailbox {
+  margin-top: 25px;
+  border-top: 1px solid var(--studio-border);
+  padding-top: 14px;
+}
+.focused-identity {
+  padding: 4px 9px 15px;
+  border-bottom: 1px solid var(--studio-border);
+  margin-bottom: 12px;
+}
+.focused-identity strong {
+  display: block;
+  font-size: 14px;
+  font-weight: 550;
+}
+.focused-identity small {
+  display: block;
+  margin-top: 5px;
+  font-size: 10px;
+  color: var(--studio-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.reply-context {
+  font-size: 9px;
+  color: var(--studio-muted);
+  line-height: 1.7;
+  padding: 15px 9px;
+}
+.group-filters {
+  margin-top: 23px;
+}
+.group-filters > div:last-child {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+}
+.group-filters button {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  padding: 7px;
+  border-radius: 5px;
+  font-size: 10px;
+  color: var(--studio-secondary);
+}
+.group-filters button > span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.group-filters button small {
+  color: var(--studio-muted);
+  font-size: 9px;
+}
+.group-filters button[aria-pressed="true"] {
+  background: var(--studio-tint);
+  color: var(--studio-text);
+}
+.group-manager {
+  min-width: min(540px, 70vw);
+  max-height: 65vh;
+  overflow: auto;
+  padding: 18px 2px 0;
+}
+.group-manager > p {
+  font-size: 11px;
+  color: var(--studio-muted);
+  line-height: 1.7;
+}
+.group-manager h3 {
+  font-size: 12px;
+  font-weight: 550;
+  margin: 22px 0 12px;
+}
+.group-name-form {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+  margin: 18px 0;
+}
+.group-name-form > label {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1;
+  font-size: 11px;
+}
+.group-manager .group-name-form input {
+  width: 100%;
+  padding: 9px;
+  font-size: 12px;
+  border: 1px solid var(--studio-border);
+  border-radius: 5px;
+  background: var(--studio-surface);
+  color: var(--studio-text);
+}
+.group-name-form > button {
+  padding: 9px 13px;
+  border-radius: 5px;
+  font-size: 11px;
+}
+.group-definitions > div {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 37px;
+  border-bottom: 1px solid var(--studio-border);
+}
+.group-definitions strong {
+  flex: 1;
+  font-weight: 500;
+  font-size: 12px;
+}
+.group-definitions button {
+  color: var(--studio-secondary);
+  font-size: 10px;
+  padding: 6px;
+}
+.mailbox-assignment {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--studio-border);
+}
+.mailbox-assignment > span {
+  flex: 1;
+  min-width: 0;
+}
+.mailbox-assignment strong,
+.mailbox-assignment small {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mailbox-assignment strong {
+  font-size: 12px;
+  font-weight: 500;
+}
+.mailbox-assignment small {
+  font-size: 10px;
+  color: var(--studio-muted);
+  margin-top: 4px;
+}
+.mailbox-assignment select {
+  width: 150px;
+  padding: 8px;
+  border: 1px solid var(--studio-border);
+  border-radius: 5px;
+  background: var(--studio-surface);
+  color: var(--studio-text);
+  font-size: 11px;
+}
+@media (max-width: 1120px) {
+  .studio.studio-unified {
+    --nav-width: 205px;
+    --list-width: 355px;
+  }
+  .view-switch button {
+    font-size: 9px;
+    padding: 5px 6px;
+  }
+}

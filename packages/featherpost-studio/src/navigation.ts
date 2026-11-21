@@ -74,6 +74,8 @@ export function scopeContext(
   scope = controller.store.getSnapshot().scope,
 ) {
   const query = queryOf(scope);
+  const base = scope.kind === "unread" ? scope.base : scope;
+  const group = base.kind === "smart" ? base.group : undefined;
   const folder =
     query.account && query.folder
       ? controller.foldersOf(query.account).find((f) => f.name === query.folder)
@@ -81,13 +83,19 @@ export function scopeContext(
   const name =
     folder?.display_name ||
     query.folder ||
-    (query.role === "inbox"
-      ? "收件箱"
-      : query.flagged
-        ? "星标邮件"
-        : "全部邮件");
+    (group
+      ? `${group.name} · 收件箱`
+      : query.role === "inbox"
+        ? query.account
+          ? "收件箱"
+          : "全部收件箱"
+        : query.flagged
+          ? "星标邮件"
+          : "全部邮件");
   return {
     account: query.account,
+    accounts: query.accounts,
+    group: group?.name,
     folder,
     name,
     label: query.account
@@ -106,11 +114,14 @@ export function searchMail(
   if (query)
     controller.search({
       // The installed native bridge separates full-text queries from list filters.
-      // Only account/folder scoping is supported by both protocols.
+      // The Studio bridge expands account sets before invoking either native protocol.
       ...(all
         ? {}
         : {
             account: queryOf(source ?? scope).account,
+            ...(queryOf(source ?? scope).accounts
+              ? { accounts: queryOf(source ?? scope).accounts }
+              : {}),
             folder: queryOf(source ?? scope).folder,
           }),
       query,
