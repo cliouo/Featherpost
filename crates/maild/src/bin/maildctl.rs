@@ -114,6 +114,11 @@ enum Command {
     RequestNotificationAuthorization,
     /// List installed frontend packages and the configured default.
     Frontends,
+    /// Select an installed frontend for menu-bar, notification, and compose intents.
+    SetDefaultFrontend {
+        #[arg(long)]
+        id: String,
+    },
     /// List installed external process plugins and their lifecycle state.
     Plugins,
     /// Reveal (and rotate) one plugin's auth token; print it exactly once.
@@ -640,6 +645,7 @@ async fn run(cli: Cli) -> Result<(), AppError> {
             ("requestNotificationAuthorization", json!({}))
         }
         Command::Frontends => ("listFrontends", json!({})),
+        Command::SetDefaultFrontend { id } => ("setDefaultFrontend", json!({"id": id})),
         Command::Plugins => ("listExternalPlugins", json!({})),
         Command::Send {
             from,

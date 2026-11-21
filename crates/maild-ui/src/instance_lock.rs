@@ -28,7 +28,18 @@ pub fn claim(custom_connection: bool) -> InstanceClaim {
     let Ok(paths) = maild_paths::AppPaths::discover() else {
         return InstanceClaim::Owner(None);
     };
-    match claim_at(&paths.runtime_dir, focus) {
+    // Studio is a separately installed frontend; it must not focus the legacy window.
+    let runtime_dir = if cfg!(feature = "studio") {
+        let path = paths.runtime_dir.join("studio");
+        if let Err(error) = std::fs::create_dir_all(&path) {
+            eprintln!("maild-ui: cannot prepare Studio runtime: {error}");
+            return InstanceClaim::Owner(None);
+        }
+        path
+    } else {
+        paths.runtime_dir
+    };
+    match claim_at(&runtime_dir, focus) {
         Ok(Some(lock)) => InstanceClaim::Owner(Some(lock)),
         Ok(None) => InstanceClaim::Focused,
         Err(message) => {

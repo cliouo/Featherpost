@@ -1,0 +1,4 @@
+{
+  "extends": "../maild-ui/tsconfig.json",
+  "include": ["src", "vite.config.ts"]
+}
