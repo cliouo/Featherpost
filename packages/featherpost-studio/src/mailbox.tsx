@@ -143,11 +143,9 @@ function Mailbox({
 }) {
   const s = useStore(controller.store);
   const [search, setSearch] = useState("");
-  const [filter, setFilter] = useState<"all" | "unread">("all");
   const title = scopeTitle(s.scope).replace("统一收件箱", "收件箱");
-  const rows = filter === "unread" ? s.rows.filter((r) => !r.seen) : s.rows;
+  const rows = s.rows;
   useEffect(() => {
-    setFilter("all");
     if (s.scope.kind !== "search") setSearch("");
   }, [s.scope]);
   useEffect(() => {
@@ -231,20 +229,20 @@ function Mailbox({
       <div className={`mail-columns ${s.selected ? "has-selection" : ""}`}>
         <section className="message-column" aria-label="邮件列表">
           <div className="list-controls">
-            <div className="filter-tabs" aria-label="筛选邮件">
+            <div className="filter-tabs" aria-label="切换邮件视图">
               <button
-                className={filter === "all" ? "selected" : ""}
-                aria-pressed={filter === "all"}
-                onClick={() => setFilter("all")}
+                className={s.scope.kind === "smart" && s.scope.name === "all" ? "selected" : ""}
+                aria-pressed={s.scope.kind === "smart" && s.scope.name === "all"}
+                onClick={() => controller.selectSmart("all")}
               >
-                全部
+                全部邮件
               </button>
               <button
-                className={filter === "unread" ? "selected" : ""}
-                aria-pressed={filter === "unread"}
-                onClick={() => setFilter("unread")}
+                className={s.scope.kind === "smart" && s.scope.name === "unread" ? "selected" : ""}
+                aria-pressed={s.scope.kind === "smart" && s.scope.name === "unread"}
+                onClick={() => controller.selectSmart("unread")}
               >
-                未读
+                未读邮件
               </button>
             </div>
             <span>最新优先</span>
