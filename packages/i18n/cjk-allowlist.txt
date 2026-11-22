@@ -13,15 +13,11 @@ packages/featherpost-studio/src/navigation.ts
 packages/featherpost-studio/src/settings/Accounts.tsx
 packages/featherpost-studio/src/settings/Appearance.tsx
 packages/featherpost-studio/src/settings/module.tsx
-packages/maild-ui/src/app/App.tsx
-packages/maild-ui/src/app/ErrorBoundary.tsx
-packages/maild-ui/src/bridge/tauri.ts
 packages/maild-ui/src/compose/Editor.tsx
 packages/maild-ui/src/compose/controller.ts
 packages/maild-ui/src/compose/module.tsx
 packages/maild-ui/src/host/host.ts
 packages/maild-ui/src/host/registry.ts
-packages/maild-ui/src/main.tsx
 packages/maild-ui/src/sample/module.tsx
 packages/maild-ui/src/settings/Accounts.tsx
 packages/maild-ui/src/settings/Addresses.tsx

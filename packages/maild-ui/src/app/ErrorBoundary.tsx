@@ -1,3 +1,4 @@
+import { m } from '@featherpost/i18n/messages';
 import { Component, type ErrorInfo, type ReactNode } from 'react';
 
 export interface ErrorBoundaryProps {
@@ -11,7 +12,7 @@ interface ErrorBoundaryState {
 }
 
 /**
- * 渲染期兜底边界：任一视图或根组件因异常数据抛错时显示可恢复中文卡片，
+ * 渲染期兜底边界：任一视图或根组件因异常数据抛错时显示可恢复的提示卡片（按当前界面语言成文），
  * 避免整个 WebView 卸载成空白白屏。
  */
 export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
@@ -41,10 +42,10 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
     return (
       <div className="page error-boundary" role="alert">
         <div className="empty">
-          <h2>界面遇到意外问题</h2>
-          <p>本地邮件与草稿不受影响，可点击下方按钮恢复当前界面。</p>
+          <h2>{m.common_error_boundary_title()}</h2>
+          <p>{m.common_error_boundary_body()}</p>
           <button type="button" className="primary-button" onClick={this.reset}>
-            重新载入界面
+            {m.common_error_boundary_reload()}
           </button>
         </div>
       </div>
