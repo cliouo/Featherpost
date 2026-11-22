@@ -1,3 +1,4 @@
+import { Choice } from "../../maild-ui/src/settings/Choice";
 import { useEffect, useState } from "react";
 import { Icon } from "../../maild-ui/src/app/Icon";
 import { BRAND } from "../../maild-ui/src/brand";
@@ -85,10 +86,10 @@ export function Activity({
       <div className="activity-toolbar">
         <label className="activity-account-filter">
           账户
-          <select
+          <Choice
             value={s.account}
             disabled={s.busy !== null}
-            onChange={(e) => controller.filter(e.target.value)}
+            onValueChange={(value) => controller.filter(value)}
           >
             <option value="">全部账户</option>
             {s.account &&
@@ -102,7 +103,7 @@ export function Activity({
                 {mailbox.label(a.account)}
               </option>
             ))}
-          </select>
+          </Choice>
         </label>
         <span>按提交顺序从新到旧</span>
       </div>

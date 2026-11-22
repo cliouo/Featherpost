@@ -65,7 +65,7 @@ export function isEditableTarget(target: TargetLike | null | undefined): boolean
   const tag = (target.tagName ?? "").toLowerCase();
   if (tag === "input" || tag === "textarea" || tag === "select") return true;
   if (target.isContentEditable) return true;
-  return !!target.closest?.('[contenteditable]:not([contenteditable="false"])');
+  return !!target.closest?.('[contenteditable]:not([contenteditable="false"]), [role="combobox"], [role="listbox"], [role="option"]');
 }
 
 export function shortcutFor(

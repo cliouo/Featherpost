@@ -1,3 +1,4 @@
+import { Choice } from "./Choice";
 import { useStore } from "../host/hooks";
 import { expiryLabel } from "../mailbox/format";
 import { Field } from "./Accounts";
@@ -12,11 +13,11 @@ export function Addresses({ controller }: { controller: SettingsController }) {
       <h2>地址与别名</h2>
       <p className="page-intro">管理这个邮箱可使用的本地发件身份。</p>
       <Field label="邮箱账户">
-        <select
+        <Choice
           disabled={s.busy || s.loading || !s.online}
           value={s.addressAccount}
-          onChange={(e) => {
-            const account = e.target.value;
+          onValueChange={(value) => {
+            const account = value;
             const next = () => void controller.selectAddressAccount(account);
             if (controller.requestLeave(next)) next();
           }}
@@ -29,7 +30,7 @@ export function Addresses({ controller }: { controller: SettingsController }) {
               {p.display_name} · {p.address}
             </option>
           ))}
-        </select>
+        </Choice>
       </Field>
       {p && (
         <div className="setting-row">
@@ -135,20 +136,20 @@ export function Addresses({ controller }: { controller: SettingsController }) {
             <h3>登记发件身份</h3>
             <div className="settings-field-pair">
               <Field label="类型">
-                <select
+                <Choice disabled={s.busy || !s.online}
                   value={f.kind}
-                  onChange={(e) =>
+                  onValueChange={(value) =>
                     controller.store.patch({
                       addressForm: {
                         ...f,
-                        kind: e.target.value as typeof f.kind,
+                        kind: value as typeof f.kind,
                       },
                     })
                   }
                 >
                   <option value="alias">别名</option>
                   <option value="disposable">一次性身份</option>
-                </select>
+                </Choice>
               </Field>
               <Field
                 label="邮箱地址"

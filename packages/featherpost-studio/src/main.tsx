@@ -8,6 +8,8 @@ import { settingsModule } from "./settings/module";
 import { ErrorBoundary } from "../../maild-ui/src/app/ErrorBoundary";
 import { studioMailbox } from "./mailbox";
 import { Studio } from "./Shell";
+import { ChoiceRenderer } from "../../maild-ui/src/settings/Choice";
+import { StudioSelect } from "./StudioSelect";
 import "../../maild-ui/src/styles/tokens.css";
 import "./settings/forms.css";
 import "../../maild-ui/src/compose/compose.css";
@@ -15,6 +17,7 @@ import "./studio.css";
 import "./navigation.css";
 import "./activity.css";
 import "./settings/settings.css";
+import "./select.css";
 
 const host = new Host(tauriBridge);
 const composer = new ComposeController(
@@ -45,11 +48,13 @@ createRoot(document.getElementById("root")!).render(
       void host.bridge.refresh().catch(() => {});
     }}
   >
+    <ChoiceRenderer.Provider value={StudioSelect}>
     <Studio
       host={host}
       mailbox={mailbox.controller}
       composer={composer}
       setup={mailbox.setup}
     />
+    </ChoiceRenderer.Provider>
   </ErrorBoundary>,
 );

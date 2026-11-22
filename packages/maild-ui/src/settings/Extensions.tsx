@@ -1,3 +1,4 @@
+import { Choice } from "./Choice";
 import { lifecycleLabel, permissionLabel } from "../i18n";
 import { useState } from "react";
 import { useStore } from "../host/hooks";
@@ -239,15 +240,15 @@ export function Extensions({
             </article>
           ))}
           <div className="settings-actions">
-            <select
+            <Choice
               aria-label="安装包类型"
               value={kind}
-              onChange={(e) => setKind(e.target.value as PackageKind)}
+              onValueChange={(value) => setKind(value as PackageKind)}
               disabled={s.busy}
             >
               <option value="plugin">服务扩展包</option>
               <option value="frontend">前端包</option>
-            </select>
+            </Choice>
             <button
               className="secondary"
               disabled={!s.online || s.busy || s.loading || !catalog}
