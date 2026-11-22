@@ -9,6 +9,7 @@ import { Icon } from './Icon';
 import { ErrorBoundary } from './ErrorBoundary';
 import { applyTheme } from './theme';
 import { BRAND } from '../brand';
+import { useUiLocale } from '../i18n';
 
 function connectionLabel(snapshot: UiSnapshot): { text: string; warn: boolean } {
   if (snapshot.identity_failure) return { text: '前端未注册', warn: true };
@@ -53,6 +54,8 @@ export function compatBanner(snapshot: Pick<UiSnapshot, 'compat'>): string | nul
 }
 
 export function App({ host }: { host: Host }) {
+  // 订阅界面语言：切换时整棵树随根组件重新渲染（不重挂载、不丢状态）。
+  useUiLocale();
   const state = useStore(host.state);
   const registry = useExternal(host.registry.subscribe, host.registry.getSnapshot);
   useEffect(() => { void host.bridge.compose.ready().catch(()=>{}); }, [host]);

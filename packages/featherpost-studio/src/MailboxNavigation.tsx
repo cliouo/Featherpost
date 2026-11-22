@@ -1,4 +1,4 @@
-import { folderLabel, UI_LOCALE } from "../../maild-ui/src/i18n";
+import { folderLabel, uiLocale } from "../../maild-ui/src/i18n";
 import { Choice } from "../../maild-ui/src/settings/Choice";
 import {
   useEffect,
@@ -105,13 +105,13 @@ export function MailboxNavigation({
     [view],
   );
 
-  const needle = filter.trim().toLocaleLowerCase(UI_LOCALE);
+  const needle = filter.trim().toLocaleLowerCase(uiLocale());
   const label = (id: string) => mailbox.label(id);
   const address = (id: string) =>
     mail.profiles.find((p) => p.id === id)?.address || id;
   const accountMatches = (id: string) =>
     !needle ||
-    `${label(id)} ${address(id)}`.toLocaleLowerCase(UI_LOCALE).includes(needle);
+    `${label(id)} ${address(id)}`.toLocaleLowerCase(uiLocale()).includes(needle);
   const matching = (id: string) =>
     accountMatches(id) ||
     mailbox
@@ -119,7 +119,7 @@ export function MailboxNavigation({
       .some(
         (f) =>
           f.present &&
-          `${f.name} ${f.display_name} ${folderLabel(f)}`.toLocaleLowerCase(UI_LOCALE).includes(needle),
+          `${f.name} ${f.display_name} ${folderLabel(f)}`.toLocaleLowerCase(uiLocale()).includes(needle),
       );
   const count = (id: string) =>
     mailbox
@@ -159,7 +159,7 @@ export function MailboxNavigation({
     const target =
       (!accountMatches(id)
         ? available.find((f) =>
-            `${f.name} ${f.display_name} ${folderLabel(f)}`.toLocaleLowerCase(UI_LOCALE).includes(needle),
+            `${f.name} ${f.display_name} ${folderLabel(f)}`.toLocaleLowerCase(uiLocale()).includes(needle),
           )
         : undefined) ??
       available.find((f) => f.role === "inbox") ??

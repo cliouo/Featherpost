@@ -1,4 +1,4 @@
-import { folderLabel, UI_LOCALE } from "../../maild-ui/src/i18n";
+import { folderLabel, uiLocale } from "../../maild-ui/src/i18n";
 import type { UiFolder } from "../../maild-ui/src/bridge/types";
 import type { MailboxController } from "../../maild-ui/src/mailbox/controller";
 import { queryOf } from "../../maild-ui/src/mailbox/controller";
@@ -43,7 +43,7 @@ export function folderTree(folders: UiFolder[]): FolderNode[] {
       .sort(
         (a, b) =>
           (order[a.folder.role] ?? 4) - (order[b.folder.role] ?? 4) ||
-          folderLabel(a.folder).localeCompare(folderLabel(b.folder), UI_LOCALE),
+          folderLabel(a.folder).localeCompare(folderLabel(b.folder), uiLocale()),
       );
   return prune(roots);
 }

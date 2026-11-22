@@ -21,11 +21,9 @@ packages/maild-ui/src/compose/controller.ts
 packages/maild-ui/src/compose/module.tsx
 packages/maild-ui/src/host/host.ts
 packages/maild-ui/src/host/registry.ts
-packages/maild-ui/src/i18n.ts
 packages/maild-ui/src/mailbox/Actions.tsx
 packages/maild-ui/src/mailbox/Activity.tsx
 packages/maild-ui/src/mailbox/Dialog.tsx
-packages/maild-ui/src/mailbox/FolderNav.tsx
 packages/maild-ui/src/mailbox/MessageList.tsx
 packages/maild-ui/src/mailbox/Reader.tsx
 packages/maild-ui/src/mailbox/ReaderParts.tsx
