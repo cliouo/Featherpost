@@ -1,3 +1,5 @@
+import { m } from '@featherpost/i18n/messages';
+
 import type {
   CommandContribution, Contributions, CoreRole, RegisteredContribution, RegistrySnapshot,
   SettingsContribution, ViewContribution,
@@ -10,6 +12,17 @@ interface Entry<View> {
 
 export interface Disposable {
   dispose(): void;
+}
+
+/**
+ * 浅拷贝描述符但保留访问器：模块、视图与设置分区的 `title` 可以写成 getter，
+ * 每次读取按当前界面语言成文（ADR-0048 决策 8）；展开运算符会把 getter 冻结成注册时的文字。
+ */
+export function copyContribution<T extends object>(value: T, overrides: Partial<T> = {}): T {
+  return Object.defineProperties(
+    {},
+    { ...Object.getOwnPropertyDescriptors(value), ...Object.getOwnPropertyDescriptors(overrides) },
+  ) as T;
 }
 
 const MODULE_ID = /^[a-z][a-z0-9]*(?:\.[a-z][a-z0-9-]*)+$/;
@@ -35,13 +48,15 @@ export class ContributionRegistry<View> {
   };
 
   register(bundle: Contributions<View>): Disposable {
-    if (this.modules.has(bundle.moduleId)) throw new Error(`模块已注册: ${bundle.moduleId}`);
+    if (this.modules.has(bundle.moduleId))
+      throw new Error(m.extensions_registry_module_registered({ id: bundle.moduleId }));
     return this.commit(bundle, false);
   }
 
   /** 升级：先校验新贡献与现有集合的兼容性，再整体切换，旧包的 dispose 最后跑。 */
   replace(bundle: Contributions<View>): Disposable {
-    if (!this.modules.has(bundle.moduleId)) throw new Error(`模块未注册: ${bundle.moduleId}`);
+    if (!this.modules.has(bundle.moduleId))
+      throw new Error(m.extensions_registry_module_unregistered({ id: bundle.moduleId }));
     return this.commit(bundle, true);
   }
 
@@ -58,7 +73,7 @@ export class ContributionRegistry<View> {
 
   resolveRole(role: CoreRole): ViewContribution<View> {
     const matches = this.snapshot.views.filter(({ value }) => value.role === role);
-    if (matches.length !== 1) throw new Error(`角色必须恰有一个提供者: ${role}`);
+    if (matches.length !== 1) throw new Error(m.extensions_registry_role_provider({ role }));
     return matches[0].value;
   }
 
@@ -72,13 +87,14 @@ export class ContributionRegistry<View> {
 
   private commit(bundle: Contributions<View>, replacing: boolean): Disposable {
     const token = Symbol(bundle.moduleId);
-    // 复制描述符：调用方事后改自己的对象不能绕过校验。
-    const stored: Contributions<View> = {
-      ...bundle,
-      commands: bundle.commands?.map((command) => ({ ...command, locations: [...command.locations] })),
-      views: bundle.views?.map((view) => ({ ...view })),
-      settings: bundle.settings?.map((section) => ({ ...section })),
-    };
+    // 复制描述符：调用方事后改自己的对象不能绕过校验。访问器原样保留（见 copyContribution）。
+    const stored: Contributions<View> = copyContribution(bundle, {
+      commands: bundle.commands?.map((command) =>
+        copyContribution(command, { locations: [...command.locations] }),
+      ),
+      views: bundle.views?.map((view) => copyContribution(view)),
+      settings: bundle.settings?.map((section) => copyContribution(section)),
+    });
     const candidate = new Map(this.modules);
     const previous = candidate.get(bundle.moduleId);
     candidate.set(bundle.moduleId, { token, contributions: stored });
@@ -104,22 +120,29 @@ export class ContributionRegistry<View> {
     const ids = new Set<string>();
     const roles = new Set<CoreRole>();
     for (const { contributions: bundle } of modules.values()) {
-      if (!MODULE_ID.test(bundle.moduleId)) throw new Error(`模块命名空间无效: ${bundle.moduleId}`);
-      if (bundle.apiVersion !== 1) throw new Error(`不支持的贡献 API 版本: ${bundle.moduleId}`);
-      if (!bundle.title.trim()) throw new Error(`模块需要名字: ${bundle.moduleId}`);
+      if (!MODULE_ID.test(bundle.moduleId))
+        throw new Error(m.extensions_registry_module_id_invalid({ id: bundle.moduleId }));
+      if (bundle.apiVersion !== 1)
+        throw new Error(m.extensions_registry_api_version({ id: bundle.moduleId }));
+      if (!bundle.title.trim())
+        throw new Error(m.extensions_registry_module_title({ id: bundle.moduleId }));
       for (const value of [...(bundle.commands ?? []), ...(bundle.views ?? []), ...(bundle.settings ?? [])]) {
         const suffix = value.id.slice(bundle.moduleId.length + 1);
         if (!value.id.startsWith(`${bundle.moduleId}.`) || !CONTRIBUTION_SUFFIX.test(suffix))
-          throw new Error(`贡献越出模块命名空间: ${value.id}`);
-        if (ids.has(value.id)) throw new Error(`重复的贡献 ID: ${value.id}`);
-        if (!value.title.trim()) throw new Error(`贡献需要标题: ${value.id}`);
+          throw new Error(m.extensions_registry_contribution_namespace({ id: value.id }));
+        if (ids.has(value.id))
+          throw new Error(m.extensions_registry_contribution_duplicate({ id: value.id }));
+        if (!value.title.trim())
+          throw new Error(m.extensions_registry_contribution_title({ id: value.id }));
         ids.add(value.id);
       }
       for (const command of bundle.commands ?? []) {
-        if (command.locations.length === 0) throw new Error(`命令至少要有一个位置: ${command.id}`);
+        if (command.locations.length === 0)
+          throw new Error(m.extensions_registry_command_location({ id: command.id }));
       }
       for (const view of bundle.views ?? []) {
-        if (view.role && roles.has(view.role)) throw new Error(`重复的核心角色: ${view.role}`);
+        if (view.role && roles.has(view.role))
+          throw new Error(m.extensions_registry_role_duplicate({ role: view.role }));
         if (view.role) roles.add(view.role);
       }
     }
@@ -132,7 +155,7 @@ export class ContributionRegistry<View> {
       ),
     );
     for (const role of required) {
-      if (!roles.has(role)) throw new Error(`不能移除必需角色的唯一提供者: ${role}`);
+      if (!roles.has(role)) throw new Error(m.extensions_registry_role_required({ role }));
     }
   }
 
@@ -147,7 +170,10 @@ export class ContributionRegistry<View> {
       for (const value of contributions.settings ?? []) settings.push({ moduleId, value });
       modules.push({
         moduleId,
-        title: contributions.title,
+        // getter：模块标题随界面语言变化，快照不冻结它。
+        get title() {
+          return contributions.title;
+        },
         builtin: contributions.builtin ?? false,
         contributions:
           (contributions.commands?.length ?? 0) + (contributions.views?.length ?? 0) + (contributions.settings?.length ?? 0),

@@ -19,8 +19,6 @@ packages/maild-ui/src/bridge/tauri.ts
 packages/maild-ui/src/compose/Editor.tsx
 packages/maild-ui/src/compose/controller.ts
 packages/maild-ui/src/compose/module.tsx
-packages/maild-ui/src/host/host.ts
-packages/maild-ui/src/host/registry.ts
 packages/maild-ui/src/mailbox/Actions.tsx
 packages/maild-ui/src/mailbox/Activity.tsx
 packages/maild-ui/src/mailbox/Dialog.tsx
@@ -41,7 +39,6 @@ packages/maild-ui/src/mailbox/navigation.ts
 packages/maild-ui/src/mailbox/otp.ts
 packages/maild-ui/src/mailbox/shortcuts.ts
 packages/maild-ui/src/main.tsx
-packages/maild-ui/src/sample/module.tsx
 packages/maild-ui/src/settings/Accounts.tsx
 packages/maild-ui/src/settings/Addresses.tsx
 packages/maild-ui/src/settings/Extensions.tsx
