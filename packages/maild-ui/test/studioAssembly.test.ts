@@ -53,8 +53,13 @@ it("assembles Studio with real namespace validation and shared compose/settings 
         .getSnapshot()
         .settings.some((section) => section.value.title === "阅读与隐私"),
     ).toBe(true);
-    // 注册表里的标题定格在登记时的语言；设置页按分区 ID 重新取消息，切换语言即生效。
+    // 内置贡献的标题是 getter，注册表保留访问器：切换语言后设置页与快照都按新语言成文。
     applyEffectiveLocales(["en"]);
+    expect(
+      host.registry
+        .getSnapshot()
+        .settings.some((section) => section.value.title === "Reading & privacy"),
+    ).toBe(true);
     const page = renderToStaticMarkup(
       createElement(host.registry.resolveRole("settings").render, {
         active: true,

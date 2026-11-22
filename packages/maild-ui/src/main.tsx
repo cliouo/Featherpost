@@ -32,7 +32,7 @@ composer.setBeforeClose(()=>settings.beforeClose());
 composer.store.subscribe(()=>{if(!composer.store.getSnapshot().closing)settings.releaseClose();});
 host.registerBuiltin(settingsModule(host,settings));
 // 示例扩展默认关闭：没有启用可选扩展时三栏界面保持原样，在「设置 → 扩展」里开。
-host.registerOptional('maild.sample-excerpt', { title: m.common_sample_excerpt_title(), bundle: () => sampleExcerptModule(host), defaultEnabled: false });
+host.registerOptional('maild.sample-excerpt', { get title() { return m.common_sample_excerpt_title(); }, bundle: () => sampleExcerptModule(host), defaultEnabled: false });
 host.finishAssembly();
 void host.start();
 
