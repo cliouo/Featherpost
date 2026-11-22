@@ -105,7 +105,7 @@ impl Bridge {
         }
         let method = if q.search {
             if q.role.is_some() || q.seen.is_some() || q.flagged.is_some() {
-                return Err(UiError::invalid("搜索不接受列表筛选。"));
+                return Err(UiError::invalid("search_with_filter", "搜索不接受列表筛选。"));
             }
             for (k, v) in [("query", q.query), ("from", q.from)] {
                 if let Some(v) = v {
@@ -128,7 +128,7 @@ impl Bridge {
                 || q.until.is_some()
                 || q.has_attachments.is_some()
             {
-                return Err(UiError::invalid("请使用搜索查询。"));
+                return Err(UiError::invalid("search_query_required", "请使用搜索查询。"));
             }
             if let Some(v) = q.role {
                 params["role"] = json!(v);
@@ -196,7 +196,7 @@ impl Bridge {
             || r.uids.len() > 500
             || r.uids.iter().any(|s| s.is_empty())
         {
-            return Err(UiError::invalid("请选择 1 至 500 封同一文件夹的邮件。"));
+            return Err(UiError::invalid("selection_size", "请选择 1 至 500 封同一文件夹的邮件。"));
         }
         let mut params = json!({"account":r.account,"folder":r.folder,"uids":r.uids});
         let method = match r.action.as_str() {
@@ -204,8 +204,8 @@ impl Bridge {
                 let flag = r
                     .flag
                     .filter(|f| ["seen", "flagged"].contains(&f.as_str()))
-                    .ok_or_else(|| UiError::invalid("标记无效。"))?;
-                let value = r.value.ok_or_else(|| UiError::invalid("缺少标记值。"))?;
+                    .ok_or_else(|| UiError::invalid("flag_invalid", "标记无效。"))?;
+                let value = r.value.ok_or_else(|| UiError::invalid("flag_value_missing", "缺少标记值。"))?;
                 params["flag"] = json!(flag);
                 params["value"] = json!(value);
                 "markMessages"
@@ -214,12 +214,12 @@ impl Bridge {
                 let target = r
                     .target
                     .filter(|t| !t.is_empty() && t != &r.folder)
-                    .ok_or_else(|| UiError::invalid("请选择其他文件夹。"))?;
+                    .ok_or_else(|| UiError::invalid("move_target_required", "请选择其他文件夹。"))?;
                 params["target"] = json!(target);
                 "moveMessages"
             }
             "delete" => "deleteMessages",
-            _ => return Err(UiError::invalid("未知邮箱操作。")),
+            _ => return Err(UiError::invalid("mailbox_action_unknown", "未知邮箱操作。")),
         };
         self.compose_call(method, params).await
     }
@@ -236,7 +236,7 @@ impl Bridge {
         resolution: String,
     ) -> Result<UiOperation, UiError> {
         if id <= 0 || !["retry", "discard"].contains(&resolution.as_str()) {
-            return Err(UiError::invalid("请选择有效的恢复动作。"));
+            return Err(UiError::invalid("resolution_invalid", "请选择有效的恢复动作。"));
         }
         #[derive(Deserialize)]
         struct Reply {
@@ -293,10 +293,10 @@ impl Bridge {
     ) -> Result<Vec<UiSummary>, UiError> {
         let query = query.trim().to_string();
         if account.is_empty() || folder.is_empty() || query.is_empty() {
-            return Err(UiError::invalid("请选择账户与文件夹，并输入搜索内容。"));
+            return Err(UiError::invalid("server_search_required", "请选择账户与文件夹，并输入搜索内容。"));
         }
         if query.len() > MAX_QUERY_BYTES || query.chars().any(char::is_control) {
-            return Err(UiError::invalid("搜索内容过长或包含无效字符。"));
+            return Err(UiError::invalid("server_search_invalid", "搜索内容过长或包含无效字符。"));
         }
         let mut params =
             json!({ "account": account, "folder": folder, "query": query, "scope": "server" });
@@ -328,7 +328,7 @@ impl Bridge {
             || folder.is_empty()
             || uid.parse::<u32>().ok().filter(|uid| *uid > 0).is_none()
         {
-            return Err(UiError::invalid("邮件标识无效。"));
+            return Err(UiError::invalid("message_id_invalid", "邮件标识无效。"));
         }
         match self
             .compose_call::<MessageResult>(

@@ -124,7 +124,7 @@ impl Bridge {
         account: &str,
         patch: DraftPatchInput,
     ) -> Result<UiDraft, UiError> {
-        let mut p = serde_json::to_value(patch).map_err(|_| UiError::invalid("草稿字段无效。"))?;
+        let mut p = serde_json::to_value(patch).map_err(|_| UiError::invalid("draft_fields_invalid", "草稿字段无效。"))?;
         p["account"] = json!(account);
         self.draft_action("createDraft", p).await
     }
@@ -134,7 +134,7 @@ impl Bridge {
         version: u64,
         patch: DraftPatchInput,
     ) -> Result<UiDraft, UiError> {
-        let mut p = serde_json::to_value(patch).map_err(|_| UiError::invalid("草稿字段无效。"))?;
+        let mut p = serde_json::to_value(patch).map_err(|_| UiError::invalid("draft_fields_invalid", "草稿字段无效。"))?;
         p["id"] = json!(id);
         p["base_version"] = json!(version);
         self.draft_action("updateDraft", p).await
