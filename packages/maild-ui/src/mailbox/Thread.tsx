@@ -1,7 +1,11 @@
+import { m } from "@featherpost/i18n/messages";
+
 import { useStore } from "../host/hooks";
+import { useUiLocale } from "../i18n";
 import { messageKey, type MailboxController } from "./controller";
-import { displayName, shortDate } from "./format";
+import { displayName, plural, shortDate } from "./format";
 export function Thread({ controller }: { controller: MailboxController }) {
+  useUiLocale();
   const s = useStore(controller.store),
     row = s.selectedRow;
   if (!row) return null;
@@ -17,17 +21,22 @@ export function Thread({ controller }: { controller: MailboxController }) {
         onClick={() => void controller.openThread()}
       >
         {row.thread_id === 0 && !s.threadOpen
-          ? "此邮件会话尚未索引"
+          ? m.mailbox_thread_not_indexed()
           : s.threadOpen
-            ? "收起会话"
-            : "查看会话"}
+            ? m.mailbox_thread_collapse()
+            : m.mailbox_thread_expand()}
       </button>
       {s.threadOpen && (
         <>
           <span className="thread-count">
-            {s.threadId === 0 ? "" : `${s.threadTotal} 封 · 时间正序`}
+            {s.threadId === 0
+              ? ""
+              : plural(s.threadTotal, {
+                  one: m.mailbox_thread_count_one,
+                  other: m.mailbox_thread_count_other,
+                })}
           </span>
-          <div className="thread-list" aria-label="会话邮件">
+          <div className="thread-list" aria-label={m.mailbox_thread_list_label()}>
             {s.threadRows.map((r) => (
               <button
                 key={messageKey(r)}
@@ -37,7 +46,7 @@ export function Thread({ controller }: { controller: MailboxController }) {
               >
                 <span>
                   <strong>{displayName(r.sender)}</strong>
-                  <span>{r.subject || "（无主题）"}</span>
+                  <span>{r.subject || m.mailbox_subject_empty()}</span>
                 </span>
                 <small>
                   {controller.label(r.account)} · {r.folder} ·{" "}
@@ -45,9 +54,9 @@ export function Thread({ controller }: { controller: MailboxController }) {
                 </small>
               </button>
             ))}
-            {s.threadLoading && <p>读取会话中…</p>}
+            {s.threadLoading && <p>{m.mailbox_thread_loading()}</p>}
             {!s.threadLoading && !s.threadError && s.threadId === 0 && (
-              <p>这封邮件尚未进入线程索引，暂时只能查看当前邮件。</p>
+              <p>{m.mailbox_thread_unindexed_body()}</p>
             )}
             {s.threadError && <p role="alert">{s.threadError}</p>}
             {s.threadOffset < s.threadTotal && s.threadRows.length < 1000 && (
@@ -56,11 +65,11 @@ export function Thread({ controller }: { controller: MailboxController }) {
                 disabled={s.threadLoading || s.snapshot.phase !== "online"}
                 onClick={() => void controller.moreThread()}
               >
-                加载更多会话邮件
+                {m.mailbox_thread_load_more()}
               </button>
             )}
             {s.threadRows.length >= 1000 && s.threadOffset < s.threadTotal && (
-              <p>会话较长，请用搜索缩小范围。</p>
+              <p>{m.mailbox_thread_capped()}</p>
             )}
           </div>
         </>

@@ -1,4 +1,7 @@
+import { m } from "@featherpost/i18n/messages";
 import { useEffect, useState } from "react";
+
+import { useUiLocale } from "../i18n";
 import { Choice } from "../settings/Choice";
 import { useStore } from "../host/hooks";
 import type { MailboxController } from "./controller";
@@ -9,7 +12,7 @@ import {
 } from "./activityController";
 import type { Operation } from "./types";
 import { Dialog } from "./Dialog";
-import { fullDate, isoDateTime } from "./format";
+import { fullDate, isoDateTime, plural } from "./format";
 import { BRAND } from "../brand";
 export function Activity({
   controller,
@@ -20,6 +23,7 @@ export function Activity({
   mailbox: MailboxController;
   openMailbox: () => void;
 }) {
+  const locale = useUiLocale();
   const s = useStore(controller.store),
     mail = useStore(mailbox.store),
     [decision, setDecision] = useState<{
@@ -27,7 +31,9 @@ export function Activity({
       resolution: "retry" | "discard";
     } | null>(null);
   useEffect(() => {
-    document.title=`同步活动 · ${BRAND.productName}`;
+    document.title=m.mailbox_activity_document_title({ product: BRAND.productName });
+  }, [locale]);
+  useEffect(() => {
     controller.show();
     return () => controller.hide();
   }, [controller]);
@@ -35,26 +41,26 @@ export function Activity({
     <section className="page activity-page">
       <header className="activity-heading" data-tauri-drag-region="deep">
         <div>
-          <h1>同步活动</h1>
-          <p>本机已接受的操作，以及服务器返回的结果。</p>
+          <h1>{m.mailbox_activity_title()}</h1>
+          <p>{m.mailbox_activity_lead()}</p>
         </div>
         <button
           className="text-button"
           disabled={!s.online || s.loading || s.busy !== null}
           onClick={() => void controller.refresh()}
         >
-          刷新
+          {m.mailbox_activity_refresh()}
         </button>
       </header>
       <div className="activity-filter">
         <label>
-          账户{" "}
+          {m.mailbox_activity_filter_account()}{" "}
           <Choice
             value={s.account}
             disabled={s.busy !== null}
             onValueChange={(value) => controller.filter(value)}
           >
-            <option value="">全部账户</option>
+            <option value="">{m.mailbox_activity_filter_all_accounts()}</option>
             {mail.snapshot.accounts.map((a) => (
               <option key={a.account} value={a.account}>
                 {mailbox.label(a.account)}
@@ -62,13 +68,13 @@ export function Activity({
             ))}
           </Choice>
         </label>
-        <span>按提交顺序倒序，含成功、失败与待核对项</span>
+        <span>{m.mailbox_activity_filter_hint()}</span>
       </div>
       <div className="page-scroll">
         <div className="page-column">
           {!s.online && (
             <p className="list-banner">
-              后台连接不可用，恢复后可刷新。邮箱服务器离线时，本机操作会等待同步。
+              {m.mailbox_activity_offline()}
             </p>
           )}
           {s.error && (
@@ -78,8 +84,8 @@ export function Activity({
           )}
           {!s.ops.length && !s.loading && !s.error && (
             <div className="empty">
-              <h2>还没有同步操作</h2>
-              <p>标记、归档、移动、删除与已发送副本会出现在这里。</p>
+              <h2>{m.mailbox_activity_empty_title()}</h2>
+              <p>{m.mailbox_activity_empty_body()}</p>
             </div>
           )}
           <ol className="operation-list">
@@ -89,6 +95,7 @@ export function Activity({
                 ["pending", "in_flight", "done", "failed", "unknown"].includes(
                   op.state,
                 );
+              // i18n-lint-allow-cjk: 「用户放弃」是内核写入 detail 的协议标记（api.rs），不是界面文案。
               const discarded =
                 op.state === "failed" && op.detail === "用户放弃";
               const can =
@@ -106,29 +113,34 @@ export function Activity({
                   <div className="operation-top">
                     <strong>{operationLabel(op)}</strong>
                     <span className="operation-state">
-                      {discarded ? "已停止重试" : stateLabel(op.state)}
+                      {discarded ? m.mailbox_activity_state_discarded() : stateLabel(op.state)}
                     </span>
                   </div>
                   <p>
                     {mailbox.label(op.account)} · {op.folder}
                     {op.kind === "move" && op.target ? ` → ${op.target}` : ""}
-                    {op.kind === "append" ? "" : ` · 邮件 ${op.uid}`}
+                    {op.kind === "append" ? "" : ` · ${m.mailbox_activity_message_uid({ uid: op.uid })}`}
                   </p>
-                  {op.subject!==undefined&&op.subject!==null&&<p className="operation-subject" title={op.subject}>{op.subject||'（无主题）'}</p>}
+                  {op.subject!==undefined&&op.subject!==null&&<p className="operation-subject" title={op.subject}>{op.subject||m.mailbox_subject_empty()}</p>}
                   <div className="operation-meta">
                     <time dateTime={isoDateTime(op.created_at)}>
                       {fullDate(op.created_at)}
                     </time>
-                    <span>尝试 {op.attempts} 次</span>
+                    <span>
+                      {plural(op.attempts, {
+                        one: m.mailbox_activity_attempts_one,
+                        other: m.mailbox_activity_attempts_other,
+                      })}
+                    </span>
                   </div>
                   {!known && (
                     <p>
-                      未知类型：{op.kind} / {op.state}。请更新客户端后处理。
+                      {m.mailbox_activity_unknown_kind({ kind: op.kind, state: op.state })}
                     </p>
                   )}
                   {op.state === "unknown" && (
                     <p className="operation-warning">
-                      命令已发出，但没有收到最终结果。请检查目标文件夹，重试可能产生重复副本。
+                      {m.mailbox_activity_unknown_warning()}
                     </p>
                   )}
                   {op.detail && !discarded && op.state !== "unknown" && (
@@ -143,7 +155,7 @@ export function Activity({
                           openMailbox();
                         }}
                       >
-                        查看目标文件夹
+                        {m.mailbox_activity_open_target()}
                       </button>
                     )}
                     {can && (
@@ -155,7 +167,7 @@ export function Activity({
                             setDecision({ op, resolution: "retry" })
                           }
                         >
-                          重试
+                          {m.mailbox_activity_retry()}
                         </button>
                         <button
                           className="text-button"
@@ -164,7 +176,7 @@ export function Activity({
                             setDecision({ op, resolution: "discard" })
                           }
                         >
-                          不再重试
+                          {m.mailbox_activity_discard()}
                         </button>
                       </>
                     )}
@@ -176,8 +188,8 @@ export function Activity({
           <footer className="activity-foot">
             <span>
               {s.loading
-                ? "读取中…"
-                : `已加载 ${s.ops.length} 项${s.ops.length > 40 ? " · 查看历史时自动刷新暂停" : ""}`}
+                ? m.mailbox_activity_loading()
+                : `${plural(s.ops.length, { one: m.mailbox_activity_loaded_one, other: m.mailbox_activity_loaded_other })}${s.ops.length > 40 ? ` · ${m.mailbox_activity_autorefresh_paused()}` : ""}`}
             </span>
             {s.more && (
               <button
@@ -185,7 +197,7 @@ export function Activity({
                 disabled={!s.online || s.loading || s.busy !== null}
                 onClick={() => void controller.refresh(true)}
               >
-                加载更早的操作
+                {m.mailbox_activity_load_more()}
               </button>
             )}
           </footer>
@@ -195,8 +207,8 @@ export function Activity({
         <Dialog
           title={
             decision.resolution === "retry"
-              ? "确认重试同步操作"
-              : "停止重试此操作"
+              ? m.mailbox_activity_retry_title()
+              : m.mailbox_activity_discard_title()
           }
           onClose={() => setDecision(null)}
           busy={s.busy !== null}
@@ -208,9 +220,9 @@ export function Activity({
           <p>
             {decision.resolution === "retry"
               ? decision.op.kind === "flag"
-                ? "将重新排队同步这个标记。"
-                : "请先核对目标文件夹。若原操作已经成功，重试可能产生第二份副本。"
-              : "这只停止要求后台重试，不会撤销服务器已经执行的操作。"}
+                ? m.mailbox_activity_retry_flag_body()
+                : m.mailbox_activity_retry_copy_body()
+              : m.mailbox_activity_discard_body()}
           </p>
           <footer>
             <button
@@ -218,7 +230,7 @@ export function Activity({
               disabled={s.busy !== null}
               onClick={() => setDecision(null)}
             >
-              取消
+              {m.mailbox_action_cancel()}
             </button>
             <button
               className="primary-button"
@@ -229,10 +241,10 @@ export function Activity({
               }}
             >
               {s.busy !== null
-                ? "正在提交"
+                ? m.mailbox_activity_submitting()
                 : decision.resolution === "retry"
-                  ? "已核对，重新排队"
-                  : "不再重试"}
+                  ? m.mailbox_activity_retry_confirm()
+                  : m.mailbox_activity_discard()}
             </button>
           </footer>
         </Dialog>

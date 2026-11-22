@@ -1,3 +1,5 @@
+import { m } from "@featherpost/i18n/messages";
+
 /**
  * 键盘优先的日常处理流（纯函数，便于测试）：焦点在可编辑控件或有模态对话框时一律放行，
  * 只有 ⌘R / Ctrl+R「立即同步」在输入框里也生效（否则 WebView 会整页重载）。
@@ -31,19 +33,19 @@ export interface TargetLike {
   closest?: (selector: string) => unknown;
 }
 
-export const SHORTCUTS: readonly { keys: string; action: ShortcutAction; label: string }[] = [
-  { keys: "j", action: "next", label: "下一封邮件" },
-  { keys: "k", action: "previous", label: "上一封邮件" },
-  { keys: "e", action: "archive", label: "归档当前邮件" },
-  { keys: "s", action: "star", label: "切换星标" },
-  { keys: "u", action: "read", label: "切换已读 / 未读" },
-  { keys: "r", action: "reply", label: "回复" },
-  { keys: "a", action: "replyAll", label: "全部回复" },
-  { keys: "f", action: "forward", label: "转发" },
-  { keys: "c", action: "compose", label: "新建邮件" },
-  { keys: "/", action: "search", label: "聚焦搜索框" },
-  { keys: "?", action: "help", label: "打开 / 关闭快捷键速查" },
-  { keys: "⌘R", action: "sync", label: "立即同步并刷新" },
+export const SHORTCUTS: readonly { keys: string; action: ShortcutAction; label: () => string }[] = [
+  { keys: "j", action: "next", label: m.mailbox_shortcut_next },
+  { keys: "k", action: "previous", label: m.mailbox_shortcut_previous },
+  { keys: "e", action: "archive", label: m.mailbox_shortcut_archive },
+  { keys: "s", action: "star", label: m.mailbox_shortcut_star },
+  { keys: "u", action: "read", label: m.mailbox_shortcut_read },
+  { keys: "r", action: "reply", label: m.mailbox_shortcut_reply },
+  { keys: "a", action: "replyAll", label: m.mailbox_shortcut_reply_all },
+  { keys: "f", action: "forward", label: m.mailbox_shortcut_forward },
+  { keys: "c", action: "compose", label: m.mailbox_shortcut_compose },
+  { keys: "/", action: "search", label: m.mailbox_shortcut_search },
+  { keys: "?", action: "help", label: m.mailbox_shortcut_help },
+  { keys: "⌘R", action: "sync", label: m.mailbox_shortcut_sync },
 ];
 
 const SINGLE: Record<string, ShortcutAction> = {

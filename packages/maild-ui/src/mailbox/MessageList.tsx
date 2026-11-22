@@ -1,8 +1,11 @@
+import { m } from "@featherpost/i18n/messages";
+
 import type { UiSummary } from "../bridge/types";
+import { useUiLocale } from "../i18n";
 import { Icon } from "../app/Icon";
 import { useStore } from "../host/hooks";
 import { messageKey, scopeTitle, type MailboxController } from "./controller";
-import { displayName, fullDate, isoDateTime, shortDate } from "./format";
+import { displayName, fullDate, isoDateTime, plural, shortDate } from "./format";
 function Row({
   row,
   controller,
@@ -10,6 +13,7 @@ function Row({
   row: UiSummary;
   controller: MailboxController;
 }) {
+  useUiLocale();
   const s = controller.state,
     selected = !!s.selected && messageKey(s.selected) === messageKey(row),
     checked = s.checked.some((i) => messageKey(i) === messageKey(row));
@@ -20,7 +24,9 @@ function Row({
       <input
         className="message-checkbox"
         type="checkbox"
-        aria-label={`选择 ${row.subject || "无主题"}`}
+        aria-label={m.mailbox_list_select_label({
+          subject: row.subject || m.mailbox_list_select_no_subject(),
+        })}
         checked={checked}
         disabled={s.busy}
         onChange={(e) =>
@@ -40,7 +46,7 @@ function Row({
         <span className="message-top">
           {!row.seen && <span className="unread-dot" aria-hidden="true" />}
           <span className="sender">
-            {displayName(row.sender) || "（无发件人）"}
+            {displayName(row.sender) || m.mailbox_sender_empty()}
           </span>
           {row.has_attachments && <Icon name="paperclip" />}
           <time
@@ -50,7 +56,7 @@ function Row({
             {shortDate(row.sort_at)}
           </time>
         </span>
-        <span className="subject-line">{row.subject || "（无主题）"}</span>
+        <span className="subject-line">{row.subject || m.mailbox_subject_empty()}</span>
         <span className="snippet">{row.snippet}</span>
         {s.scope.kind !== "folder" && (
           <span className="message-source">
@@ -58,15 +64,15 @@ function Row({
           </span>
         )}
         <span className="sr-only">
-          {row.seen ? "" : "未读，"}
-          {row.flagged ? "已加星标，" : ""}
-          {row.has_attachments ? "有附件" : ""}{row.deleted ? "，已标记删除" : ""}
+          {row.seen ? "" : m.mailbox_list_sr_unread()}
+          {row.flagged ? m.mailbox_list_sr_starred() : ""}
+          {row.has_attachments ? m.mailbox_list_sr_attachments() : ""}{row.deleted ? m.mailbox_list_sr_deleted() : ""}
         </span>
       </button>
       <button
         className={`message-star${row.flagged ? " starred" : ""}`}
         disabled={s.busy || s.snapshot.phase !== "online"}
-        aria-label={row.flagged ? "取消星标" : "添加星标"}
+        aria-label={row.flagged ? m.mailbox_star_remove() : m.mailbox_star_add()}
         aria-pressed={row.flagged}
         onClick={() =>
           void controller.perform(
@@ -87,6 +93,7 @@ function RemoteRow({
   row: UiSummary;
   controller: MailboxController;
 }) {
+  useUiLocale();
   const s = controller.state,
     key = messageKey(row),
     selected = !!s.selected && messageKey(s.selected) === key,
@@ -104,7 +111,7 @@ function RemoteRow({
       >
         <span className="message-top">
           <span className="sender">
-            {displayName(row.sender) || "（无发件人）"}
+            {displayName(row.sender) || m.mailbox_sender_empty()}
           </span>
           {row.has_attachments && <Icon name="paperclip" />}
           <time
@@ -114,10 +121,10 @@ function RemoteRow({
             {shortDate(row.sort_at)}
           </time>
         </span>
-        <span className="subject-line">{row.subject || "（无主题）"}</span>
+        <span className="subject-line">{row.subject || m.mailbox_subject_empty()}</span>
         <span className="snippet">{row.snippet}</span>
         <span className="message-source">
-          <span className="tag remote-tag">{fetched ? "已取回本地" : "服务器历史"}</span>{" "}
+          <span className="tag remote-tag">{fetched ? m.mailbox_remote_tag_fetched() : m.mailbox_remote_tag_server()}</span>{" "}
           {controller.label(row.account)} · {row.folder}
         </span>
       </button>
@@ -126,22 +133,26 @@ function RemoteRow({
 }
 /** 搜索结果之后：服务器历史邮件（本地缓存有界）。 */
 function RemoteResults({ controller }: { controller: MailboxController }) {
+  useUiLocale();
   const s = useStore(controller.store);
   const r = s.remote;
   if (!controller.serverSearchSupported) return null;
   return (
-    <li className="remote-section" aria-label="服务器历史邮件">
+    <li className="remote-section" aria-label={m.mailbox_remote_section_label()}>
       <div className="remote-head">
         <span>
           {r.status === "idle"
-            ? "本机只缓存最近的邮件。"
+            ? m.mailbox_remote_idle()
             : r.status === "loading"
-              ? `正在服务器上搜索「${r.query}」…`
+              ? m.mailbox_remote_loading({ query: r.query })
               : r.status === "error"
                 ? r.error
                 : r.rows.length
-                  ? `服务器上另有 ${r.rows.length} 封匹配「${r.query}」的邮件，点开即取回本地。`
-                  : `服务器上没有更多匹配「${r.query}」的邮件。`}
+                  ? plural(r.rows.length, {
+                      one: (inputs) => m.mailbox_remote_found_one({ ...inputs, query: r.query }),
+                      other: (inputs) => m.mailbox_remote_found_other({ ...inputs, query: r.query }),
+                    })
+                  : m.mailbox_remote_none({ query: r.query })}
         </span>
         {r.status !== "loading" && (
           <button
@@ -150,12 +161,12 @@ function RemoteResults({ controller }: { controller: MailboxController }) {
             disabled={!controller.canSearchServer}
             title={
               s.scope.kind === "search" && !s.scope.query.query?.trim()
-                ? "请先输入关键词"
+                ? m.mailbox_remote_need_query()
                 : undefined
             }
             onClick={() => void controller.searchServer()}
           >
-            {r.status === "idle" ? "在服务器搜索更早邮件" : "重新搜索服务器"}
+            {r.status === "idle" ? m.mailbox_remote_search() : m.mailbox_remote_search_again()}
           </button>
         )}
       </div>
@@ -173,6 +184,7 @@ function RemoteResults({ controller }: { controller: MailboxController }) {
   );
 }
 export function MessageList({ controller }: { controller: MailboxController }) {
+  useUiLocale();
   const s = useStore(controller.store),
     all =
       s.rows.length > 0 &&
@@ -180,10 +192,12 @@ export function MessageList({ controller }: { controller: MailboxController }) {
         s.checked.some((i) => messageKey(i) === messageKey(r)),
       );
   return (
-    <section className="list-pane" aria-label="邮件列表">
+    <section className="list-pane" aria-label={m.mailbox_list_label()}>
       <header className="list-title" data-tauri-drag-region="deep">
         <h1>{scopeTitle(s.scope)}</h1>
-        <span className="total">{s.total} 封</span>
+        <span className="total">
+          {plural(s.total, { one: m.mailbox_list_total_one, other: m.mailbox_list_total_other })}
+        </span>
       </header>
       <div className="list-selection">
         <label>
@@ -193,16 +207,16 @@ export function MessageList({ controller }: { controller: MailboxController }) {
             disabled={s.busy || !s.rows.length}
             onChange={(e) => controller.selectLoaded(e.target.checked)}
           />{" "}
-          全选当前加载
+          {m.mailbox_list_select_loaded()}
         </label>
         <button
           className="text-button"
           disabled={s.loadingRows || s.syncing || s.snapshot.phase !== "online"}
-          title="请后台立即检查新邮件并刷新列表（⌘R）"
+          title={m.mailbox_list_sync_title()}
           aria-busy={s.syncing}
           onClick={() => void controller.syncNow()}
         >
-          {s.syncing ? "正在同步…" : "刷新"}
+          {s.syncing ? m.mailbox_list_syncing() : m.mailbox_list_sync()}
         </button>
       </div>
       {s.syncError && (
@@ -219,10 +233,10 @@ export function MessageList({ controller }: { controller: MailboxController }) {
         <div className="empty small">
           <p>
             {s.snapshot.accounts.length === 0
-              ? "还没有连接邮箱。在「设置 → 账户」添加第一个邮箱。"
+              ? m.mailbox_list_empty_no_accounts()
               : s.scope.kind === "search"
-                ? "没有找到匹配的本地邮件。更早的邮件可能只在服务器上。"
-                : "这里暂时没有邮件。"}
+                ? m.mailbox_list_empty_search()
+                : m.mailbox_list_empty()}
           </p>
           {s.scope.kind === "search" && (
             <button
@@ -234,7 +248,7 @@ export function MessageList({ controller }: { controller: MailboxController }) {
                 })
               }
             >
-              清除筛选条件
+              {m.mailbox_list_clear_filters()}
             </button>
           )}
         </div>
@@ -258,17 +272,19 @@ export function MessageList({ controller }: { controller: MailboxController }) {
       </ul>
       <footer className="list-foot">
         <span>
-          {s.loadingRows ? "读取中…" : `已加载 ${s.rows.length} / ${s.total}`}
+          {s.loadingRows
+            ? m.mailbox_list_loading()
+            : m.mailbox_list_loaded({ loaded: s.rows.length, total: s.total })}
         </span>
         {controller.canLoadMore && (
           <button
             className="text-button"
             onClick={() => void controller.loadMore()}
           >
-            加载更多
+            {m.mailbox_list_load_more()}
           </button>
         )}
-        {controller.capped && <span>请用搜索缩小范围</span>}
+        {controller.capped && <span>{m.mailbox_list_capped()}</span>}
       </footer>
     </section>
   );

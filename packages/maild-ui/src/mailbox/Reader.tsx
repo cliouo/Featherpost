@@ -1,4 +1,6 @@
-import { folderLabel } from "../i18n";
+import { m } from "@featherpost/i18n/messages";
+
+import { folderLabel, useUiLocale } from "../i18n";
 import { Thread } from "./Thread";
 import { Editor } from "../compose/Editor";
 import { sourceKey, type ComposeController } from "../compose/controller";
@@ -48,6 +50,7 @@ function OverflowMenu({
   host: Host;
   commands: CommandContribution[];
 }) {
+  useUiLocale();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -77,7 +80,7 @@ function OverflowMenu({
         className="icon-button"
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-label="更多操作"
+        aria-label={m.mailbox_reader_more_actions()}
         onClick={() => setOpen((v) => !v)}
       >
         <Icon name="more" />
@@ -112,6 +115,7 @@ interface ReaderProps {
  * 用户可在深色外壳下改用「柔和深色」——只在宿主侧给隔离容器加滤镜，不碰 CSP 与 sandbox。
  */
 export function Reader({ host, controller, documents, composer }: ReaderProps) {
+  useUiLocale();
   const state = useStore(controller.store);
   const docState = useStore(documents.store);
   const registry = useExternal(
@@ -140,12 +144,12 @@ export function Reader({ host, controller, documents, composer }: ReaderProps) {
   const remote = row ? controller.isRemote(row) : false;
 
   return (
-    <section className="reader" aria-label="邮件正文">
+    <section className="reader" aria-label={m.mailbox_reader_label()}>
       <div className="reader-toolbar" data-tauri-drag-region="deep">
         <button
           type="button"
           className="icon-button back-to-list"
-          aria-label="返回列表"
+          aria-label={m.mailbox_reader_back()}
           onClick={() => controller.clearSelection()}
         >
           <Icon name="back" />
@@ -166,8 +170,8 @@ export function Reader({ host, controller, documents, composer }: ReaderProps) {
           <div className="reader-inner">
             <div className="empty">
               <Icon name="inbox" />
-              <h2>选择一封邮件</h2>
-              <p>左侧列表里的邮件会在这里原位显示。</p>
+              <h2>{m.mailbox_reader_empty_title()}</h2>
+              <p>{m.mailbox_reader_empty_body()}</p>
             </div>
           </div>
         </div>
@@ -186,7 +190,7 @@ export function Reader({ host, controller, documents, composer }: ReaderProps) {
                   {folderLabel(controller.foldersOf(row.account).find((f) => f.name === row.folder), row.folder)}
                 </span>
               </div>
-              <h1>{row.subject || "（无主题）"}</h1>
+              <h1>{row.subject || m.mailbox_subject_empty()}</h1>
               <div className="sender-row">
                 <span className="avatar" aria-hidden="true">
                   {initials(row.sender)}
@@ -195,23 +199,32 @@ export function Reader({ host, controller, documents, composer }: ReaderProps) {
                   <strong>{displayName(row.sender)}</strong>
                   <span className="address">{addressOnly(row.sender)}</span>
                   <div className="recipient-line">
-                    收件人 {row.recipient || "—"}
-                    {detail?.cc && <> · 抄送 {detail.cc}</>}
+                    {m.mailbox_reader_to({ recipient: row.recipient || "—" })}
+                    {detail?.cc && <> · {m.mailbox_reader_cc({ cc: detail.cc })}</>}
                   </div>
                 </div>
                 <time
                   dateTime={isoDateTime(row.sort_at)}
-                  title={`发件人声明 ${row.date_at && row.date_at > 0 ? fullDate(row.date_at) : "缺失"} · 收到 ${row.received_at > 0 ? fullDate(row.received_at) : "未知"}`}
+                  title={m.mailbox_reader_date_title({
+                    declared:
+                      row.date_at && row.date_at > 0
+                        ? fullDate(row.date_at)
+                        : m.mailbox_reader_date_missing(),
+                    received:
+                      row.received_at > 0
+                        ? fullDate(row.received_at)
+                        : m.mailbox_reader_date_unknown(),
+                  })}
                 >
                   {fullDate(row.sort_at)}
                 </time>
               </div>
-              <div className="flag-line" aria-label="状态">
-                {remote && <span className="tag remote-tag">服务器历史</span>}
-                {!row.seen && <span className="tag">未读</span>}
-                {row.flagged && <span className="tag">已加星标</span>}
-                {row.answered && <span className="tag">已回复</span>}
-                {row.deleted && <span className="tag">已标记删除</span>}
+              <div className="flag-line" aria-label={m.mailbox_reader_flags_label()}>
+                {remote && <span className="tag remote-tag">{m.mailbox_remote_tag_server()}</span>}
+                {!row.seen && <span className="tag">{m.mailbox_reader_tag_unread()}</span>}
+                {row.flagged && <span className="tag">{m.mailbox_reader_tag_starred()}</span>}
+                {row.answered && <span className="tag">{m.mailbox_reader_tag_answered()}</span>}
+                {row.deleted && <span className="tag">{m.mailbox_reader_tag_deleted()}</span>}
                 {darkShell && detail && body.mode === "html" && (
                   <button
                     type="button"
@@ -219,8 +232,8 @@ export function Reader({ host, controller, documents, composer }: ReaderProps) {
                     aria-pressed={adapted}
                     title={
                       adapted
-                        ? "恢复发件人原本的白底配色"
-                        : "在深色外壳下柔化白底邮件；图片颜色可能略有偏差"
+                        ? m.mailbox_reader_appearance_paper_title()
+                        : m.mailbox_reader_appearance_dark_title()
                     }
                     onClick={() =>
                       host.setPreferences({
@@ -229,7 +242,7 @@ export function Reader({ host, controller, documents, composer }: ReaderProps) {
                       })
                     }
                   >
-                    {adapted ? "原色信纸" : "柔和深色"}
+                    {adapted ? m.mailbox_reader_appearance_paper() : m.mailbox_reader_appearance_dark()}
                   </button>
                 )}
               </div>
@@ -280,7 +293,7 @@ export function Reader({ host, controller, documents, composer }: ReaderProps) {
               <iframe
                 key={body.token}
                 className={`mail-frame${adapted ? " dark-adapted" : ""}`}
-                title="邮件正文（隔离显示）"
+                title={m.mailbox_reader_frame_title()}
                 src={body.url}
                 sandbox=""
                 referrerPolicy="no-referrer"
@@ -289,7 +302,7 @@ export function Reader({ host, controller, documents, composer }: ReaderProps) {
             {detail && body.mode === "text" && (
               <div className="reader-text">
                 <div className="reader-inner">
-                  <pre className="letter">{detail.body || "（正文为空）"}</pre>
+                  <pre className="letter">{detail.body || m.mailbox_reader_body_empty()}</pre>
                 </div>
               </div>
             )}

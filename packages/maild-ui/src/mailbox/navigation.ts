@@ -1,9 +1,10 @@
+import {m} from '@featherpost/i18n/messages';
 import type {OpenIntent} from '../bridge/types';
 import type {MailboxController} from './controller';
 /** The guard starts before saving, so a later user navigation wins throughout the handoff. */
 export async function followMailIntent(controller:MailboxController,intent:OpenIntent,save:()=>Promise<void>,open:()=>void|boolean,notify:(text:string)=>void,approve?:()=>Promise<boolean>){
  const current=controller.navigationGuard();
- try{await save();}catch{if(current())notify('请先处理尚未保存的草稿。');return;}
+ try{await save();}catch{if(current())notify(m.mailbox_navigation_unsaved_draft());return;}
  if(!current())return;
  if(approve&&!(await approve()))return;
  if(!current())return;
