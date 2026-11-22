@@ -9,12 +9,12 @@
 }
 .studio-picker > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .studio-picker-chevron { display: flex; flex-shrink: 0; color: var(--studio-secondary); }
-.studio-picker:not(:disabled):hover,
-.studio-settings button.studio-picker:not(:disabled):hover { background: var(--studio-surface); border-color: var(--studio-muted); }
+.studio-picker:not([data-disabled]):hover,
+.studio-settings button.studio-picker:not([data-disabled]):hover { background: var(--studio-surface); border-color: var(--studio-muted); }
 .studio-picker:focus-visible,
 .studio-picker[data-state="open"] { outline: 2px solid var(--studio-mark); outline-offset: 2px; }
-.studio-picker:disabled,
-.studio-settings button.studio-picker:disabled { opacity: .5; cursor: default; }
+.studio-picker[data-disabled],
+.studio-settings button.studio-picker[data-disabled] { opacity: .5; cursor: default; }
 .studio-picker-menu {
   z-index: 1000; min-width: var(--radix-select-trigger-width);
   max-width: min(440px, var(--radix-select-content-available-width));
