@@ -1228,6 +1228,9 @@ maildctl reading-policy show
 maildctl reading-policy set --remote-content block|allow
 maildctl reading-policy trust news@example.com example.org
 maildctl reading-policy untrust example.org
+maildctl locale                                                   # getLocalePreference：mode、显式列表与 effective
+maildctl locale set en zh-Hans                                    # setLocalePreference：有序列表，整包替换
+maildctl locale set --system                                      # 跟随系统首选语言
 maildctl draft list [--account personal]
 maildctl draft new --account personal --to alice@example.com --subject 周会 --body-file -
 maildctl draft show draft_qk3m...
@@ -1244,6 +1247,18 @@ maildctl draft rm draft_qk3m... --version 5
 （`-32006`），不会合并、也不会覆盖。`draft rm` 的 `--version` 可省略（无条件丢弃）。
 `--body-file -` 从 stdin 读正文，大正文不必经过 shell 参数。
 `attach` / `detach` 是一次读-改-写：先取当前引用列表，再带着同一个 `--version` 整体写回。
+
+`locale` 读写 daemon 拥有的语言偏好（见「`getLocalePreference` / `setLocalePreference`」）；`locale` 与
+`locale show` 等价，`set` 的语言与 `--system` 二选一且至少给一个，标签由 daemon 校验（非法 `-32602`，
+退出码 4）。`--json` 打印与协议应答同形的一行 `{preference, effective, persisted}`。
+
+maildctl 自己给人读的结果、确认、警告与输入提示（插件安装/升级/移除/回滚/启停、凭证轮换提醒、
+协议代警告、草稿与策略的提示、秘密输入提示）随语言偏好成文（ADR-0048 L5）：连上 daemon 时用
+`effective` 与内核支持的语言（`zh-Hans`、`en`）协商；连不上、老 daemon 返回 `-32601` 或读取失败时
+改读系统首选语言（与 daemon `system` 模式同一来源），仍无结果回落 `zh-Hans`。`locale set` 的人读输出
+按写入后的新偏好成文。不随语言变化的有：`--json` 输出、`key: value` 行的字段名与取值、`--help`、
+以及错误行（`featherpostctl: …` 与 `--json` 的 `error.message`）——后者与协议 `error.message` 一样
+面向开发者。
 
 ### maildctl account
 

@@ -334,6 +334,15 @@ maildctl --socket "/absolute/private/path/maild.sock" --json status
 - 新邮件通知（`notify_new_mail`，缺省关闭）只针对收件箱未读新信：同账户 10 秒窗口内超过 3 封合并为
   一条提示；验证码信只发验证码通知；`muted_accounts` 最多 64 项。
 
+### 语言偏好 `locale_preference.toml`（ADR-0048）
+
+- 位置：活动配置文件同目录；文件不存在即「跟随系统」，首次 `setLocalePreference` 才创建。纪律与
+  `rules_state.toml` 相同；损坏或来自未来版本时读到缺省偏好（`persisted: false`），写入 `-32001`
+  且不覆盖，人工检查后修复或删除再重启。`maild backup` 不包含它。
+- CLI：`maildctl locale` 查看，`maildctl locale set en zh-Hans` 设置有序列表，`maildctl locale set --system`
+  恢复跟随系统。maildctl 的人读结果与警告随该偏好成文；连不上 daemon 时用系统首选语言。
+  `maild backup` / `restore` / `paths` 不连 daemon，成功信息与失败标题按系统首选语言成文，报错详情不翻译。
+
 ## 受管账户目录与凭据（M3.7）
 
 Agent 以平台默认配置运行时（`config_path == maild paths` 的 `config=` 下的
