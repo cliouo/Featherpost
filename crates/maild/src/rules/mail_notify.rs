@@ -40,9 +40,6 @@ const MAX_TRACKED_ACCOUNTS: usize = 256;
 /// 摘要预览字符上限。
 const PREVIEW_CHARS: usize = 80;
 
-/// 脱敏模式下的通知标题。
-pub const MASKED_TITLE: &str = "新邮件";
-
 /// 一封信在限流器里的去向。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Admission {
@@ -195,7 +192,9 @@ fn handle(ctx: &Context, cfg: &RulesConfig, state: &Mutex<NotifyState>, msg: &Ma
         }
         state.limiter.admit(&msg.account, Instant::now())
     };
-    let Some(notification) = compose(cfg, msg, admission) else {
+    // 成文时读偏好：切换语言后下一条通知即跟随（ADR-0048 决策 6）。
+    let messages = crate::notify::kernel_messages(ctx);
+    let Some(notification) = compose(messages, cfg, msg, admission) else {
         return;
     };
     if let Some(notifier) = ctx.get::<Notifier>() {
@@ -230,17 +229,20 @@ pub fn eligible(cfg: &RulesConfig, msg: &MailMessage, now_unix_secs: u64) -> boo
     true
 }
 
-/// 按隐私开关与限流结论组织通知文案（纯函数）。
+/// 按隐私开关与限流结论组织通知文案（纯函数）；界面文字取自 `messages`，
+/// 账户名、发件人、主题与摘要原样使用。
 pub fn compose(
+    messages: &maild_l10n::Messages,
     cfg: &RulesConfig,
     msg: &MailMessage,
     admission: Admission,
 ) -> Option<MailNotification> {
+    let text = &messages.notifications;
     match admission {
         Admission::Suppressed => None,
         Admission::Summary => Some(MailNotification {
-            title: MASKED_TITLE.into(),
-            body: format!("账户 {} 收到多封新邮件", msg.account),
+            title: text.new_mail_title.into(),
+            body: (text.new_mail_burst_body)(&msg.account),
             target: OpenIntent::Inbox {
                 account: Some(msg.account.clone()),
             },
@@ -253,14 +255,14 @@ pub fn compose(
             };
             if !cfg.show_sensitive {
                 return Some(MailNotification {
-                    title: MASKED_TITLE.into(),
-                    body: format!("账户 {} 收到一封新邮件", msg.account),
+                    title: text.new_mail_title.into(),
+                    body: (text.new_mail_masked_body)(&msg.account),
                     target,
                 });
             }
             let subject = msg.subject.trim();
             let subject = if subject.is_empty() {
-                "（无主题）"
+                text.no_subject
             } else {
                 subject
             };
@@ -324,6 +326,91 @@ fn unix_now_secs() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sample(subject: &str) -> MailMessage {
+        MailMessage {
+            account: "personal".into(),
+            uid: "7".into(),
+            sender: "\"张三\" <z@s.cn>".into(),
+            subject: subject.into(),
+            snippet: "摘要".into(),
+            folder: "INBOX".into(),
+            ..Default::default()
+        }
+    }
+
+    fn texts(
+        messages: &maild_l10n::Messages,
+        cfg: &RulesConfig,
+        msg: &MailMessage,
+    ) -> [(String, String); 2] {
+        [Admission::Summary, Admission::Single].map(|admission| {
+            let notification = compose(messages, cfg, msg, admission).expect("应成文");
+            (notification.title, notification.body)
+        })
+    }
+
+    #[test]
+    fn compose_masked_text_follows_locale() {
+        let cfg = RulesConfig {
+            notify_new_mail: true,
+            show_sensitive: false,
+            ..RulesConfig::default()
+        };
+        let msg = sample("周报");
+        // 简体中文与迁移前逐字节一致。
+        assert_eq!(
+            texts(&maild_l10n::ZH_HANS, &cfg, &msg),
+            [
+                ("新邮件".into(), "账户 personal 收到多封新邮件".into()),
+                ("新邮件".into(), "账户 personal 收到一封新邮件".into()),
+            ]
+        );
+        assert_eq!(
+            texts(&maild_l10n::EN, &cfg, &msg),
+            [
+                (
+                    "New Mail".into(),
+                    "Several new messages arrived in personal".into()
+                ),
+                (
+                    "New Mail".into(),
+                    "A new message arrived in personal".into()
+                ),
+            ]
+        );
+        assert_eq!(
+            compose(&maild_l10n::EN, &cfg, &msg, Admission::Suppressed),
+            None
+        );
+    }
+
+    #[test]
+    fn compose_sensitive_text_keeps_user_data_and_localizes_placeholder() {
+        let cfg = RulesConfig {
+            notify_new_mail: true,
+            show_sensitive: true,
+            ..RulesConfig::default()
+        };
+        for messages in [&maild_l10n::ZH_HANS, &maild_l10n::EN] {
+            let single = compose(messages, &cfg, &sample("周报"), Admission::Single).unwrap();
+            assert_eq!(single.title, "张三");
+            assert_eq!(single.body, "周报\n摘要");
+        }
+        let untitled = sample("  ");
+        assert_eq!(
+            compose(&maild_l10n::ZH_HANS, &cfg, &untitled, Admission::Single)
+                .unwrap()
+                .body,
+            "（无主题）\n摘要"
+        );
+        assert_eq!(
+            compose(&maild_l10n::EN, &cfg, &untitled, Admission::Single)
+                .unwrap()
+                .body,
+            "(No Subject)\n摘要"
+        );
+    }
 
     #[test]
     fn limiter_allows_three_then_one_summary_per_window() {

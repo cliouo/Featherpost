@@ -19,6 +19,7 @@ maild-brand = { path = "../maild-brand" }
 clap = { version = "4", features = ["derive"] }
 maild = { path = "../maild" }
 maild-client = { path = "../maild-client" }
+maild-l10n = { path = "../maild-l10n" }
 maild-paths = { path = "../maild-paths" }
 rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "tokio"] }
 serde_json = "1"

@@ -5,6 +5,7 @@
 //! a third-party default is handed to the Agent; otherwise it shows the native recovery window.
 //! AppKit is only initialised when a native dialog is actually shown.
 mod bootstrap;
+mod l10n;
 mod platform;
 mod runtime;
 mod ui;
@@ -105,12 +106,12 @@ fn host_in_place(exe: &std::path::Path) -> Result<(), &'static str> {
     {
         use std::os::unix::process::CommandExt as _;
         let _error = maild_client::native_child_command(exe).exec();
-        Err("无法打开邮件窗口")
+        Err(l10n::text().error_open_mail_window_failed)
     }
     #[cfg(not(unix))]
     {
         let _ = exe;
-        Err("当前平台不支持原位打开邮件窗口")
+        Err(l10n::text().error_in_place_unsupported)
     }
 }
 

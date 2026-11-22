@@ -53,9 +53,10 @@ pub struct OtpConfig {
     /// 提取正则（默认 6 位数字，首字符即验证码）。
     #[serde(default = "default_pattern")]
     pub pattern: String,
-    /// 通知标题。
-    #[serde(default = "default_title")]
-    pub title: String,
+    /// 用户自定义的通知标题。缺省（`None`）= 用当前语言的内核文案 `otp_title`（ADR-0048 决策 6），
+    /// 见 [`OtpConfig::custom_title`]。
+    #[serde(default)]
+    pub title: Option<String>,
 }
 
 /// 出厂默认 pattern。等于它时 [`OtpPlugin`] 改用上下文感知的 [`extract_smart_otp`]。
@@ -65,21 +66,46 @@ fn default_pattern() -> String {
     DEFAULT_PATTERN.into()
 }
 
-fn default_title() -> String {
-    "验证码".into()
-}
+/// 本地化之前的出厂标题。旧版启动器首启模板与旧配置升级会把它写进 `config.toml`，
+/// 所以配置里恰好等于它时视为「未自定义」，同样跟随界面语言。
+pub const LEGACY_DEFAULT_TITLE: &str = "验证码";
 
 impl Default for OtpConfig {
     /// 与 serde 默认值一致（防 `Default`/反序列化两条路径漂移）。
     fn default() -> Self {
         OtpConfig {
             pattern: default_pattern(),
-            title: default_title(),
+            title: None,
         }
     }
 }
 
 impl OtpConfig {
+    /// 用户真正自定义过的标题；`None` 表示用本地化的 `otp_title`。
+    ///
+    /// 未配置，或配置值恰好等于 [`LEGACY_DEFAULT_TITLE`]（旧版写入的出厂值）都算未自定义；
+    /// 其余用户写的标题原样使用。
+    pub fn custom_title(&self) -> Option<&str> {
+        self.title
+            .as_deref()
+            .filter(|title| *title != LEGACY_DEFAULT_TITLE)
+    }
+
+    /// 按 `messages` 成文的通知标题与正文（纯函数，不读偏好）。
+    pub fn notification_text(
+        &self,
+        messages: &maild_l10n::Messages,
+        hit: &OtpHit,
+    ) -> (String, String) {
+        let notifications = &messages.notifications;
+        let title = self
+            .custom_title()
+            .unwrap_or(notifications.otp_title)
+            .to_string();
+        let body = (notifications.otp_body)(&hit.code, &hit.account, &hit.from);
+        (title, body)
+    }
+
     /// 是否仍是出厂默认 pattern（→ 走 [`extract_smart_otp`]，ADR-0043）。
     pub fn uses_smart_default(&self) -> bool {
         self.pattern == DEFAULT_PATTERN
@@ -204,9 +230,12 @@ impl Plugin for OtpPlugin {
                 return;
             }
             if let Some(n) = ctx2.get::<Notifier>() {
+                // 成文时读偏好：切换语言后下一条验证码通知即跟随（ADR-0048 决策 6）。
+                let (title, body) =
+                    cfg.notification_text(crate::notify::kernel_messages(&ctx2), &hit);
                 n.notify_with_target(
-                    &cfg.title,
-                    &format!("{}（{} · 来自 {}）", hit.code, hit.account, hit.from),
+                    &title,
+                    &body,
                     Some(OpenIntent::Message {
                         folder: (!msg.folder.is_empty()).then(|| msg.folder.clone()),
                         account: hit.account.clone(),
@@ -546,6 +575,60 @@ fn preceded_by_western_date_or_copyright(text: &[char], start: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn hit() -> OtpHit {
+        OtpHit {
+            code: "246810".into(),
+            from: "noreply@example.com".into(),
+            subject: "登录验证码".into(),
+            account: "personal".into(),
+            uid: "9".into(),
+        }
+    }
+
+    fn config(toml_text: &str) -> OtpConfig {
+        toml::from_str(toml_text).expect("合法 otp 配置")
+    }
+
+    #[test]
+    fn notification_text_follows_locale_when_title_is_not_customised() {
+        // 未配置 title，以及旧版写进 config.toml 的出厂值「验证码」，都跟随界面语言。
+        for cfg in [
+            OtpConfig::default(),
+            config(""),
+            config("title = \"验证码\"\n"),
+        ] {
+            assert_eq!(cfg.custom_title(), None, "{:?}", cfg.title);
+            assert_eq!(
+                cfg.notification_text(&maild_l10n::ZH_HANS, &hit()),
+                (
+                    "验证码".to_string(),
+                    "246810（personal · 来自 noreply@example.com）".to_string()
+                )
+            );
+            assert_eq!(
+                cfg.notification_text(&maild_l10n::EN, &hit()),
+                (
+                    maild_l10n::EN.notifications.otp_title.to_string(),
+                    "246810 (personal · from noreply@example.com)".to_string()
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn user_written_otp_title_is_kept_verbatim_in_every_locale() {
+        let cfg = config("title = \"Login code\"\n");
+        assert_eq!(cfg.custom_title(), Some("Login code"));
+        for messages in [&maild_l10n::ZH_HANS, &maild_l10n::EN] {
+            assert_eq!(cfg.notification_text(messages, &hit()).0, "Login code");
+        }
+        // 只有逐字节等于旧出厂值才算未自定义。
+        assert_eq!(
+            config("title = \" 验证码\"\n").custom_title(),
+            Some(" 验证码")
+        );
+    }
 
     #[test]
     fn excludes_western_dates_copyright_and_euro_pound_amounts_but_keeps_mmddyyyy() {
