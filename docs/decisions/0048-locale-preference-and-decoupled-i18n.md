@@ -216,6 +216,32 @@ description = "..."
 >   `maild-l10n` 的协商函数应采用同一规则。
 > - `UI_LOCALE` 常量换成函数 `uiLocale()`（`maild-ui/src/i18n.ts`），每次调用返回当前协商结果。
 
+> 实现记录（L3 后半，壳与默认前端接线）：
+>
+> - 数据通路：daemon → `maild-client` 的 `ServerNotification::LocalePreference { effective }`（新增的类型化
+>   变体，取代决策 2 L1 记录里「经 `Unknown` 送达」的过渡做法）→ `maild-app` actor 的 `ViewState.locale` →
+>   Tauri 壳状态泵在列表变化时发 `maild://locale`（载荷 `{effective}`）→ `bridge/tauri.ts` 调
+>   `applyEffectiveLocales`。启动值经 `ui_locale` 取壳手里的缓存，不发请求；推送先到则不再用启动值。
+> - actor 在每次（重）连接与刷新的快照里多发一个 `getLocalePreference`，推送即时生效且优先于同一轮快照里
+>   更早的应答。**偏差**：老 daemon 对前端主体不会回 `-32601`——未登记方法对插件主体 fail-closed，回的是
+>   `-32016`；所以读偏好时 `-32601` 与 `-32016` 都按「后台不提供」处理，`locale` 为 `None`，界面停在
+>   `zh-CN`。超时等其他失败保留上一次的值，也不记为部分快照。HTTP 会话（恒为 user、无推送）不取偏好。
+> - 桥命令：`ui_locale`、`ui_locale_preference`、`ui_set_locale_preference`（`settings_write`；两个默认前端
+>   经 `settings` 路由已有），三处清单（`build.rs`、`capabilities/main.json`、`generate_handler!`）同步登记。
+> - 决策 3 在壳内的落实：桥的 `UiError` 增加稳定 `reason`，webview 按它用当前界面语言成文
+>   （`bridge/reasons.ts`，前端测试核对 Rust 侧每个 `reason` 都有映射）；中文 `message` 只作诊断兜底，
+>   不认识的 `reason` 显示通用提示。
+> - 原生菜单：状态泵用 `maild_l10n::negotiate` 协商（与 webview 同一规则），结果变化时在主线程重建并替换
+>   菜单——中文按原对照表改写 Tauri 默认菜单，英文直接用 Tauri 默认标签。**偏差**：此前只有 Studio 形态
+>   本地化菜单，默认 UI 形态恒为英文；现在两种形态都跟随偏好。
+> - 设置 → 外观（两个前端）：跟随系统 / 简体中文 / English。语言名用其自身语言书写，作为两种语言值相同的
+>   消息（`common_language_native_*`）。选显式语言整包替换为这一种（`["zh-Hans"]` / `["en"]`）；别处写入的
+>   其他列表显示为只读的「自定义」项，不替用户改写。写入成功后按应答立即切换，不等推送。
+> - 内置贡献（命令、视图、设置分区、模块与可选模块）的标题都写成 getter，切换语言后重新成文；Studio 设置页
+>   按 ID 查标题的过渡表随之删除。第三方贡献沿用其登记的标题。
+> - 已知限制：webview 首帧在启动值返回前按 `zh-CN` 渲染，英文用户可能看到一瞬中文；`identity_failure`、
+>   账户 `detail` 等由 actor/daemon 成文的状态文本仍是中文。
+
 ## 交付切片
 
 | 切片 | 内容 | 可独立验收 |
