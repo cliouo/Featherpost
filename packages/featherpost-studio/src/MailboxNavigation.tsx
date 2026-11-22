@@ -1,4 +1,5 @@
-import { folderLabel, uiLocale } from "../../maild-ui/src/i18n";
+import { m } from "@featherpost/i18n/messages";
+import { folderLabel, uiLocale, useUiLocale } from "../../maild-ui/src/i18n";
 import { Choice } from "../../maild-ui/src/settings/Choice";
 import {
   useEffect,
@@ -32,6 +33,13 @@ export interface NavigationHandle {
 }
 type Navigate = (action: () => void) => Promise<void>;
 
+/** 「N 个邮箱」：按当前界面语言的复数类别选消息（中文只有 other）。 */
+function mailboxCount(count: number): string {
+  return new Intl.PluralRules(uiLocale()).select(count) === "one"
+    ? m.studio_mailbox_count_one({ count })
+    : m.studio_mailbox_count_other({ count });
+}
+
 export function MailboxNavigation({
   mailbox,
   view,
@@ -51,6 +59,7 @@ export function MailboxNavigation({
   folders(account: string, filter: string): ReactNode;
   setup(): void;
 }) {
+  useUiLocale();
   const mail = useStore(mailbox.store);
   const ids = useMemo(
     () => mail.snapshot.accounts.map((a) => a.account),
@@ -182,13 +191,16 @@ export function MailboxNavigation({
       <Icon name="search" />
       <input
         ref={input}
-        aria-label="筛选账户或文件夹"
-        placeholder="查找邮箱名称或地址"
+        aria-label={m.studio_nav_filter_label()}
+        placeholder={m.studio_nav_filter_placeholder()}
         value={filter}
         onChange={(e) => setFilter(e.target.value)}
       />
       {filter ? (
-        <button aria-label="清除账户筛选" onClick={() => setFilter("")}>
+        <button
+          aria-label={m.studio_nav_filter_clear()}
+          onClick={() => setFilter("")}
+        >
           ×
         </button>
       ) : (
@@ -199,9 +211,9 @@ export function MailboxNavigation({
   const directoryGroups = (
     <>
       <div className="section-label account-label">
-        <span>邮箱 · {ids.length}</span>
+        <span>{m.studio_nav_mailboxes_count({ count: ids.length })}</span>
         <button className="group-manage" onClick={() => setManage(true)}>
-          分组
+          {m.studio_nav_groups()}
         </button>
       </div>
       {groupAccounts(ids, grouping).map((group) => {
@@ -213,7 +225,7 @@ export function MailboxNavigation({
           <section
             className="mailbox-group"
             key={group.id}
-            aria-label={`${group.name}分组`}
+            aria-label={m.studio_nav_group_label({ group: group.name })}
           >
             <button
               className="group-toggle"
@@ -231,8 +243,11 @@ export function MailboxNavigation({
                 ⌄
               </span>
               <strong>{group.name}</strong>
-              <small>{group.accounts.length} 个邮箱</small>
-              <span className="group-count" aria-label={`${total} 封未读`}>
+              <small>{mailboxCount(group.accounts.length)}</small>
+              <span
+                className="group-count"
+                aria-label={m.studio_nav_group_unread({ count: total })}
+              >
                 {total || ""}
               </span>
             </button>
@@ -272,20 +287,20 @@ export function MailboxNavigation({
                         folders(id, accountMatches(id) ? "" : needle)
                       ) : (
                         <p className="nav-no-results">
-                          尚未获取文件夹，请检查账户连接
+                          {m.studio_nav_folders_missing_check()}
                         </p>
                       ))}
                   </div>
                 );
               })}
             {open && !visible.length && (
-              <p className="empty-group">暂无邮箱，在「分组」中添加</p>
+              <p className="empty-group">{m.studio_nav_group_empty()}</p>
             )}
           </section>
         );
       })}
       {needle && !ids.some(matching) && (
-        <p className="nav-no-results">没有匹配的账户或文件夹</p>
+        <p className="nav-no-results">{m.studio_nav_no_matches()}</p>
       )}
     </>
   );
@@ -308,24 +323,28 @@ export function MailboxNavigation({
         >
           <summary>
             <Icon name="folder" />
-            <strong>账户目录 · {ids.length}</strong>
+            <strong>
+              {m.studio_nav_directory_title({ count: ids.length })}
+            </strong>
             <span>⌄</span>
           </summary>
-          <p>查找邮箱，进入单个邮箱</p>
+          <p>{m.studio_nav_directory_hint()}</p>
           <div className="directory-body">
             {search}
             {directoryGroups}
           </div>
         </details>
       )}
-      <div className="section-label">{unified ? "统一收件" : "快捷访问"}</div>
-      <nav className="smart-folders" aria-label="快捷访问">
+      <div className="section-label">
+        {unified ? m.studio_nav_section_unified() : m.studio_nav_section_quick()}
+      </div>
+      <nav className="smart-folders" aria-label={m.studio_nav_section_quick()}>
         <button
           className={`side-link ${active && globalInbox && (!unified || !inboxUnread) ? "is-active" : ""}`}
           onClick={() => void navigate(() => mailbox.selectSmart("inbox"))}
         >
           <Icon name="inbox" />
-          <span>全部收件箱</span>
+          <span>{m.studio_nav_all_inboxes()}</span>
           <small>{unread || ""}</small>
         </button>
         <button
@@ -333,7 +352,7 @@ export function MailboxNavigation({
           onClick={() => void navigate(() => mailbox.selectSmart("starred"))}
         >
           <Icon name="star" />
-          <span>星标邮件</span>
+          <span>{m.studio_nav_starred()}</span>
         </button>
         {unified && (
           <button
@@ -346,7 +365,7 @@ export function MailboxNavigation({
             }
           >
             <Icon name="inbox" />
-            <span>未读邮件</span>
+            <span>{m.studio_nav_unread()}</span>
             <small>{unread || ""}</small>
           </button>
         )}
@@ -358,11 +377,14 @@ export function MailboxNavigation({
         </>
       )}
       {unified && (
-        <section className="group-filters" aria-label="按账户组筛选">
+        <section
+          className="group-filters"
+          aria-label={m.studio_nav_group_filter()}
+        >
           <div className="section-label account-label">
-            <span>按账户组筛选</span>
+            <span>{m.studio_nav_group_filter()}</span>
             <button className="group-manage" onClick={() => setManage(true)}>
-              管理
+              {m.studio_nav_group_manage()}
             </button>
           </div>
           <div>
@@ -386,10 +408,12 @@ export function MailboxNavigation({
       {unified && focused && (
         <section
           className="focused-mailbox"
-          aria-label="当前邮件的账户和文件夹"
+          aria-label={m.studio_nav_focused_label()}
         >
           <div className="section-label">
-            {mail.selectedRow ? "选中邮件的邮箱" : "当前邮箱"}
+            {mail.selectedRow
+              ? m.studio_nav_focused_selected()
+              : m.studio_nav_focused_current()}
           </div>
           <div className="focused-identity">
             <strong>{label(focused)}</strong>
@@ -397,27 +421,33 @@ export function MailboxNavigation({
           </div>
           {mail.selectedRow && (
             <p className="message-folder-context">
-              所在文件夹 ·{" "}
-              {folderLabel(mailbox.foldersOf(focused).find((f) => f.name === mail.selectedRow!.folder), mail.selectedRow.folder)}
+              {m.studio_nav_message_folder({
+                folder: folderLabel(
+                  mailbox
+                    .foldersOf(focused)
+                    .find((f) => f.name === mail.selectedRow!.folder),
+                  mail.selectedRow.folder,
+                ),
+              })}
             </p>
           )}
           {folders(focused, "")}
           {!mailbox.foldersOf(focused).some((f) => f.present) && (
-            <p className="nav-no-results">尚未获取文件夹</p>
+            <p className="nav-no-results">{m.studio_nav_folders_missing()}</p>
           )}
           {mail.selectedRow && (
-            <p className="reply-context">回复使用此邮件的邮箱身份</p>
+            <p className="reply-context">{m.studio_nav_reply_identity()}</p>
           )}
         </section>
       )}
       {unified && !focused && ids.length > 0 && (
-        <p className="reply-context">选中一封邮件，查看所属邮箱与文件夹</p>
+        <p className="reply-context">{m.studio_nav_select_hint()}</p>
       )}
       {!ids.length && (
         <div className="sidebar-empty">
-          还没有连接邮箱
+          {m.studio_nav_empty()}
           <button className="text-button" onClick={setup}>
-            添加账户
+            {m.studio_account_add()}
           </button>
         </div>
       )}
@@ -450,6 +480,7 @@ function GroupManager({
   change(update: (g: Grouping) => Grouping): void;
   close(): void;
 }) {
+  useUiLocale();
   const [editing, setEditing] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [error, setError] = useState("");
@@ -464,13 +495,13 @@ function GroupManager({
       setEditing(null);
       setError("");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "分组名称无效");
+      setError(e instanceof Error ? e.message : m.studio_group_error_invalid());
     }
   }
   return (
-    <Dialog title="管理邮箱分组" onClose={close}>
+    <Dialog title={m.studio_group_manager_title()} onClose={close}>
       <div className="group-manager">
-        <p>分组仅整理此设备的导航，不会移动邮件或修改服务器文件夹。</p>
+        <p>{m.studio_group_manager_intro()}</p>
         <form
           className="group-name-form"
           onSubmit={(e) => {
@@ -479,12 +510,14 @@ function GroupManager({
           }}
         >
           <label>
-            {editing ? "重命名分组" : "新建分组"}
+            {editing
+              ? m.studio_group_rename_heading()
+              : m.studio_group_new_heading()}
             <input
-              aria-label="分组名称"
+              aria-label={m.studio_group_name_label()}
               value={name}
               maxLength={40}
-              placeholder="例如：工作、项目、家人"
+              placeholder={m.studio_group_name_placeholder()}
               onChange={(e) => {
                 setName(e.target.value);
                 setError("");
@@ -492,7 +525,7 @@ function GroupManager({
             />
           </label>
           <button className="primary" disabled={!name.trim()}>
-            {editing ? "保存名称" : "新建"}
+            {editing ? m.studio_group_save_name() : m.studio_group_create()}
           </button>
           {editing && (
             <button
@@ -502,7 +535,7 @@ function GroupManager({
                 setName("");
               }}
             >
-              取消
+              {m.studio_group_cancel()}
             </button>
           )}
         </form>
@@ -522,11 +555,11 @@ function GroupManager({
                   setError("");
                 }}
               >
-                重命名
+                {m.studio_group_rename()}
               </button>
               {g.id !== OTHER_GROUP && (
                 <button
-                  title="只删除分组，邮箱移到其他；不会删除账户或邮件"
+                  title={m.studio_group_delete_hint()}
                   onClick={() => {
                     change((previous) => removeGroup(previous, g.id));
                     if (editing === g.id) {
@@ -535,13 +568,13 @@ function GroupManager({
                     }
                   }}
                 >
-                  删除分组
+                  {m.studio_group_delete()}
                 </button>
               )}
             </div>
           ))}
         </div>
-        <h3>邮箱归属</h3>
+        <h3>{m.studio_group_assignment_heading()}</h3>
         {accounts.map((id) => (
           <label className="mailbox-assignment" key={id}>
             <span>
@@ -549,7 +582,7 @@ function GroupManager({
               <small>{address(id)}</small>
             </span>
             <Choice
-              aria-label={`${label(id)}的分组`}
+              aria-label={m.studio_group_assignment_label({ mailbox: label(id) })}
               value={grouping.assignments[id] ?? OTHER_GROUP}
               onValueChange={(group) => {
                 change((previous) => ({

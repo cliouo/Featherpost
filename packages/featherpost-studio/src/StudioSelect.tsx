@@ -1,3 +1,5 @@
+import { m } from "@featherpost/i18n/messages";
+import { useUiLocale } from "@featherpost/i18n/react";
 import * as Select from "@radix-ui/react-select";
 import { Children, Fragment, isValidElement, useEffect, useState, type ReactNode } from "react";
 import type { ChoiceProps } from "../../maild-ui/src/settings/Choice";
@@ -19,6 +21,7 @@ function optionsOf(children: ReactNode): Option[] {
 
 /** Radix owns focus, typeahead, keyboard selection, dismissal and popup collision handling. */
 export function StudioSelect({ value, onValueChange, children, disabled, className, ...label }: ChoiceProps) {
+  useUiLocale();
   const items = optionsOf(children);
   const selected = items.findIndex((item) => item.value === value);
   const [open, setOpen] = useState(false);
@@ -50,14 +53,14 @@ export function StudioSelect({ value, onValueChange, children, disabled, classNa
       }}>
       <Select.Trigger {...label} ref={setTrigger} aria-disabled={disabled || undefined}
         data-disabled={disabled ? "" : undefined} className={`studio-picker ${className ?? ""}`}>
-        <Select.Value placeholder="请选择">{items[selected]?.label ?? "请选择"}</Select.Value>
+        <Select.Value placeholder={m.studio_select_placeholder()}>{items[selected]?.label ?? m.studio_select_placeholder()}</Select.Value>
         <Select.Icon className="studio-picker-chevron">
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="m4 6 4 4 4-4" /></svg>
         </Select.Icon>
       </Select.Trigger>
       <Select.Portal container={container}>
         <Select.Content className="studio-picker-menu" position="popper" sideOffset={6} collisionPadding={12}>
-          <Select.ScrollUpButton className="studio-picker-scroll" aria-label="向上滚动">⌃</Select.ScrollUpButton>
+          <Select.ScrollUpButton className="studio-picker-scroll" aria-label={m.studio_select_scroll_up()}>⌃</Select.ScrollUpButton>
           <Select.Viewport className="studio-picker-options">
             {items.map((item) => (
               <Select.Item className="studio-picker-option" key={item.value} value={keyOf(item.value)} disabled={item.disabled} textValue={item.text}>
@@ -66,7 +69,7 @@ export function StudioSelect({ value, onValueChange, children, disabled, classNa
               </Select.Item>
             ))}
           </Select.Viewport>
-          <Select.ScrollDownButton className="studio-picker-scroll" aria-label="向下滚动">⌄</Select.ScrollDownButton>
+          <Select.ScrollDownButton className="studio-picker-scroll" aria-label={m.studio_select_scroll_down()}>⌄</Select.ScrollDownButton>
         </Select.Content>
       </Select.Portal>
     </Select.Root>

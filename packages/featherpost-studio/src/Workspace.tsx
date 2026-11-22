@@ -1,6 +1,8 @@
+import { m } from "@featherpost/i18n/messages";
 import { Fragment, useEffect } from "react";
 import type { Host } from "../../maild-ui/src/host/host";
 import { useStore } from "../../maild-ui/src/host/hooks";
+import { uiLocale, useUiLocale } from "../../maild-ui/src/i18n";
 import { Icon } from "../../maild-ui/src/app/Icon";
 import {
   messageKey,
@@ -27,6 +29,7 @@ export function Workspace({
   composer: ComposeController;
   setup(): void;
 }) {
+  useUiLocale();
   const s = useStore(controller.store);
   const context = scopeContext(controller);
   const searching = s.scope.kind === "search" && !!s.scope.query.query?.trim();
@@ -34,7 +37,7 @@ export function Workspace({
     s.scope.kind === "unread" ||
     (s.scope.kind === "smart" && s.scope.name === "unread");
   const folderUnread = context.folder?.unseen;
-  const title = searching ? "搜索结果" : context.name;
+  const title = searching ? m.studio_list_search_results() : context.name;
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       if (
@@ -63,8 +66,12 @@ export function Workspace({
   }, [controller]);
   const day = (at: number) =>
     new Date(at * 1000).toDateString() === new Date().toDateString()
-      ? "今天"
-      : "更早";
+      ? m.studio_list_day_today()
+      : m.studio_list_day_earlier();
+  const total = (count: number) =>
+    new Intl.PluralRules(uiLocale()).select(count) === "one"
+      ? m.studio_list_total_one({ count })
+      : m.studio_list_total_other({ count });
   return (
     <section className="mail-view">
       {s.syncError && (
@@ -79,13 +86,15 @@ export function Workspace({
       <div
         className={`mail-columns ${s.selected ? "has-selection" : ""} ${s.snapshot.phase === "online" && !s.snapshot.accounts.length ? "is-onboarding" : ""}`}
       >
-        <section className="message-column" aria-label="邮件列表">
+        <section className="message-column" aria-label={m.studio_list_label()}>
           <header className="list-heading">
             <div className="breadcrumb">
               {context.account
                 ? controller.label(context.account)
                 : (context.group ??
-                  (context.accounts ? "所选分组" : "全部账户"))}
+                  (context.accounts
+                    ? m.studio_scope_selected_group()
+                    : m.studio_scope_all_accounts()))}
               <span>›</span>
               {context.name}
             </div>
@@ -99,29 +108,29 @@ export function Workspace({
                   className="search-return text-button"
                   onClick={() => controller.exitSearch()}
                 >
-                  返回原邮件列表
+                  {m.studio_list_exit_search()}
                 </button>
               ) : (
-                <div className="filter-tabs" aria-label="邮件筛选">
+                <div className="filter-tabs" aria-label={m.studio_list_filter_label()}>
                   <button
                     className={!unread ? "selected" : ""}
                     aria-pressed={!unread}
                     onClick={() => filterUnread(controller, false)}
                   >
-                    全部
+                    {m.studio_list_filter_all()}
                   </button>
                   <button
                     className={unread ? "selected" : ""}
                     aria-pressed={unread}
                     onClick={() => filterUnread(controller, true)}
                   >
-                    未读
+                    {m.studio_list_filter_unread()}
                     {folderUnread !== undefined && <span>{folderUnread}</span>}
                   </button>
                 </div>
               )}
-              <span className="list-order" title="按邮件时间从新到旧排列">
-                最新优先
+              <span className="list-order" title={m.studio_list_order_title()}>
+                {m.studio_list_order()}
               </span>
             </div>
           </header>
@@ -133,7 +142,7 @@ export function Workspace({
                   className="text-button"
                   onClick={() => void controller.refresh()}
                 >
-                  重试
+                  {m.studio_list_retry()}
                 </button>
               </div>
             )}
@@ -144,7 +153,7 @@ export function Workspace({
             )}
             {s.loadingRows && !s.rows.length && (
               <div className="loading-mail" role="status">
-                正在读取邮件…
+                {m.studio_list_loading()}
               </div>
             )}
             {!s.loadingRows && !s.rows.length && (
@@ -152,22 +161,22 @@ export function Workspace({
                 <Icon name="inbox" />
                 <h2>
                   {searching
-                    ? "没有找到邮件"
+                    ? m.studio_list_empty_search()
                     : unread
-                      ? "没有未读邮件"
-                      : "这里暂时没有邮件"}
+                      ? m.studio_list_empty_unread()
+                      : m.studio_list_empty()}
                 </h2>
                 <p>
                   {searching
-                    ? "试试其他关键词或搜索范围"
-                    : "同步后的邮件会显示在这里"}
+                    ? m.studio_list_empty_search_hint()
+                    : m.studio_list_empty_hint()}
                 </p>
                 {searching && controller.canSearchServer && (
                   <button
                     className="text-button"
                     onClick={() => void controller.searchServer()}
                   >
-                    搜索服务器历史邮件
+                    {m.studio_list_search_server()}
                   </button>
                 )}
               </div>
@@ -191,7 +200,11 @@ export function Workspace({
                     <input
                       className="row-check"
                       type="checkbox"
-                      aria-label={`选择 ${row.subject || "无主题邮件"}`}
+                      aria-label={
+                        row.subject
+                          ? m.studio_list_select({ subject: row.subject })
+                          : m.studio_list_select_untitled()
+                      }
                       checked={checked}
                       onChange={() => controller.toggle(row)}
                     />
@@ -214,7 +227,7 @@ export function Workspace({
                       </span>
                       <span className="row-bottom">
                         <span className="row-subject">
-                          {row.subject || "（无主题）"}
+                          {row.subject || m.studio_message_no_subject()}
                         </span>
                         <span className="row-snippet">{row.snippet}</span>
                         <span className="row-extras">
@@ -234,7 +247,7 @@ export function Workspace({
                 disabled={s.loadingRows}
                 onClick={() => void controller.loadMore()}
               >
-                加载更多邮件
+                {m.studio_list_load_more()}
               </button>
             )}
             {searching && s.rows.length > 0 && controller.canSearchServer && (
@@ -243,7 +256,7 @@ export function Workspace({
                 disabled={s.remote.status === "loading"}
                 onClick={() => void controller.searchServer()}
               >
-                搜索服务器历史邮件
+                {m.studio_list_search_server()}
               </button>
             )}
             {s.remote.error && (
@@ -253,14 +266,14 @@ export function Workspace({
             )}
             {s.remote.rows.length > 0 && (
               <>
-                <p className="date-group">服务器历史</p>
+                <p className="date-group">{m.studio_list_server_history()}</p>
                 {s.remote.rows.map((row) => (
                   <button
                     className="remote-row"
                     key={messageKey(row)}
                     onClick={() => controller.openRemote(row)}
                   >
-                    <strong>{row.subject || "（无主题）"}</strong>
+                    <strong>{row.subject || m.studio_message_no_subject()}</strong>
                     <span>
                       {row.sender} · {controller.label(row.account)}
                     </span>
@@ -271,23 +284,23 @@ export function Workspace({
           </div>
           <footer className="list-footer">
             <span>
-              {s.loadingRows ? "正在更新…" : `${s.total} 封邮件`}
-              {unread ? " · 未读" : ""}
+              {s.loadingRows ? m.studio_list_updating() : total(s.total)}
+              {unread ? ` · ${m.studio_list_footer_unread()}` : ""}
             </span>
-            <span>↑ ↓ 切换</span>
+            <span>{m.studio_list_keyboard_hint()}</span>
           </footer>
         </section>
         {s.snapshot.phase === "online" && !s.snapshot.accounts.length ? (
           <section className="reader-column welcome-studio">
             <Icon name="inbox" />
-            <h2>连接你的第一个邮箱</h2>
+            <h2>{m.studio_welcome_title()}</h2>
             <p>
-              账户、邮件与草稿保存在本机
+              {m.studio_welcome_local()}
               <br />
-              支持 IMAP / SMTP 与邮件服务插件
+              {m.studio_welcome_protocols()}
             </p>
             <button className="primary-button" onClick={setup}>
-              添加邮箱账户
+              {m.studio_account_add_mailbox()}
             </button>
           </section>
         ) : (

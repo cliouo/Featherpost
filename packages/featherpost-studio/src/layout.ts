@@ -1,3 +1,4 @@
+import { m } from "@featherpost/i18n/messages";
 import {
   queryOf,
   type MailboxState,
@@ -50,11 +51,15 @@ export interface Grouping {
 }
 const GROUP_KEY = "featherpost.studio.mailbox-groups";
 
+/**
+ * 默认分组名在创建时按当前界面语言取一次，之后与用户自起的名字一样存入本机、可重命名，
+ * 不随语言切换改写（它们已是用户数据）。
+ */
 export function createGrouping(accounts: readonly string[]): Grouping {
   return {
     groups: [
-      { id: "frequent", name: "常用" },
-      { id: OTHER_GROUP, name: "其他" },
+      { id: "frequent", name: m.studio_group_default_frequent() },
+      { id: OTHER_GROUP, name: m.studio_group_default_other() },
     ],
     assignments: Object.fromEntries(
       accounts.slice(0, 3).map((id) => [id, "frequent"]),
@@ -92,7 +97,7 @@ export function readGrouping(storage?: ViewStorage): Grouping | null {
     }
     if (!ids.has(OTHER_GROUP)) {
       ids.add(OTHER_GROUP);
-      groups.push({ id: OTHER_GROUP, name: "其他" });
+      groups.push({ id: OTHER_GROUP, name: m.studio_group_default_other() });
     }
     const raw =
       "assignments" in data &&
@@ -142,14 +147,14 @@ export function namedGroup(
   name: string,
 ): Grouping {
   const clean = name.trim();
-  if (!clean || clean.length > 40) throw new Error("分组名称须为 1–40 个字符");
+  if (!clean || clean.length > 40) throw new Error(m.studio_group_error_name_length());
   if (
     grouping.groups.some(
       (g) =>
         g.id !== id && g.name.toLocaleLowerCase() === clean.toLocaleLowerCase(),
     )
   )
-    throw new Error("已有同名分组");
+    throw new Error(m.studio_group_error_name_taken());
   const exists = grouping.groups.some((g) => g.id === id);
   const groups = exists
     ? grouping.groups.map((g) => (g.id === id ? { ...g, name: clean } : g))
