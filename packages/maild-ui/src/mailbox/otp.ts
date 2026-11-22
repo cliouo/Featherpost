@@ -5,10 +5,13 @@
  * 日期（20261117、2026-11-17、Nov 18, 2026、18 November 2026）、版权年份（© 2026）、
  * 长单号、手机号与分组号码、金额、链接里的数字一律不算；MMDDYYYY / DDMMYYYY 不误杀。
  */
+// i18n-lint-allow-cjk: 验证码语境词是内容识别规则（ADR-0048 非目标），与界面语言无关。
 const CONTEXT =
   /验证码|校验码|动态码|动态密码|确认码|安全码|激活码|登录码|认证码|提取码|授权码|一次性密码|口令|\b(?:verification|verify|one[- ]?time|otp\b|passcode|security code|log[- ]?in code|sign[- ]?in code|auth code|confirmation code|pin code|2fa\b|codes?\b|pin\b)/gi;
 /** 「code」前面是这些词时不是验证码语境（邮编、优惠码等）。 */
+// i18n-lint-allow-cjk: 内容识别规则，不是界面文案。
 const NOT_OTP = /(zip|postal|post|area|country|promo|promotion|coupon|discount|invite|invitation|referral|gift|source|error|status|tracking|邮编|区号|优惠|兑换|邀请)\s*$/i;
+// i18n-lint-allow-cjk: 数字后的单位词是内容识别规则，不是界面文案。
 const UNIT_AFTER = /^[ \t\u00a0]*(年|月|日|元|块|美元|人民币|积分|分钟|秒|小时|天|次|件|笔|号|楼|室|%|usd|cny|rmb|eur|gbp|mins?\b|minutes?\b|seconds?\b|hours?\b|days?\b)/i;
 const WESTERN_YEAR_PREFIX_WORDS = new Set([
   "jan",
@@ -133,10 +136,12 @@ function candidates(text: string): Candidate[] {
     // 分组号码 / 日期 / 时间 / 小数：数字经单个分隔符与另一段数字相连。
     if (/\d[-./:, \t]$/.test(before) || /^[-./:, \t]\d/.test(after)) continue;
     // 货币符号（允许同行隔空白）与电话前缀、编号符号。
+    // i18n-lint-allow-cjk: 全角货币与编号符号是内容识别规则。
     if (/[¥￥$€£][ \t\u00a0]*$/.test(beforeCurrency) || /[#+＃][ \t]?$/.test(before)) continue;
     if (value.length === 4) {
       const year = Number(value);
       const nextChar = text[end];
+      // i18n-lint-allow-cjk: 「年」后缀判定年份，是内容识别规则。
       if (
         year >= 1990 &&
         year <= 2099 &&

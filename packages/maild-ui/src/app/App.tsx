@@ -1,3 +1,4 @@
+import { m } from '@featherpost/i18n/messages';
 import { useEffect } from 'react';
 
 import type { UiSnapshot } from '../bridge/types';
@@ -9,18 +10,28 @@ import { Icon } from './Icon';
 import { ErrorBoundary } from './ErrorBoundary';
 import { applyTheme } from './theme';
 import { BRAND } from '../brand';
-import { useUiLocale } from '../i18n';
+import { uiLocale, useUiLocale } from '../i18n';
 
 function connectionLabel(snapshot: UiSnapshot): { text: string; warn: boolean } {
-  if (snapshot.identity_failure) return { text: '前端未注册', warn: true };
-  if (compatBlocksWrites(snapshot)) return { text: '版本不一致，只读', warn: true };
+  if (snapshot.identity_failure) return { text: m.common_app_status_unregistered(), warn: true };
+  if (compatBlocksWrites(snapshot)) return { text: m.common_app_status_read_only(), warn: true };
   if (snapshot.phase === 'online') {
     const offline = snapshot.accounts.filter((account) => account.state !== 'online' && account.state !== 'disabled').length;
-    if (snapshot.accounts.length === 0) return { text: '已连接后台，尚无账户', warn: false };
-    return offline > 0 ? { text: `${offline} 个邮箱离线`, warn: true } : { text: '所有邮箱已连接', warn: false };
+    if (snapshot.accounts.length === 0) return { text: m.common_app_status_no_accounts(), warn: false };
+    if (offline === 0) return { text: m.common_app_status_all_online(), warn: false };
+    const one = new Intl.PluralRules(uiLocale()).select(offline) === 'one';
+    return {
+      text: one
+        ? m.common_app_status_offline_one({ count: offline })
+        : m.common_app_status_offline_other({ count: offline }),
+      warn: true,
+    };
   }
   if (snapshot.phase === 'retry_waiting' && snapshot.retry_in_ms !== null)
-    return { text: `后台连接不可用，${Math.max(1, Math.round(snapshot.retry_in_ms / 1000))} 秒后重试`, warn: true };
+    return {
+      text: m.common_app_status_retrying({ seconds: Math.max(1, Math.round(snapshot.retry_in_ms / 1000)) }),
+      warn: true,
+    };
   return { text: phaseLabel(snapshot.phase), warn: snapshot.phase !== 'synchronizing' };
 }
 
@@ -29,12 +40,12 @@ function IdentityPanel({ snapshot }: { snapshot: UiSnapshot }) {
     <div className="page">
       <div className="page-scroll">
         <div className="page-column identity-panel">
-          <h2>{BRAND.productName} UI 尚未注册为前端包</h2>
-          <p className="page-intro">这个窗口以自己的身份连接后台，而后台还不认识它。它不会退而以完整用户身份运行。</p>
-          <p className="group-note">后台的说法：{snapshot.identity_failure}</p>
-          <p>在终端执行一次：</p>
+          <h2>{m.common_app_identity_title({ product: BRAND.productName })}</h2>
+          <p className="page-intro">{m.common_app_identity_intro()}</p>
+          <p className="group-note">{m.common_app_identity_reason()}{snapshot.identity_failure}</p>
+          <p>{m.common_app_identity_command()}</p>
           <pre className="command">{`${BRAND.cliCtl} plugin install --frontend crates/maild-ui/package`}</pre>
-          <p className="group-note">安装完成后会自动重试连接，不需要重开窗口。</p>
+          <p className="group-note">{m.common_app_identity_retry()}</p>
         </div>
       </div>
     </div>
@@ -45,9 +56,9 @@ function IdentityPanel({ snapshot }: { snapshot: UiSnapshot }) {
 export function compatBanner(snapshot: Pick<UiSnapshot, 'compat'>): string | null {
   switch (snapshot.compat) {
     case 'kernel_outdated':
-      return `后台版本较旧，与当前界面不兼容：可以继续读信，写信、标记和设置修改已暂停。请重新启动后台；若刚回退过 ${BRAND.productName}，请从菜单栏「修复与后台管理…」重装内置界面。`;
+      return m.common_app_compat_kernel_outdated({ product: BRAND.productName });
     case 'app_outdated':
-      return `当前界面版本较旧，与后台不兼容：可以继续读信，写信、标记和设置修改已暂停。请从菜单栏「修复与后台管理…」重装内置界面，或更新 ${BRAND.productName}。`;
+      return m.common_app_compat_app_outdated({ product: BRAND.productName });
     default:
       return null;
   }
@@ -84,7 +95,7 @@ export function App({ host }: { host: Host }) {
 
   return (
     <div className="shell">
-      <a className="skip-link" href="#workspace">跳到工作区</a>
+      <a className="skip-link" href="#workspace">{m.common_app_skip_to_workspace()}</a>
       <aside className="sidebar">
         <div className="brandbar" data-tauri-drag-region="deep">
           <span className="brand">{BRAND.productName}</span>
@@ -104,7 +115,7 @@ export function App({ host }: { host: Host }) {
             <section className="account-group">
               <div className="nav-heading">
                 <Icon name="puzzle" />
-                <span className="account-name">扩展</span>
+                <span className="account-name">{m.common_app_nav_extensions()}</span>
               </div>
               {extensionViews.map(({ value }) => (
                 <button key={value.id} type="button" className={`nav-item${active?.id === value.id ? ' active' : ''}`} aria-current={active?.id === value.id ? 'page' : undefined} onClick={() => host.openView(value.id)}>
@@ -116,14 +127,14 @@ export function App({ host }: { host: Host }) {
           )}
         </div>
         <div className="sidebar-bottom">
-          <button type="button" className="status-button" onClick={() => host.openRole('settings')} title="查看连接状态">
+          <button type="button" className="status-button" onClick={() => host.openRole('settings')} title={m.common_app_status_title()}>
             <span className={`status-dot${status.warn ? ' warn' : ''}`} aria-hidden="true" />
             <span className="status-text">{status.text}</span>
           </button>
           {settings && (
             <button type="button" className={`nav-item${active?.id === settings.id ? ' active' : ''}`} aria-current={active?.id === settings.id ? 'page' : undefined} onClick={() => host.openView(settings.id)}>
               <Icon name="settings" />
-              <span className="nav-text">设置</span>
+              <span className="nav-text">{m.common_app_nav_settings()}</span>
               <kbd>⌘,</kbd>
             </button>
           )}

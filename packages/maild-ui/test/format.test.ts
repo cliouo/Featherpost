@@ -1,3 +1,5 @@
+import { applyEffectiveLocales } from "@featherpost/i18n";
+import { m } from "@featherpost/i18n/messages";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it } from "vitest";
@@ -7,7 +9,11 @@ import { Editor } from "../src/compose/Editor";
 import { composeModule } from "../src/compose/module";
 import { Host } from "../src/host/host";
 import { Activity } from "../src/mailbox/Activity";
-import { ActivityController } from "../src/mailbox/activityController";
+import {
+  ActivityController,
+  operationLabel,
+  stateLabel,
+} from "../src/mailbox/activityController";
 import { MailboxController } from "../src/mailbox/controller";
 import {
   clockTime,
@@ -17,6 +23,7 @@ import {
   isoDateTime,
   localIsoDate,
   MAX_SAFE_UNIX_SECS,
+  plural,
   shortDate,
   toDate,
   uiLocale,
@@ -27,6 +34,7 @@ import { DocumentController } from "../src/mailbox/document";
 import { Addresses } from "../src/settings/Addresses";
 import { SettingsController } from "../src/settings/controller";
 import { FakeBridge, flush, folder, message, online, summary } from "./fakeBridge";
+import type { Operation } from "../src/mailbox/types";
 import { FakeCompose } from "./fakeCompose";
 import { account, FakeSettings } from "./fakeSettings";
 
@@ -295,5 +303,37 @@ describe("format.ts：边界与防崩保护", () => {
       composer.stop();
       mailbox.stop();
     }
+  });
+});
+
+describe("format.ts 与同步活动标签：英文界面（ADR-0048 决策 8）", () => {
+  it("相对日期、到期文案、复数与活动标签随协商语言成文", () => {
+    applyEffectiveLocales(["en-US"]);
+    try {
+      // en-US 时刻为 12 小时制；ICU 版本不同，AM/PM 前可能是窄不换行空格，故用 \s 匹配。
+      withTz("Asia/Shanghai", () => {
+        const now = new Date(2026, 10, 18, 14, 0, 0);
+        const at = (d: number, h: number, mi: number) =>
+          Math.floor(new Date(2026, 10, d, h, mi, 0).getTime() / 1000);
+        expect(shortDate(at(17, 9, 30), now)).toMatch(/^Yesterday 09:30\sAM$/);
+        expect(expiryLabel(at(18, 20, 30), now)).toMatch(/^Expires today at 08:30\sPM$/);
+        expect(expiryLabel(at(19, 9, 5), now)).toMatch(/^Expires tomorrow at 09:05\sAM$/);
+        expect(expiryLabel(at(17, 23, 45), now)).toMatch(/^Expired yesterday at 11:45\sPM$/);
+      });
+      const counts = { one: m.mailbox_list_total_one, other: m.mailbox_list_total_other };
+      expect(plural(1, counts)).toBe("1 message");
+      expect(plural(3, counts)).toBe("3 messages");
+      expect(stateLabel("in_flight")).toBe("Syncing");
+      expect(stateLabel("constructor")).toBe("State not supported by this version");
+      const op = { kind: "flag", flag: "flagged", value: false } as Operation;
+      expect(operationLabel(op)).toBe("Unstar");
+      expect(operationLabel({ ...op, flag: "seen", value: true })).toBe("Mark as read");
+    } finally {
+      applyEffectiveLocales([]);
+    }
+    // 回到默认语言后中文逐字不变。
+    expect(plural(3, { one: m.mailbox_list_total_one, other: m.mailbox_list_total_other })).toBe("3 封");
+    expect(operationLabel({ kind: "flag", flag: "flagged", value: false } as Operation)).toBe("取消星标");
+    expect(stateLabel("future")).toBe("此版本无法处理的状态");
   });
 });

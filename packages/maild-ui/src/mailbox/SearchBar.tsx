@@ -1,10 +1,12 @@
-import { folderLabel } from "../i18n";
+import { m } from "@featherpost/i18n/messages";
+
+import { folderLabel, useUiLocale } from "../i18n";
 import { Choice } from "../settings/Choice";
 import { useEffect, useState } from "react";
 import { Icon } from "../app/Icon";
 import { useStore } from "../host/hooks";
 import type { MailboxController } from "./controller";
-import { localIsoDate, MAX_SAFE_UNIX_SECS } from "./format";
+import { localIsoDate, MAX_SAFE_UNIX_SECS, plural } from "./format";
 import type { MailboxQuery } from "./types";
 
 export function parseLocalDateYmd(ymd: string): { y: number; m: number; d: number } | null {
@@ -54,6 +56,29 @@ export function localDayEndSecs(ymd: string): number | null {
   return Number.isFinite(secs) && secs >= 0 && secs <= MAX_SAFE_UNIX_SECS ? secs : null;
 }
 
+/** 筛选条件名：移除按钮的无障碍名称用。 */
+const FILTER_FIELD: Record<string, () => string> = {
+  query: m.mailbox_search_field_query,
+  account: m.mailbox_search_field_account,
+  folder: m.mailbox_search_field_folder,
+  from: m.mailbox_search_field_from,
+  since: m.mailbox_search_field_since,
+  until: m.mailbox_search_field_until,
+  has_attachments: m.mailbox_search_field_attachments,
+};
+/** 筛选条件小标签上的短名。 */
+const FILTER_CHIP: Record<string, () => string> = {
+  query: m.mailbox_search_chip_query,
+  account: m.mailbox_search_chip_account,
+  folder: m.mailbox_search_chip_folder,
+  from: m.mailbox_search_chip_from,
+  since: m.mailbox_search_chip_since,
+  until: m.mailbox_search_chip_until,
+  has_attachments: m.mailbox_search_chip_attachments,
+};
+const own = (table: Record<string, () => string>, key: string) =>
+  Object.prototype.hasOwnProperty.call(table, key) ? table[key]!() : undefined;
+
 const day = (v?: number) => {
   if (v === undefined) return "";
   if (v === 0) {
@@ -63,6 +88,7 @@ const day = (v?: number) => {
   return localIsoDate(v);
 };
 export function SearchBar({ controller }: { controller: MailboxController }) {
+  useUiLocale();
   const s = useStore(controller.store),
     [query, setQuery] = useState(""),
     [advanced, setAdvanced] = useState(false),
@@ -94,7 +120,7 @@ export function SearchBar({ controller }: { controller: MailboxController }) {
       (until && end === null) ||
       (start !== null && start !== undefined && end !== null && end !== undefined && start > end)
     ) {
-      setError("请选择有效的日期范围。");
+      setError(m.mailbox_search_invalid_range());
       return;
     }
     setError("");
@@ -129,8 +155,8 @@ export function SearchBar({ controller }: { controller: MailboxController }) {
         <Icon name="search" />
         <input
           data-mail-search
-          aria-label="搜索本地邮件"
-          placeholder="搜索本地邮件，按 Enter 开始（/ 聚焦）"
+          aria-label={m.mailbox_search_label()}
+          placeholder={m.mailbox_search_placeholder()}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
@@ -140,7 +166,7 @@ export function SearchBar({ controller }: { controller: MailboxController }) {
           type="submit"
           disabled={s.snapshot.phase !== "online"}
         >
-          搜索
+          {m.mailbox_search_submit()}
         </button>
         <button
           className="text-button"
@@ -148,7 +174,7 @@ export function SearchBar({ controller }: { controller: MailboxController }) {
           aria-expanded={advanced}
           onClick={() => setAdvanced(!advanced)}
         >
-          筛选
+          {m.mailbox_search_filters()}
         </button>
         {active && (
           <button
@@ -160,14 +186,14 @@ export function SearchBar({ controller }: { controller: MailboxController }) {
               setAdvanced(false);
             }}
           >
-            退出搜索
+            {m.mailbox_search_exit()}
           </button>
         )}
       </form>
       {advanced && (
         <div className="mail-search-filters">
           <label>
-            账户
+            {m.mailbox_search_field_account()}
             <Choice
               value={account}
               onValueChange={(value) => {
@@ -175,7 +201,7 @@ export function SearchBar({ controller }: { controller: MailboxController }) {
                 setFolder("");
               }}
             >
-              <option value="">全部账户</option>
+              <option value="">{m.mailbox_search_all_accounts()}</option>
               {s.snapshot.accounts.map((a) => (
                 <option key={a.account} value={a.account}>
                   {controller.label(a.account)}
@@ -184,31 +210,31 @@ export function SearchBar({ controller }: { controller: MailboxController }) {
             </Choice>
           </label>
           <label>
-            文件夹
+            {m.mailbox_search_field_folder()}
             <Choice
               value={folder}
               disabled={!account}
               onValueChange={setFolder}
             >
-              <option value="">全部文件夹</option>
+              <option value="">{m.mailbox_search_all_folders()}</option>
               {controller.foldersOf(account).map((f) => (
                 <option key={f.name} value={f.name}>
                   {folderLabel(f)}
-                  {f.present ? "" : "（本机历史）"}
+                  {f.present ? "" : m.mailbox_search_folder_history()}
                 </option>
               ))}
             </Choice>
           </label>
           <label>
-            发件人
+            {m.mailbox_search_field_from()}
             <input
               value={from}
               onChange={(e) => setFrom(e.target.value)}
-              placeholder="名称或地址"
+              placeholder={m.mailbox_search_from_placeholder()}
             />
           </label>
           <label>
-            起始日期
+            {m.mailbox_search_field_since()}
             <input
               type="date"
               value={since}
@@ -216,7 +242,7 @@ export function SearchBar({ controller }: { controller: MailboxController }) {
             />
           </label>
           <label>
-            截止日期
+            {m.mailbox_search_field_until()}
             <input
               type="date"
               value={until}
@@ -229,20 +255,20 @@ export function SearchBar({ controller }: { controller: MailboxController }) {
               checked={attachment}
               onChange={(e) => setAttachment(e.target.checked)}
             />
-            有附件
+            {m.mailbox_search_has_attachments()}
           </label>
           <button
             className="primary-button"
             disabled={s.snapshot.phase !== "online"}
             onClick={submit}
           >
-            应用筛选
+            {m.mailbox_search_apply()}
           </button>
         </div>
       )}
       {active && (
         <div className="search-coverage">
-          <span>仅搜索本机已缓存邮件</span>
+          <span>{m.mailbox_search_local_only()}</span>
           {controller.serverSearchSupported && s.remote.status === "idle" && (
             <button
               type="button"
@@ -250,18 +276,21 @@ export function SearchBar({ controller }: { controller: MailboxController }) {
               disabled={!controller.canSearchServer}
               title={
                 s.scope.kind === "search" && !s.scope.query.query?.trim()
-                  ? "请先输入关键词"
-                  : "本地只缓存最近的邮件；在服务器上查找更早的匹配"
+                  ? m.mailbox_remote_need_query()
+                  : m.mailbox_search_server_title()
               }
               onClick={() => void controller.searchServer()}
             >
-              在服务器搜索更早邮件
+              {m.mailbox_remote_search()}
             </button>
           )}
-          {s.remote.status === "loading" && <span role="status">正在搜索服务器…</span>}
+          {s.remote.status === "loading" && <span role="status">{m.mailbox_search_server_loading()}</span>}
           {s.index && !s.index.done && (
             <span role="status">
-              正在建立索引，还有 {s.index.pending} 封未索引，结果尚未完整。
+              {plural(s.index.pending, {
+                one: m.mailbox_search_indexing_one,
+                other: m.mailbox_search_indexing_other,
+              })}
             </span>
           )}
           {s.indexError && <span role="status">{s.indexError}</span>}
@@ -275,25 +304,20 @@ export function SearchBar({ controller }: { controller: MailboxController }) {
                 type="button"
                 className="filter-chip"
                 key={key}
-                aria-label={`移除${({ query: "关键词", account: "账户", folder: "文件夹", from: "发件人", since: "起始日期", until: "截止日期", has_attachments: "附件" } as Record<string, string>)[key]}条件`}
+                aria-label={m.mailbox_search_chip_remove({ field: own(FILTER_FIELD, key) ?? key })}
                 onClick={() => remove(key as keyof MailboxQuery)}
               >
-                {
-                  (
-                    {
-                      query: "关键词",
-                      account: "账户",
-                      folder: "文件夹",
-                      from: "发件人",
-                      since: "从",
-                      until: "到",
-                      has_attachments: "有附件",
-                    } as Record<string, string>
-                  )[key]
-                }
+                {own(FILTER_CHIP, key)}
                 {key === "has_attachments"
                   ? ""
-                  : `：${key === "account" ? controller.label(String(value)) : key === "since" || key === "until" ? day(Number(value)) : String(value)}`}{" "}
+                  : m.mailbox_search_chip_value({
+                      value:
+                        key === "account"
+                          ? controller.label(String(value))
+                          : key === "since" || key === "until"
+                            ? day(Number(value))
+                            : String(value),
+                    })}{" "}
                 ×
               </button>
             ))}

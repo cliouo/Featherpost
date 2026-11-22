@@ -1,3 +1,5 @@
+import { m } from '@featherpost/i18n/messages';
+
 import { uiLocale } from '../i18n';
 export { uiLocale } from '../i18n';
 
@@ -74,7 +76,7 @@ export function shortDate(seconds: number | null | undefined, now = new Date()):
   const f = formatters();
   if (sameDay(date, now)) return f.time.format(date);
   const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
-  if (sameDay(date, yesterday)) return `昨天 ${f.time.format(date)}`;
+  if (sameDay(date, yesterday)) return m.mailbox_date_yesterday({ time: f.time.format(date) });
   if (date.getFullYear() === now.getFullYear()) return f.monthDay.format(date);
   return f.date.format(date);
 }
@@ -103,9 +105,9 @@ export function localIsoDate(seconds: number | null | undefined): string {
   const date = toDate(seconds);
   if (!date) return '';
   const y = String(date.getFullYear()).padStart(4, '0');
-  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const mo = String(date.getMonth() + 1).padStart(2, '0');
   const d = String(date.getDate()).padStart(2, '0');
-  return `${y}-${m}-${d}`;
+  return `${y}-${mo}-${d}`;
 }
 
 /**
@@ -118,16 +120,16 @@ export function expiryLabel(expiresAtSeconds: number | null | undefined, now = n
   if (!date) return '';
   const f = formatters();
   const hm = f.time.format(date);
-  if (sameDay(date, now)) return `今天 ${hm} 到期`;
+  if (sameDay(date, now)) return m.mailbox_expiry_today({ time: hm });
   const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
-  if (sameDay(date, tomorrow)) return `明天 ${hm} 到期`;
+  if (sameDay(date, tomorrow)) return m.mailbox_expiry_tomorrow({ time: hm });
   const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
-  if (sameDay(date, yesterday)) return `昨天 ${hm} 到期`;
+  if (sameDay(date, yesterday)) return m.mailbox_expiry_yesterday({ time: hm });
   const remainingMs = date.getTime() - now.getTime();
   if (remainingMs > 0 && remainingMs < FORTY_EIGHT_HOURS_MS) {
-    return `${f.date.format(date)} ${hm} 到期`;
+    return m.mailbox_expiry_date_time({ date: f.date.format(date), time: hm });
   }
-  return `${f.date.format(date)} 到期`;
+  return m.mailbox_expiry_date({ date: f.date.format(date) });
 }
 
 /** `"显示名 <addr>"` → 显示名；只有地址时给地址 local part。 */
@@ -145,8 +147,21 @@ export function addressOnly(address: string): string {
 export function initials(address: string): string {
   const name = displayName(address);
   if (!name) return '?';
+  // i18n-lint-allow-cjk: 按名字的书写系统取首字母，是内容识别规则，不是界面文案。
   const cjk = /[㐀-鿿]/.test(name);
   return cjk ? name.slice(0, 1) : name.slice(0, 2).toUpperCase();
+}
+
+/**
+ * 按当前界面语言的复数规则在两条消息间选一条（ADR-0048：复数在代码里用 `Intl.PluralRules`）。
+ * 中文只有 `other`，两条消息可以同文；英文 `one` 用单数。
+ */
+export function plural(
+  count: number,
+  messages: { one: (inputs: { count: number }) => string; other: (inputs: { count: number }) => string },
+): string {
+  const category = new Intl.PluralRules(uiLocale()).select(count);
+  return (category === 'one' ? messages.one : messages.other)({ count });
 }
 
 export function humanSize(bytes: number): string {

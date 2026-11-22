@@ -1,3 +1,4 @@
+import { applyEffectiveLocales } from '@featherpost/i18n';
 import { describe, expect, it } from 'vitest';
 
 import { Host } from '../src/host/host';
@@ -131,6 +132,15 @@ it('版本不一致时写入口禁用、横幅出现；同 revision 的握手补
   expect(host.state.getSnapshot().snapshot.compat).toBe('kernel_outdated');
   expect(compatBanner({ compat: 'app_outdated' })).toMatch(/界面版本较旧/);
   expect(compatBanner({ compat: 'unknown' })).toBeNull();
+  // 英文界面：横幅随协商语言成文，菜单名与 maild-l10n 的英文菜单一致。
+  applyEffectiveLocales(['en']);
+  try {
+    expect(compatBanner({ compat: 'kernel_outdated' })).toMatch(/Repair & Background…/);
+    expect(compatBanner({ compat: 'app_outdated' })).toMatch(/^This interface is older/);
+  } finally {
+    applyEffectiveLocales([]);
+  }
+  expect(compatBanner({ compat: 'app_outdated' })).toMatch(/界面版本较旧/);
   host.stop();
 });
 

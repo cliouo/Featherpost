@@ -1,3 +1,4 @@
+import { m } from '@featherpost/i18n/messages';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 
@@ -10,21 +11,25 @@ const STATE_EVENT = 'maild://state';
 const INTENT_EVENT = 'maild://intent';
 const LINK_EVENT = 'maild://link';
 
-const notInTauri: UiError = { code: 'offline', message: `请在 ${BRAND.productName} 桌面窗口中打开邮箱。` };
+// 每次调用时成文，跟随当前界面语言。
+const notInTauri = (): UiError => ({
+  code: 'offline',
+  message: m.common_bridge_error_not_in_tauri({ product: BRAND.productName }),
+});
 
 async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
-  if (!isTauri()) throw new BridgeError(notInTauri);
+  if (!isTauri()) throw new BridgeError(notInTauri());
   try {
     return await invoke<T>(command, args);
   } catch (error) {
     // Rust 侧已把原因投影成四类固定文案；其他形状（IPC 本身失败）一律当离线。
-    throw new BridgeError(isUiError(error) ? error : { code: 'failed', message: '操作未完成，请稍后重试。' });
+    throw new BridgeError(isUiError(error) ? error : { code: 'failed', message: m.common_bridge_error_failed() });
   }
 }
 
 /** 服务商帮助页等固定 https 链接；邮件正文里的链接仍只走 ui_open_link 令牌通道。 */
 function openExternalUrl(url: string): Promise<void> {
-  if (!/^https:\/\/[^\s]+$/.test(url)) return Promise.reject(new BridgeError({ code: 'invalid', message: '链接无效。' }));
+  if (!/^https:\/\/[^\s]+$/.test(url)) return Promise.reject(new BridgeError({ code: 'invalid', message: m.common_bridge_error_invalid_link() }));
   return call('ui_open_external_url', { url });
 }
 

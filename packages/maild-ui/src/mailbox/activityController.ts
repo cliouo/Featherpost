@@ -1,3 +1,5 @@
+import { m } from "@featherpost/i18n/messages";
+
 import type { MailboxBridge, Operation } from "./types";
 import { Store } from "../host/store";
 import { RequestGeneration } from "./controller";
@@ -89,7 +91,7 @@ export class ActivityController {
       if (current())
         this.store.patch({
           loading: false,
-          error: "同步活动暂时无法读取，请重试。",
+          error: m.mailbox_activity_error_load(),
         });
     }
   }
@@ -116,32 +118,41 @@ export class ActivityController {
         });
     } catch {
       this.store.patch({
-        error: "裁决结果未确认，请先刷新核对，不要连续重试。",
+        error: m.mailbox_activity_error_resolve(),
       });
     } finally {
       this.store.patch({ busy: null });
     }
   }
 }
+const STATE_LABELS: Record<string, () => string> = {
+  pending: m.mailbox_activity_state_pending,
+  in_flight: m.mailbox_activity_state_in_flight,
+  done: m.mailbox_activity_state_done,
+  failed: m.mailbox_activity_state_failed,
+  unknown: m.mailbox_activity_state_unknown,
+};
 export function stateLabel(state: string) {
-  return (
-    (
-      {
-        pending: "等待同步",
-        in_flight: "同步中",
-        done: "已同步",
-        failed: "同步失败",
-        unknown: "结果未知",
-      } as Record<string, string>
-    )[state] ?? "此版本无法处理的状态"
-  );
+  const label = Object.prototype.hasOwnProperty.call(STATE_LABELS, state)
+    ? STATE_LABELS[state]
+    : undefined;
+  return label ? label() : m.mailbox_activity_state_unsupported();
 }
+/** 标记操作按「设置 / 取消」× 标记名各给一条消息，英文才能各自成句。 */
+const FLAG_LABELS: Record<string, { set: () => string; clear: () => string }> = {
+  seen: { set: m.mailbox_activity_flag_seen_set, clear: m.mailbox_activity_flag_seen_clear },
+  flagged: { set: m.mailbox_activity_flag_flagged_set, clear: m.mailbox_activity_flag_flagged_clear },
+  answered: { set: m.mailbox_activity_flag_answered_set, clear: m.mailbox_activity_flag_answered_clear },
+  deleted: { set: m.mailbox_activity_flag_deleted_set, clear: m.mailbox_activity_flag_deleted_clear },
+};
+const OTHER_FLAG = { set: m.mailbox_activity_flag_other_set, clear: m.mailbox_activity_flag_other_clear };
 export function operationLabel(op: Operation) {
-  return op.kind === "move"
-    ? "移动邮件"
-    : op.kind === "append"
-      ? "保存已发送副本"
-      : op.kind === "flag"
-        ? `${op.value ? "设置" : "取消"}${({ seen: "已读", flagged: "星标", answered: "已回复", deleted: "已删除" } as Record<string, string>)[op.flag ?? ""] ?? "邮件标记"}`
-        : "此版本无法处理的操作";
+  if (op.kind === "move") return m.mailbox_activity_operation_move();
+  if (op.kind === "append") return m.mailbox_activity_operation_append();
+  if (op.kind !== "flag") return m.mailbox_activity_operation_unsupported();
+  const flag = op.flag ?? "";
+  const labels = Object.prototype.hasOwnProperty.call(FLAG_LABELS, flag)
+    ? FLAG_LABELS[flag]
+    : OTHER_FLAG;
+  return op.value ? labels.set() : labels.clear();
 }

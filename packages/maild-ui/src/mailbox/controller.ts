@@ -1,3 +1,5 @@
+import { m } from "@featherpost/i18n/messages";
+
 import { folderLabel } from "../i18n";
 import type {
   FolderIdentity,
@@ -100,11 +102,11 @@ interface Cached {
 }
 const describe = (error: unknown, fallback: string) =>
   errorCode(error) === "offline"
-    ? "后台连接不可用，已读取的内容仍可查看。"
+    ? m.mailbox_error_offline()
     : errorCode(error) === "denied"
-      ? "当前前端没有这项操作的授权。"
+      ? m.mailbox_error_denied()
       : errorCode(error) === "not_found"
-        ? "这封邮件已不在本地缓存中，请刷新。"
+        ? m.mailbox_error_not_found()
         : fallback;
 function boundedSet<K, V>(cache: Map<K, V>, key: K, value: V, limit: number) {
   cache.delete(key);
@@ -127,17 +129,17 @@ export function queryOf(scope: Scope): MailboxQuery {
 }
 export function scopeTitle(scope: Scope) {
   if (scope.kind === "unread") return scopeTitle(scope.base);
-  if (scope.kind === "smart" && scope.group) return `${scope.group.name} · 收件箱`;
+  if (scope.kind === "smart" && scope.group) return m.mailbox_scope_group_inbox({ group: scope.group.name });
   return scope.kind === "folder"
     ? scope.title
     : scope.kind === "search"
-      ? "搜索结果"
+      ? m.mailbox_scope_search()
       : {
-          inbox: "统一收件箱",
-          all: "全部邮件",
-          unread: "未读邮件",
-          starred: "星标邮件",
-        }[scope.name];
+          inbox: m.mailbox_smart_inbox,
+          all: m.mailbox_smart_all,
+          unread: m.mailbox_smart_unread,
+          starred: m.mailbox_smart_starred,
+        }[scope.name]();
 }
 export class MailboxController {
   readonly store: Store<MailboxState>;
@@ -322,7 +324,7 @@ export class MailboxController {
       } catch (e) {
         if (!this.stopped && epoch === this.state.snapshot.connection_epoch)
           this.patch({
-            folderError: describe(e, "文件夹信息暂时不可用，请刷新。"),
+            folderError: describe(e, m.mailbox_error_folders()),
           });
       }
     })();
@@ -474,7 +476,7 @@ export class MailboxController {
         loadingDetail: false,
         detailError: cached
           ? null
-          : "这封邮件的正文尚未在本次打开时读取，后台连接恢复后可查看。",
+          : m.mailbox_error_detail_offline(),
       });
       return;
     }
@@ -490,7 +492,7 @@ export class MailboxController {
         if (current() && !this.stopped)
           this.patch({
             loadingDetail: false,
-            detailError: describe(e, "暂时无法读取正文，请稍后重试。"),
+            detailError: describe(e, m.mailbox_error_detail()),
           });
       });
   }
@@ -498,7 +500,7 @@ export class MailboxController {
     if (!folder) {
       this.selectAccount(account);
       this.patch({
-        rowsError: "这条旧通知没有文件夹信息，请从账户列表选择邮件。",
+        rowsError: m.mailbox_error_intent_no_folder(),
       });
       return;
     }
@@ -534,7 +536,7 @@ export class MailboxController {
     } catch (e) {
       if (current())
         this.patch({
-          detailError: describe(e, "无法定位这封邮件，请在收件箱查找。"),
+          detailError: describe(e, m.mailbox_error_locate()),
         });
     }
   }
@@ -607,7 +609,7 @@ export class MailboxController {
         })
         .catch(() => {
           if (current())
-            this.patch({ indexError: "暂时无法确认搜索索引是否完整。" });
+            this.patch({ indexError: m.mailbox_error_index() });
         });
     try {
       const q = queryOf(scope);
@@ -667,7 +669,7 @@ export class MailboxController {
       if (current() && !this.stopped)
         this.patch({
           loadingRows: false,
-          rowsError: describe(e, "暂时无法读取邮件列表，请重试。"),
+          rowsError: describe(e, m.mailbox_error_rows()),
         });
     }
   }
@@ -682,7 +684,7 @@ export class MailboxController {
     try {
       await this.bridge.mailbox.syncNow?.(account);
     } catch (e) {
-      syncError = describe(e, "后台未能立即检查新邮件，已刷新本地列表。");
+      syncError = describe(e, m.mailbox_error_sync());
     }
     try {
       await this.refresh();
@@ -772,9 +774,9 @@ export class MailboxController {
         rows: failed === targets.length ? [] : rows,
         error:
           failed === targets.length
-            ? describe(lastError, "服务器搜索暂不可用：后台尚未提供此能力，或服务器没有响应。")
+            ? describe(lastError, m.mailbox_error_server_search())
             : failed
-              ? "部分账户的服务器搜索没有完成，结果可能不全。"
+              ? m.mailbox_error_server_search_partial()
               : null,
       },
     });
@@ -812,7 +814,7 @@ export class MailboxController {
     if (this.state.snapshot.phase !== "online") {
       this.patch({
         loadingDetail: false,
-        detailError: "这封邮件还在服务器上，后台连接恢复后可拉取。",
+        detailError: m.mailbox_error_remote_offline(),
       });
       return;
     }
@@ -823,7 +825,7 @@ export class MailboxController {
         if (!detail) {
           this.patch({
             loadingDetail: false,
-            detailError: "服务器上已找不到这封邮件，可能已被移动或删除。",
+            detailError: m.mailbox_error_remote_gone(),
           });
           return;
         }
@@ -843,7 +845,7 @@ export class MailboxController {
         if (current() && !this.stopped)
           this.patch({
             loadingDetail: false,
-            detailError: describe(e, "暂时无法从服务器拉取这封邮件，请稍后重试。"),
+            detailError: describe(e, m.mailbox_error_remote_fetch()),
           });
       });
   }
@@ -935,7 +937,7 @@ export class MailboxController {
           requested: rows.length,
           queued: 0,
           unconfirmed: rows.length,
-          error: "不能跨账户移动，请按账户分别选择。",
+          error: m.mailbox_error_cross_account(),
         },
       });
       return;
@@ -972,7 +974,7 @@ export class MailboxController {
         action.action === "move" &&
         new Set(frozen.map((r) => r.account)).size > 1
       )
-        throw new Error("不能跨账户移动，请按账户分别选择。");
+        throw new Error(m.mailbox_error_cross_account());
       for (const group of groups.values())
         for (let offset = 0; offset < group.length; offset += 500) {
           const rows = group.slice(offset, offset + 500),
@@ -982,7 +984,7 @@ export class MailboxController {
               this.state.snapshot.phase !== "online" ||
               this.state.snapshot.connection_epoch !== epoch
             )
-              throw new Error("连接已变化，剩余操作没有继续提交。");
+              throw new Error(m.mailbox_error_connection_changed());
             let request: WriteRequest;
             if (action.action === "archive") {
               const target = this.foldersOf(first.account).find(
@@ -990,7 +992,7 @@ export class MailboxController {
                   f.present && f.role === "archive" && f.name !== first.folder,
               );
               if (!target) {
-                error=`${this.label(first.account)} 没有可用归档文件夹，请使用“移动”选择目标。`;
+                error=m.mailbox_error_no_archive({ account: this.label(first.account) });
                 continue;
               }
               request = {
@@ -1013,7 +1015,7 @@ export class MailboxController {
               receipt.queued < 0 ||
               receipt.queued > rows.length
             )
-              throw new Error("后台回执无效，请刷新核对。");
+              throw new Error(m.mailbox_error_receipt_invalid());
             if (
               receipt.queued_uids &&
               receipt.unchanged_uids &&
@@ -1030,7 +1032,7 @@ export class MailboxController {
                 ids.some((id) => !rows.some((r) => r.uid === id)) ||
                 receipt.queued_uids.length !== receipt.queued
               )
-                throw new Error("后台回执身份不完整，请刷新核对。");
+                throw new Error(m.mailbox_error_receipt_identity());
               queued += receipt.queued;
               unchanged += receipt.unchanged_uids.length;
               for (const row of rows)
@@ -1040,23 +1042,23 @@ export class MailboxController {
                 )
                   accepted.add(messageKey(row));
               if (receipt.missing_uids.length)
-                error = "部分邮件已变化或不在本地，请刷新核对。";
+                error = m.mailbox_error_receipt_missing();
             } else {
               queued += receipt.queued;
               if (receipt.queued === rows.length)
                 for (const row of rows) accepted.add(messageKey(row));
-              else error = "部分邮件未确认，请刷新核对。";
+              else error = m.mailbox_error_receipt_partial();
             }
           } catch (e) {
             error = errorCode(e)
-              ? "部分提交未确认。请先刷新或查看同步活动，切勿直接重复移动。"
+              ? m.mailbox_error_submit_unconfirmed()
               : e instanceof Error
                 ? e.message
-                : "操作未确认。";
+                : m.mailbox_error_unconfirmed();
           }
         }
     } catch (e) {
-      error = e instanceof Error ? e.message : "操作未确认。";
+      error = e instanceof Error ? e.message : m.mailbox_error_unconfirmed();
     } finally {
       this.rows.clear();
       this.details.clear();
@@ -1137,7 +1139,7 @@ export class MailboxController {
       if (offset > 0 && page.total !== s.threadTotal)
         throw new Error("thread membership changed");
       if (
-        page.messages.some((m) => m.account !== root.account) ||
+        page.messages.some((message) => message.account !== root.account) ||
         (offset > 0 && s.threadId !== page.thread_id)
       )
         throw new Error("thread changed");
@@ -1159,7 +1161,7 @@ export class MailboxController {
       if (current())
         this.patch({
           threadLoading: false,
-          threadError: describe(e, "会话暂时无法完整读取，请关闭后重新展开。"),
+          threadError: describe(e, m.mailbox_error_thread()),
         });
     }
   }

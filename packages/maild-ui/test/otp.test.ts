@@ -1,3 +1,4 @@
+import { applyEffectiveLocales } from "@featherpost/i18n";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
@@ -68,4 +69,15 @@ it("验证码条渲染代码与复制按钮", () => {
   expect(html).toContain("849201");
   expect(html).toContain("复制验证码");
   expect(html).toContain('aria-label="验证码"');
+});
+
+it("验证码条在英文界面下的文案（ADR-0048 决策 8）", () => {
+  applyEffectiveLocales(["en"]);
+  try {
+    const html = renderToStaticMarkup(createElement(OtpBar, { code: "849201", notify: () => {} }));
+    expect(html).toContain("Copy code");
+    expect(html).toContain('aria-label="Verification code"');
+  } finally {
+    applyEffectiveLocales([]);
+  }
 });
