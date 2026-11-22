@@ -122,6 +122,11 @@ env "$short_version_env=$short_version" "$build_version_env=$build_version" \
 # Ad-hoc preview signing is inside-out. Formal release uses Developer ID + timestamp + notary.
 # Signing rewrites the UI Mach-O, so reseal its recovery checksum before sealing the app.
 /usr/bin/codesign --force --sign - --options runtime --timestamp=none "$ui" >/dev/null
+. "$script_dir/studio-payload.sh"
+studio_payload=$(studio_payload_path "$preview")
+if [ -d "$studio_payload" ]; then
+    /usr/bin/codesign --force --sign - --options runtime --timestamp=none "$studio_payload/$STUDIO_APP" >/dev/null
+fi
 "$script_dir/seal-recovery-payload.sh" "$preview"
 /usr/bin/codesign --force --sign - --options runtime --timestamp=none "$agent" >/dev/null
 /usr/bin/codesign --force --sign - --options runtime --timestamp=none "$menu" >/dev/null

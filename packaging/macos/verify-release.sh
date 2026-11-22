@@ -178,6 +178,11 @@ validate_signed_code "$BRAND_PRODUCT_NAME host UI" "$host_ui_executable" "$BRAND
 validate_signed_code "$BRAND_PRODUCT_NAME Agent" "$agent" "$agent_id"
 validate_signed_code "$BRAND_PRODUCT_NAME Menu" "$menu" "$menu_id"
 validate_signed_code "$BRAND_PRODUCT_NAME UI" "$ui" "$BRAND_UI_BUNDLE_ID"
+. "$script_dir/studio-payload.sh"
+studio_payload=$(studio_payload_path "$app")
+if [ -d "$studio_payload" ]; then
+    validate_signed_code Studio "$studio_payload/$STUDIO_APP" "$STUDIO_FRONTEND_ID"
+fi
 validate_signed_code "$BRAND_PRODUCT_NAME" "$app" "$app_id"
 /usr/bin/codesign --verify --deep --strict=all --verbose=4 "$app" >/dev/null 2>&1 ||
     die 'nested code signature verification failed'

@@ -23,9 +23,13 @@ pub mod settings_packages;
 /// Packaging contract (ADR-0039): only the `embedded` form serves its assets from the binary.
 /// A default-form build would load `devUrl` from a local port, so `build-bundle.sh` and
 /// `verify-bundle.sh` refuse any bundled `maild-ui` whose every slice lacks this marker.
-#[cfg(feature = "embedded")]
+#[cfg(all(feature = "embedded", not(feature = "studio")))]
 #[used]
 static EMBEDDED_CONTRACT: &str = maild_brand::ui_embedded_contract!();
+
+#[cfg(all(feature = "embedded", feature = "studio"))]
+#[used]
+static EMBEDDED_CONTRACT: &str = "\0maild-ui-embedded:dev.featherpost.studio\0";
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;

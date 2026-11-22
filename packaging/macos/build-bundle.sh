@@ -17,6 +17,7 @@ Options:
   --agent-bin PATH    Built $BRAND_AGENT_BIN executable.
   --menu-bin PATH     Built $BRAND_MENU_BIN executable.
   --ui-bin PATH       Built embedded $BRAND_UI_BIN executable (\`--features embedded\`).
+  --studio-bin PATH   Also bundle the embedded Studio frontend (product builds supply this).
   --output PATH       Destination; its final component must be $BRAND_APP_BUNDLE.
   -h, --help          Show this help.
 
@@ -257,6 +258,7 @@ menu_bin="$repo_root/target/release/$BRAND_MENU_BIN"
 ui_bin="$repo_root/target/release/$BRAND_UI_BIN"
 menu_bin_explicit=false
 ui_bin_explicit=false
+studio_bin=
 output="$repo_root/dist/macos/$BRAND_APP_BUNDLE"
 
 while [ "$#" -gt 0 ]; do
@@ -270,6 +272,11 @@ while [ "$#" -gt 0 ]; do
             [ "$#" -ge 2 ] || die '--ui-bin requires a path'
             ui_bin=$2
             ui_bin_explicit=true
+            shift 2
+            ;;
+        --studio-bin)
+            [ "$#" -ge 2 ] || die '--studio-bin requires a path'
+            studio_bin=$2
             shift 2
             ;;
         --agent-bin)
@@ -353,6 +360,13 @@ require_compiled_identity "$BRAND_AGENT_BIN" "$agent_bin" "$agent_contract_prefi
 require_compiled_identity "$BRAND_MENU_BIN" "$menu_bin" "$menu_contract_prefix" "$menu_bundle_id"
 # Only `--features embedded` serves bundled assets; a default build would load devUrl.
 require_compiled_identity "$BRAND_UI_BIN" "$ui_bin" "$ui_contract_prefix" "$ui_bundle_id"
+. "$script_dir/studio-payload.sh"
+if [ -n "$studio_bin" ]; then
+    require_regular_executable Studio "$studio_bin"
+    require_compiled_identity Studio "$studio_bin" "$ui_contract_prefix" "$STUDIO_FRONTEND_ID"
+    [ "$(binary_architectures Studio "$studio_bin")" = "$(binary_architectures launcher "$launcher_bin")" ] ||
+        die 'Studio binary architectures differ from the launcher'
+fi
 launcher_architectures=$(binary_architectures "$BRAND_LAUNCHER_BIN" "$launcher_bin")
 for pair in "$BRAND_AGENT_BIN:$agent_bin" "$BRAND_MENU_BIN:$menu_bin" "$BRAND_UI_BIN:$ui_bin"; do
     label=${pair%%:*}
@@ -397,6 +411,7 @@ cp -X -- "$ui_bin" "$bundle/Contents/MacOS/$BRAND_UI_BIN"
 cp -X -- "$agent_bin" "$agent_bundle/Contents/MacOS/$BRAND_AGENT_BIN"
 cp -X -- "$menu_bin" "$menu_bundle/Contents/MacOS/$BRAND_MENU_BIN"
 cp -X -- "$ui_bin" "$ui_bundle/Contents/MacOS/$BRAND_UI_BIN"
+if [ -n "$studio_bin" ]; then copy_studio_payload "$bundle" "$studio_bin"; fi
 chmod 0755 \
     "$bundle/Contents/MacOS/$BRAND_LAUNCHER_BIN" \
     "$bundle/Contents/MacOS/$BRAND_UI_BIN" \

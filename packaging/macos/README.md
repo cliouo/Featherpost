@@ -70,7 +70,8 @@ UI 同时安装到这里和恢复载荷中；验证器要求顶层副本是非�
 Agent 启动时在前端目录租约下把这份副本 no-clobber 预装到用户前端目录，只做一次（标记文件
 `.preinstalled-<ui_bundle_id>`）；用户移除后不会自动装回，只能从原生修复窗口显式恢复。
 
-基础 `build-bundle.sh` 只复制已经构建好的四个可执行文件。它不会运行 Cargo、签名/notarize、复制到
+基础 `build-bundle.sh` 复制已经构建好的四个主程序；`--studio-bin` 额外携带 Studio，正常的
+`build-universal.sh` 总会提供它。底层脚本仍支持不带 Studio 的旧版布局测试。它不会运行 Cargo、签名/notarize、复制到
 `/Applications`、调用 `SMAppService`/`launchctl`、启动进程或修改用户配置和数据。
 目标已存在时会直接失败并保持原字节。输出父目录必须由当前用户拥有且不能由 group/other 写入；
 这样验证完成到发布之间的 staging bundle 不会被其他本机用户替换。
@@ -199,13 +200,21 @@ workflow 仅上传 Actions artifact，不创建 GitHub Release。签名身份与
 
 ## 本地 Preview DMG
 
+正常 universal2 包同时携带 `dev.featherpost.studio` 和原版 `dev.featherpost.ui`。两者各自按管理式
+前端的首次预装标记安装、随包升级；同版本重签也会同步，新于随包版本的安装不会被降级。原版仍是固定的
+原生修复目标，Studio 不覆盖或删除它，不需要另装 Studio ZIP。
+
+首次启动生成的配置选择 Studio。升级仅在配置与旧版自动生成模板**逐字节相同**、且没有任何持久默认选择
+（`frontends/.default.json`）时迁移到 Studio。已保存的选择（包括原版）、损坏的选择文件以及任何编辑过或
+无法确定来源的配置都不改变；不会为了切换 Studio 重写用户设置。恢复操作仍显式切回原版。
+
 公开仓库的 `.github/workflows/release-macos-preview.yml` 在推送 `v*` tag 时自动构建 universal DMG，
 也可通过 `workflow_dispatch` 的 `tag` 输入重建已有 tag。它在标准 `macos-15` runner 上运行，不使用
 Actions cache 或 artifact，直接将 `${BRAND_SLUG}-<version>-macos-universal.dmg` 和 `.sha256` 上传到
 对应的 GitHub Release（同名文件覆盖）；Release 不存在时创建，版本含 `-` 时标记为 prerelease。
 这些体验包仅 ad-hoc 签名、未经公证，不代替正式的 Developer ID 发布流程；私有仓库会跳过该 job。
 
-本地体验包在 verified bundle 基础上做 inside-out ad-hoc 签名（内置 UI → reseal → Agent → Menu → 顶层 UI →
+本地体验包在 verified bundle 基础上做 inside-out ad-hoc 签名（原版 UI → Studio → reseal 两份校验和 → Agent → Menu → 顶层 UI →
 顶层 App，最后校验顶层 UI 的 identifier 与 runtime 标志）并生成只读压缩 DMG；它不使用 Developer ID、没有
 notarize，不能作为正式发布产物：
 

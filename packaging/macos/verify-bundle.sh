@@ -368,6 +368,8 @@ if [ -e "$stapled_ticket" ] || [ -L "$stapled_ticket" ]; then
     expected_layout=$(printf '%s\n%s' "$expected_layout" './Contents/CodeResources')
 fi
 
+. "$script_dir/studio-payload.sh"
+verify_studio_payload "$bundle"
 expected_layout=$(printf '%s\n' "$expected_layout" | LC_ALL=C sort)
 [ "$actual_layout" = "$expected_layout" ] || {
     printf 'verify-bundle: unexpected bundle layout\nexpected:\n' >&2

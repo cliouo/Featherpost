@@ -133,6 +133,9 @@ for binary in "$BRAND_LAUNCHER_BIN" "$BRAND_AGENT_BIN" "$BRAND_MENU_BIN" "$BRAND
         die "$binary universal binary does not contain exactly arm64 and x86_64"
 done
 
+# Save the legacy universal binary before the Studio feature overwrites the per-target UI.
+bash "$script_dir/build-studio-binary.sh" "$work/featherpost-studio"
+
 env "${BRAND_ENV_PREFIX}_BUNDLE_SHORT_VERSION=$short_version" \
     "${BRAND_ENV_PREFIX}_BUNDLE_BUILD_VERSION=$build_version" \
     "$script_dir/build-bundle.sh" \
@@ -140,4 +143,5 @@ env "${BRAND_ENV_PREFIX}_BUNDLE_SHORT_VERSION=$short_version" \
         --agent-bin "$work/$BRAND_AGENT_BIN" \
         --menu-bin "$work/$BRAND_MENU_BIN" \
         --ui-bin "$work/$BRAND_UI_BIN" \
+        --studio-bin "$work/featherpost-studio" \
         --output "$output"

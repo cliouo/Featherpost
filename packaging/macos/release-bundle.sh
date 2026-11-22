@@ -96,6 +96,11 @@ validate_source_preflight() {
     ui="$app/Contents/Resources/frontends/$BRAND_UI_BUNDLE_ID/$BRAND_UI_BUNDLE"
     [ ! -e "$ui/Contents/_CodeSignature" ] && [ ! -L "$ui/Contents/_CodeSignature" ] ||
         die 'release input UI must be unsigned'
+    . "$script_dir/studio-payload.sh"
+    studio_payload=$(studio_payload_path "$app")
+    [ ! -e "$studio_payload/$STUDIO_APP/Contents/_CodeSignature" ] &&
+        [ ! -L "$studio_payload/$STUDIO_APP/Contents/_CodeSignature" ] ||
+        die 'release input Studio must be unsigned'
     [ ! -e "$agent/Contents/_CodeSignature" ] &&
         [ ! -L "$agent/Contents/_CodeSignature" ] ||
         die 'release input Agent must be unsigned'
@@ -294,6 +299,12 @@ staged_host_ui="$staged_app/Contents/MacOS/$BRAND_UI_BIN"
 # Signing rewrites the UI Mach-O; reseal its recovery checksum before sealing the app.
 /usr/bin/codesign --force --keychain "$keychain" --sign "$identity" \
     --options runtime --timestamp "$staged_ui"
+. "$script_dir/studio-payload.sh"
+studio_payload=$(studio_payload_path "$staged_app")
+if [ -d "$studio_payload" ]; then
+    /usr/bin/codesign --force --keychain "$keychain" --sign "$identity" \
+        --options runtime --timestamp "$studio_payload/$STUDIO_APP"
+fi
 "$script_dir/seal-recovery-payload.sh" "$staged_app"
 /usr/bin/codesign --force --keychain "$keychain" --sign "$identity" \
     --options runtime --timestamp "$staged_agent"

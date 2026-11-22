@@ -77,11 +77,17 @@ listen = "@SOCKET@"
 # idle = true
 "#;
 
+const STUDIO_FRONTEND_ID: &str = "dev.featherpost.studio";
+
 fn first_run_config() -> String {
+    first_run_config_for(STUDIO_FRONTEND_ID)
+}
+
+fn first_run_config_for(frontend: &str) -> String {
     FIRST_RUN_CONFIG_TEMPLATE
         .replacen("@HEADER@", &generated_config_header(), 1)
         .replace("@DATABASE@", maild_brand::DATABASE_FILE_NAME)
-        .replace("@FRONTEND@", maild_brand::BUNDLED_FRONTEND_ID)
+        .replace("@FRONTEND@", frontend)
         .replace("@SOCKET@", maild_brand::SOCKET_FILE_NAME)
         .replace("@PRODUCT@", maild_brand::PRODUCT_NAME)
 }
@@ -161,24 +167,39 @@ fn upgrade_generated_config(
 
     let original = fs::read_to_string(&paths.config_file)
         .map_err(|error| format!("读取旧版首次启动配置失败: {error}"))?;
-    if !original.starts_with(LEGACY_GENERATED_CONFIG_HEADER) {
-        return Ok(false);
-    }
-    let parsed: toml::Value = toml::from_str(&original)
-        .map_err(|error| format!("旧版首次启动配置无法解析，未自动升级: {error}"))?;
-    let has_external = parsed
-        .get("plugins")
-        .and_then(toml::Value::as_table)
-        .is_some_and(|plugins| plugins.contains_key("external"));
-
-    let mut upgraded =
-        original.replacen(LEGACY_GENERATED_CONFIG_HEADER, &generated_config_header(), 1);
-    if !has_external {
-        if !upgraded.ends_with('\n') {
-            upgraded.push('\n');
+    // Only the exact old template is eligible for implicit-default migration. Never infer that
+    // from a header: a user may have edited any setting, or explicitly selected legacy.
+    let implicit_legacy = original == first_run_config_for(maild_brand::BUNDLED_FRONTEND_ID);
+    let upgraded = if implicit_legacy {
+        // Any saved selection (including damaged state or a link) or I/O uncertainty wins.
+        match fs::symlink_metadata(paths.frontend_dir.join(".default.json")) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => first_run_config(),
+            _ => return Ok(false),
         }
-        upgraded.push_str(EXTERNAL_CONFIG_SECTION);
-    }
+    } else {
+        if !original.starts_with(LEGACY_GENERATED_CONFIG_HEADER) {
+            return Ok(false);
+        }
+        let parsed: toml::Value = toml::from_str(&original)
+            .map_err(|error| format!("旧版首次启动配置无法解析，未自动升级: {error}"))?;
+        let has_external = parsed
+            .get("plugins")
+            .and_then(toml::Value::as_table)
+            .is_some_and(|plugins| plugins.contains_key("external"));
+
+        let mut upgraded = original.replacen(
+            LEGACY_GENERATED_CONFIG_HEADER,
+            &generated_config_header(),
+            1,
+        );
+        if !has_external {
+            if !upgraded.ends_with('\n') {
+                upgraded.push('\n');
+            }
+            upgraded.push_str(EXTERNAL_CONFIG_SECTION);
+        }
+        upgraded
+    };
 
     let mut temporary = tempfile::Builder::new()
         .prefix(&format!(".{}-upgrade-", maild_brand::SLUG))
@@ -194,6 +215,10 @@ fn upgrade_generated_config(
         .and_then(|()| temporary.as_file_mut().flush())
         .and_then(|()| temporary.as_file().sync_all())
         .map_err(|error| format!("写入默认配置升级失败: {error}"))?;
+    // Do not overwrite an edit made while the upgrade snapshot was being prepared.
+    if fs::read_to_string(&paths.config_file).ok().as_deref() != Some(original.as_str()) {
+        return Ok(false);
+    }
     let file = temporary
         .persist(&paths.config_file)
         .map_err(|error| format!("发布默认配置升级失败: {}", error.error))?;
@@ -265,15 +290,21 @@ mod tests {
         assert!(text.contains("notify_new_mail = true"));
         assert!(text.contains("persist = true"));
         assert!(text.starts_with(&generated_config_header()));
-        for token in ["@HEADER@", "@DATABASE@", "@FRONTEND@", "@SOCKET@", "@PRODUCT@"] {
+        for token in [
+            "@HEADER@",
+            "@DATABASE@",
+            "@FRONTEND@",
+            "@SOCKET@",
+            "@PRODUCT@",
+        ] {
             assert!(!text.contains(token), "{token} left unfilled");
         }
-        assert!(text.contains(&format!("db_path = \"{}\"", maild_brand::DATABASE_FILE_NAME)));
-        assert!(text.contains(&format!("listen = \"{}\"", maild_brand::SOCKET_FILE_NAME)));
         assert!(text.contains(&format!(
-            "default = \"{}\"",
-            maild_brand::BUNDLED_FRONTEND_ID
+            "db_path = \"{}\"",
+            maild_brand::DATABASE_FILE_NAME
         )));
+        assert!(text.contains(&format!("listen = \"{}\"", maild_brand::SOCKET_FILE_NAME)));
+        assert!(text.contains(&format!("default = \"{}\"", STUDIO_FRONTEND_ID)));
         assert!(text.contains(maild_brand::APP_BUNDLE_NAME));
 
         #[cfg(unix)]
@@ -335,14 +366,17 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt as _;
-            assert_eq!(fs::metadata(&paths.config_file).unwrap().mode() & 0o777, 0o600);
+            assert_eq!(
+                fs::metadata(&paths.config_file).unwrap().mode() & 0o777,
+                0o600
+            );
         }
         assert!(!bootstrap_config(&paths).unwrap());
         assert_eq!(fs::read_to_string(&paths.config_file).unwrap(), upgraded);
     }
 
     #[test]
-    fn generated_config_selects_the_bundled_tauri_frontend() {
+    fn generated_config_selects_studio() {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join(maild_brand::SLUG);
         let paths = maild_paths::AppPaths::from_roots(
@@ -354,7 +388,77 @@ mod tests {
         );
         assert!(bootstrap_config(&paths).unwrap());
         let text = fs::read_to_string(&paths.config_file).unwrap();
-        assert!(text.contains(&format!("default = \"{}\"", maild_client::DEFAULT_FRONTEND)));
+        assert!(text.contains(&format!("default = \"{}\"", STUDIO_FRONTEND_ID)));
         assert!(!text.contains(maild_client::LEGACY_EGUI_FRONTEND));
+    }
+
+    fn migration_paths(root: &Path) -> maild_paths::AppPaths {
+        let data = root.join("data");
+        maild_paths::AppPaths::from_roots(&data, &data, Some(&data), Some(&data), root)
+    }
+
+    #[test]
+    fn only_exact_untouched_generated_legacy_config_migrates_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = migration_paths(dir.path());
+        ensure_private_config_dir(&paths.config_dir).unwrap();
+        fs::write(
+            &paths.config_file,
+            first_run_config_for(maild_brand::BUNDLED_FRONTEND_ID),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        fs::set_permissions(
+            &paths.config_file,
+            std::os::unix::fs::PermissionsExt::from_mode(0o600),
+        )
+        .unwrap();
+        assert!(bootstrap_config(&paths).unwrap());
+        assert_eq!(
+            fs::read_to_string(&paths.config_file).unwrap(),
+            first_run_config()
+        );
+        assert!(!paths.frontend_dir.join(".default.json").exists());
+        assert!(!bootstrap_config(&paths).unwrap());
+    }
+
+    #[test]
+    fn saved_choices_corruption_and_edited_configs_are_never_migrated() {
+        for (edited, state) in [
+            (
+                false,
+                Some(r#"{"version":1,"default":"dev.featherpost.ui"}"#),
+            ),
+            (false, Some(r#"{"version":1,"default":"custom.ui"}"#)),
+            (false, Some("damaged selection")),
+            (true, None),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let paths = migration_paths(dir.path());
+            ensure_private_config_dir(&paths.config_dir).unwrap();
+            let mut original = first_run_config_for(maild_brand::BUNDLED_FRONTEND_ID);
+            if edited {
+                original.push_str("\n# User edited this file.\n");
+            }
+            fs::write(&paths.config_file, &original).unwrap();
+            #[cfg(unix)]
+            fs::set_permissions(
+                &paths.config_file,
+                std::os::unix::fs::PermissionsExt::from_mode(0o600),
+            )
+            .unwrap();
+            if let Some(state) = state {
+                fs::create_dir_all(&paths.frontend_dir).unwrap();
+                fs::write(paths.frontend_dir.join(".default.json"), state).unwrap();
+            }
+            assert!(!bootstrap_config(&paths).unwrap());
+            assert_eq!(fs::read_to_string(&paths.config_file).unwrap(), original);
+            if let Some(state) = state {
+                assert_eq!(
+                    fs::read_to_string(paths.frontend_dir.join(".default.json")).unwrap(),
+                    state
+                );
+            }
+        }
     }
 }
