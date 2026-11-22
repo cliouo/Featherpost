@@ -620,7 +620,9 @@ ADR-0037 扩展列表参数：`limit` 1..200（默认 200），`before_id` 为�
 
 `summary_only:true` 返回安全摘要，额外要求 `messages_read`，与原有 `mailbox_write` 同时满足；
 缺任一项为 -32016。摘要无 payload，APPEND 原文在 SQL 查询中就被跳过；其他操作仅投影
-已知 target/flag/value，错误 detail 映射为受控文案（保留可信“用户放弃”标记）。源消息存在时
+已知 target/flag/value，错误 detail 映射为受控文案（保留可信“用户放弃”标记），并附稳定的
+`detail_code`（`discarded` / `rejected` / `unconfirmed`，ADR-0048 决策 3）：前端按 code 用界面语言成文，
+`detail` 的中文只是兼容老前端的兜底。源消息存在时
 另查最多 512 字符 subject，源消息消失或 APPEND 无源 UID 时为 null。这个通道不读取正文。
 省略 summary_only 保留原有原始队列接口及授权，供原有受信任客户端使用。
 
@@ -1102,7 +1104,10 @@ user、插件与未认证连接收不到。参数恒为空对象，客户端不�
 `{"jsonrpc":"2.0","method":"preferences/locale","params":{"effective":["en","zh-Hans"]}}`。前端收到后
 用新列表重新协商语言并重新渲染。`system` 模式下系统语言变化**目前不主动推送**；推送也是尽力而为，
 前端应在窗口聚焦或重连时调用 `getLocalePreference` 追上。共享 client 用
-`Notification::locale_preference_changed()` 解码这条通知（`into_server_notification` 将其归为 `Unknown`）。
+`Notification::into_server_notification()` 把它解码为类型化的 `ServerNotification::LocalePreference { effective }`
+（参数形状不对是协议错误，与其他已知通知一致）；只关心这一条的消费者也可以直接用
+`Notification::locale_preference_changed()`。`maild-app` 的连接 actor 在每次（重）连接与刷新的快照里另取一次
+`getLocalePreference`，推送即时更新 `ViewState.locale`。
 
 HTTP 不承载通知。
 
