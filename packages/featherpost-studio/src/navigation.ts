@@ -1,3 +1,4 @@
+import { m } from "@featherpost/i18n/messages";
 import { folderLabel, uiLocale } from "../../maild-ui/src/i18n";
 import type { UiFolder } from "../../maild-ui/src/bridge/types";
 import type { MailboxController } from "../../maild-ui/src/mailbox/controller";
@@ -91,14 +92,14 @@ export function scopeContext(
     (folder && folderLabel(folder)) ||
     query.folder ||
     (group
-      ? `${group.name} · 收件箱`
+      ? m.studio_scope_group_inbox({ group: group.name })
       : query.role === "inbox"
         ? query.account
-          ? "收件箱"
-          : "全部收件箱"
+          ? m.studio_scope_inbox()
+          : m.studio_scope_all_inboxes()
         : query.flagged
-          ? "星标邮件"
-          : "全部邮件");
+          ? m.studio_scope_starred()
+          : m.studio_scope_all_mail());
   return {
     account: query.account,
     accounts: query.accounts,
@@ -107,7 +108,7 @@ export function scopeContext(
     name,
     label: query.account
       ? `${controller.label(query.account)} / ${name}`
-      : `全部账户 / ${name}`,
+      : m.studio_scope_all_accounts_path({ name }),
   };
 }
 export function searchMail(

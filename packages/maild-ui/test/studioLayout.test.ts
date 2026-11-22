@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { applyEffectiveLocales } from "@featherpost/i18n";
+import { afterEach, describe, expect, it } from "vitest";
 import type { MailboxState } from "../src/mailbox/controller";
 import {
   createGrouping,
@@ -23,6 +24,9 @@ function storage() {
     },
   };
 }
+afterEach(() => {
+  applyEffectiveLocales([]);
+});
 describe("Studio workflows and grouping", () => {
   it("keeps twenty mailboxes exactly once, including new and unassigned accounts", () => {
     const g = createGrouping(accounts);
@@ -73,6 +77,17 @@ describe("Studio workflows and grouping", () => {
     expect(() => namedGroup(g, "new", "常用")).toThrow();
     expect(namedGroup(g, "frequent", " 工作 ").groups[0].name).toBe("工作");
     expect(g.groups[0].name).toBe("常用");
+  });
+  it("names default groups and validation errors in the current UI language", () => {
+    applyEffectiveLocales(["en"]);
+    const g = createGrouping(accounts);
+    expect(g.groups.map((group) => group.name)).toEqual(["Frequent", "Other"]);
+    expect(() => namedGroup(g, "new", "  ")).toThrow(
+      "Group names must be 1–40 characters",
+    );
+    expect(() => namedGroup(g, "new", "frequent")).toThrow(
+      "A group with this name already exists",
+    );
   });
   it("repairs damaged group references rather than losing accounts", () => {
     const s = storage();

@@ -1,18 +1,6 @@
 # i18n:lint 中文字面量白名单（迁移期基线，ADR-0048 决策 8）。
 # 每行一个仓库相对路径。只许删减：迁移完一个文件就删掉它这一行；新文件不得加入。
 # 文件里已无中文字面量却仍在单上，i18n:lint 同样报错。
-packages/featherpost-studio/src/Activity.tsx
-packages/featherpost-studio/src/MailboxNavigation.tsx
-packages/featherpost-studio/src/ReadingPane.tsx
-packages/featherpost-studio/src/Shell.tsx
-packages/featherpost-studio/src/StudioSelect.tsx
-packages/featherpost-studio/src/Workspace.tsx
-packages/featherpost-studio/src/layout.ts
-packages/featherpost-studio/src/mailbox.tsx
-packages/featherpost-studio/src/navigation.ts
-packages/featherpost-studio/src/settings/Accounts.tsx
-packages/featherpost-studio/src/settings/Appearance.tsx
-packages/featherpost-studio/src/settings/module.tsx
 packages/maild-ui/src/app/App.tsx
 packages/maild-ui/src/app/ErrorBoundary.tsx
 packages/maild-ui/src/bridge/tauri.ts
