@@ -3,36 +3,37 @@ mod implementation {
     use objc2_foundation::NSString;
     use objc2_service_management::{SMAppService, SMAppServiceStatus};
     pub(super) fn status() -> &'static str {
+        let t = crate::l10n::text();
         if !system_home() {
-            return "隔离目录：不更改系统登录项";
+            return t.login_isolated;
         }
         let id =
             NSString::from_str(maild_brand::AGENT_BUNDLE_ID);
         let service = unsafe { SMAppService::loginItemServiceWithIdentifier(&id) };
         match unsafe { service.status() } {
-            SMAppServiceStatus::Enabled => "已注册",
-            SMAppServiceStatus::RequiresApproval => "等待系统批准",
-            SMAppServiceStatus::NotRegistered => "未注册",
-            _ => "不可用",
+            SMAppServiceStatus::Enabled => t.login_registered,
+            SMAppServiceStatus::RequiresApproval => t.login_requires_approval,
+            SMAppServiceStatus::NotRegistered => t.login_not_registered,
+            _ => t.login_unavailable,
         }
     }
     pub(super) fn register() -> Result<(), &'static str> {
         if !system_home() {
-            return Err("当前使用隔离用户目录，不能注册系统登录项");
+            return Err(crate::l10n::text().error_login_isolated_register);
         }
         let id =
             NSString::from_str(maild_brand::AGENT_BUNDLE_ID);
         unsafe { SMAppService::loginItemServiceWithIdentifier(&id).registerAndReturnError() }
-            .map_err(|_| "系统未完成登录项注册，请检查应用签名并在系统设置中批准")
+            .map_err(|_| crate::l10n::text().error_login_register_failed)
     }
     pub(super) fn unregister() -> Result<(), &'static str> {
         if !system_home() {
-            return Err("当前使用隔离用户目录，不能撤销系统登录项");
+            return Err(crate::l10n::text().error_login_isolated_unregister);
         }
         let id =
             NSString::from_str(maild_brand::AGENT_BUNDLE_ID);
         unsafe { SMAppService::loginItemServiceWithIdentifier(&id).unregisterAndReturnError() }
-            .map_err(|_| "系统未完成登录项撤销，请在系统设置中检查")
+            .map_err(|_| crate::l10n::text().error_login_unregister_failed)
     }
     pub(super) fn open_settings() {
         unsafe { SMAppService::openSystemSettingsLoginItems() };
@@ -68,7 +69,9 @@ mod implementation {
     pub(super) fn open_agent_app(app: &std::path::Path) -> Result<(), &'static str> {
         use objc2_app_kit::{NSRunningApplication, NSWorkspace, NSWorkspaceOpenConfiguration};
         use objc2_foundation::{NSError, NSURL};
-        let text = app.to_str().ok_or("内嵌后台路径无效")?;
+        let text = app
+            .to_str()
+            .ok_or(crate::l10n::text().error_agent_path_invalid)?;
         let url = NSURL::fileURLWithPath_isDirectory(&NSString::from_str(text), true);
         let configuration = NSWorkspaceOpenConfiguration::configuration();
         configuration.setActivates(false);
@@ -85,7 +88,7 @@ mod implementation {
             Some(&completion),
         );
         match receiver.recv_timeout(std::time::Duration::from_secs(10)) {
-            Ok(false) => Err("系统未能启动内嵌后台，请检查应用签名与完整性"),
+            Ok(false) => Err(crate::l10n::text().error_agent_launch_failed),
             Ok(true) | Err(_) => Ok(()),
         }
     }
@@ -93,13 +96,13 @@ mod implementation {
 #[cfg(not(target_os = "macos"))]
 mod implementation {
     pub(super) fn status() -> &'static str {
-        "当前平台暂不提供登录项管理"
+        crate::l10n::text().login_unsupported_platform
     }
     pub(super) fn register() -> Result<(), &'static str> {
-        Err("当前平台暂不提供登录项管理")
+        Err(crate::l10n::text().login_unsupported_platform)
     }
     pub(super) fn unregister() -> Result<(), &'static str> {
-        Err("当前平台暂不提供登录项管理")
+        Err(crate::l10n::text().login_unsupported_platform)
     }
     pub(super) fn open_settings() {}
     pub(super) fn login_enabled() -> bool {
@@ -112,7 +115,7 @@ mod implementation {
         false
     }
     pub(super) fn open_agent_app(_app: &std::path::Path) -> Result<(), &'static str> {
-        Err("当前平台暂不提供后台应用启动")
+        Err(crate::l10n::text().error_agent_launch_unsupported)
     }
 }
 pub(crate) fn status() -> &'static str {

@@ -2,11 +2,41 @@ use maild_client::{
     discover_endpoint, DiscoveryOptions, Endpoint, NativeAppLayout, RpcClient,
     BUILTIN_RECOVERY_FRONTEND,
 };
+use maild_l10n::Launcher;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-const UNSUPPORTED_BY_AGENT: &str = "后台版本不支持此操作，请先退出旧后台并使用完整的新版本应用";
+use crate::l10n::text;
+
+/// JSON-RPC "method not found": the running Agent predates the method.
+const METHOD_NOT_FOUND: i64 = -32601;
+/// `repairBuiltinFrontend` could not fully confirm the repair.
+const REPAIR_INCOMPLETE: i64 = -32017;
+
+/// Why a daemon call failed. Callers branch on this, never on the (localized) dialog text.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CallError {
+    /// No usable local connection (custom connection, HTTP endpoint, discovery failure).
+    NoConnection,
+    /// No answer within the deadline; the request may still be running.
+    Unconfirmed,
+    /// The call failed with this JSON-RPC error code (`None`: transport or decoding failure).
+    Rpc(Option<i64>),
+}
+
+impl CallError {
+    /// The dialog text for this failure.
+    fn message(self, t: &'static Launcher) -> &'static str {
+        match self {
+            CallError::NoConnection => t.error_local_connection_unavailable,
+            CallError::Unconfirmed => t.error_operation_unconfirmed,
+            CallError::Rpc(Some(METHOD_NOT_FOUND)) => t.error_unsupported_by_agent,
+            CallError::Rpc(Some(REPAIR_INCOMPLETE)) => t.error_repair_incomplete,
+            CallError::Rpc(_) => t.error_agent_unconfirmed,
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct Status {
@@ -49,7 +79,7 @@ impl NativeController {
             .worker_threads(1)
             .enable_all()
             .build()
-            .map_err(|_| "无法建立本机后台连接")?;
+            .map_err(|_| text().error_connection_setup)?;
         let overrides = NativeAppLayout::has_custom_connection();
         let client = if overrides {
             None
@@ -59,7 +89,7 @@ impl NativeController {
                 .filter(|endpoint| !matches!(endpoint, Endpoint::Http { .. }))
                 .and_then(|endpoint| RpcClient::new(endpoint).ok())
         };
-        let layout = NativeAppLayout::discover().map_err(|_| "应用不完整，无法安全管理后台")?;
+        let layout = NativeAppLayout::discover().map_err(|_| text().error_app_incomplete)?;
         Ok(Self {
             runtime,
             client,
@@ -69,31 +99,45 @@ impl NativeController {
     }
 
     fn call(&self, method: &str, params: Value, timeout: Duration) -> Result<Value, &'static str> {
-        let client = self
-            .client
-            .as_ref()
-            .ok_or("本机连接不可用，请从完整应用包打开")?;
+        self.try_call(method, params, timeout)
+            .map_err(|error| error.message(text()))
+    }
+
+    fn try_call(&self, method: &str, params: Value, timeout: Duration) -> Result<Value, CallError> {
+        let client = self.client.as_ref().ok_or(CallError::NoConnection)?;
         self.runtime.block_on(async {
             tokio::time::timeout(timeout + Duration::from_secs(1), async {
                 let mut connection = client.connect_stream().await?;
                 connection.call_with_timeout(method, params, timeout, |_| {}).await
             }).await
-                .map_err(|_| "操作尚未确认，请刷新状态；不要重复执行修复")?
-                .map_err(|error| match error.rpc_code {
-                    Some(-32601) => UNSUPPORTED_BY_AGENT,
-                    Some(-32017) => "修复未完整确认。请检查安装包、目录占用与磁盘空间；如磁盘已恢复，请重启后台后检查。不要自动重试。",
-                    _ => "后台未确认操作，请刷新状态并检查版本；修复或停止请求可能仍在执行，不要自动重试",
-                })
+                .map_err(|_| CallError::Unconfirmed)?
+                .map_err(|error| CallError::Rpc(error.rpc_code))
         })
+    }
+
+    /// Re-negotiate the dialog language: the daemon's `effective` list when it answers,
+    /// otherwise the OS preferred languages (ADR-0048 decision 6, open item 2).
+    fn refresh_locale(&self, online: bool) {
+        let effective = if online { self.daemon_locale() } else { None };
+        crate::l10n::apply_daemon_preference(effective.as_deref());
+    }
+
+    fn daemon_locale(&self) -> Option<Vec<String>> {
+        let client = self.client.as_ref()?;
+        let answer = self.runtime.block_on(tokio::time::timeout(
+            Duration::from_secs(2),
+            client.locale_preference(),
+        ));
+        Some(answer.ok()?.ok()?.effective)
     }
 
     fn managed(&self) -> Result<&NativeAppLayout, &'static str> {
         if self.overrides {
-            return Err("此入口使用自定义连接，不能管理平台后台");
+            return Err(text().error_custom_connection);
         }
         self.layout
             .as_ref()
-            .ok_or("请从完整应用包打开修复与后台管理")
+            .ok_or(text().error_open_from_full_app)
     }
 
     fn online(&self) -> bool {
@@ -228,12 +272,13 @@ impl NativeController {
         if !same_bundle {
             return false;
         }
-        let response = match self.call("resyncBuiltinFrontend", json!({}), Duration::from_secs(60)) {
-            Err(error) if error == UNSUPPORTED_BY_AGENT => {
-                self.call("repairBuiltinFrontend", json!({}), Duration::from_secs(60))
-            }
-            other => other,
-        };
+        let response =
+            match self.try_call("resyncBuiltinFrontend", json!({}), Duration::from_secs(60)) {
+                Err(CallError::Rpc(Some(METHOD_NOT_FOUND))) => {
+                    self.try_call("repairBuiltinFrontend", json!({}), Duration::from_secs(60))
+                }
+                other => other,
+            };
         response.is_ok_and(|response| response["id"] == maild::recovery::BUNDLED_FRONTEND_ID)
     }
 
@@ -247,7 +292,7 @@ impl NativeController {
 
     fn mailbox_target(&self) -> Result<MailboxTarget, &'static str> {
         let catalog = self.call("listFrontends", json!({}), Duration::from_secs(2))?;
-        mailbox_target(&catalog).ok_or("邮件前端尚不可用，请先恢复内置前端或启动后台")
+        mailbox_target(&catalog).ok_or(text().error_mailbox_unavailable)
     }
 }
 
@@ -312,7 +357,7 @@ fn recovery_mailbox_host(
         LaunchRoute::InPlace if !main_window_running => Ok(exe),
         LaunchRoute::InPlace => Ok(None),
         LaunchRoute::Frontend(_) => Ok(None),
-        LaunchRoute::Recovery => Err("邮件前端尚不可用，请先恢复内置前端或启动后台"),
+        LaunchRoute::Recovery => Err(text().error_mailbox_unavailable),
     }
 }
 
@@ -352,15 +397,16 @@ fn mailbox_target(catalog: &Value) -> Option<MailboxTarget> {
 }
 
 fn mailbox_response(
+    t: &'static Launcher,
     target: &MailboxTarget,
     response: &Value,
 ) -> Result<&'static str, &'static str> {
     if response["activation_requested"] == true {
-        Ok("已请求打开邮箱。确认邮件窗口打开后，可以关闭修复窗口。")
+        Ok(t.result_mailbox_requested)
     } else if target.independent && response["queued"] == true {
-        Ok("打开请求已送入队列，请切回正在运行的邮件窗口。")
+        Ok(t.result_mailbox_queued)
     } else {
-        Err("当前前端无法自动打开。可切回已有邮件窗口，或从修复选项恢复内置前端。")
+        Err(t.error_mailbox_cannot_open)
     }
 }
 
@@ -374,6 +420,8 @@ impl Controller for NativeController {
 
     fn status(&mut self) -> Status {
         let online = self.online();
+        // Every status refresh is also when the dialogs pick up a changed language preference.
+        self.refresh_locale(online);
         let mailbox_available = online && self.mailbox_target().is_ok();
         Status {
             online,
@@ -382,7 +430,7 @@ impl Controller for NativeController {
             login: if self.layout.is_some() {
                 super::platform::status().into()
             } else {
-                format!("请从 {} 管理", maild_brand::APP_BUNDLE_NAME)
+                (text().login_manage_from_app)(maild_brand::APP_BUNDLE_NAME)
             },
         }
     }
@@ -392,7 +440,7 @@ impl Controller for NativeController {
             Operation::OpenMailbox => {
                 let target = self.mailbox_target()?;
                 let response = self.request_mailbox(&target)?;
-                mailbox_response(&target, &response)
+                mailbox_response(text(), &target, &response)
             }
             Operation::Repair => {
                 self.managed()?;
@@ -400,23 +448,34 @@ impl Controller for NativeController {
                     let response =
                         self.call("repairBuiltinFrontend", json!({}), Duration::from_secs(60))?;
                     if response["id"] != maild::recovery::BUNDLED_FRONTEND_ID {
-                        return Err("后台未确认内置前端修复，请刷新状态");
+                        return Err(text().error_repair_unconfirmed);
                     }
-                    Ok("内置前端已恢复，并已设为默认。原包已保留备份。")
+                    Ok(text().result_repaired_online)
                 } else {
-                    maild::recovery::repair_offline().map_err(|_| "未能完成离线恢复。请确认所有后台已停止、安装包完整，并检查磁盘空间；不要自动重试。")?;
-                    Ok("内置前端已恢复，并已设为默认。启动后台后即可打开邮箱。")
+                    maild::recovery::repair_offline()
+                        .map_err(|_| text().error_repair_offline_failed)?;
+                    Ok(text().result_repaired_offline)
                 }
             }
             Operation::StartOnce => {
                 let (exe, agent_app) = {
                     let layout = self.managed()?;
-                    (layout.agent_executable()?, layout.agent_app_bundle()?)
+                    // maild-client's path checks are untranslated diagnostics: log them and show
+                    // the localized "incomplete app" message instead.
+                    let incomplete = |error: &str| {
+                        eprintln!("{}: {error}", maild_brand::LAUNCHER_BIN);
+                        text().error_app_incomplete
+                    };
+                    (
+                        layout.agent_executable().map_err(incomplete)?,
+                        layout.agent_app_bundle().map_err(incomplete)?,
+                    )
                 };
                 if self.status().online {
-                    return Ok("后台已连接");
+                    return Ok(text().result_background_connected);
                 }
-                let paths = maild_paths::AppPaths::discover().map_err(|_| "平台目录不可用")?;
+                let paths = maild_paths::AppPaths::discover()
+                    .map_err(|_| text().error_platform_dirs_unavailable)?;
                 let managed = if paths.runtime_dir.starts_with(&paths.data_dir) {
                     &paths.data_dir
                 } else {
@@ -425,10 +484,10 @@ impl Controller for NativeController {
                 match maild::agent_lifecycle::AgentLifecycleLock::probe(managed, &paths.runtime_dir)
                 {
                     Ok(maild::agent_lifecycle::AgentLifecycleStatus::Idle) => {}
-                    _ => return Err("后台仍被占用或正在启动，请稍后刷新"),
+                    _ => return Err(text().error_background_busy),
                 }
                 if self.client.is_none() {
-                    return Err("本机后台配置不可用，请检查完整应用的安装");
+                    return Err(text().error_background_config_unavailable);
                 }
                 // ADR-0044: in the real user session, LaunchServices owns the Agent as its own
                 // `LSUIElement` app, outside this process's coalition, so the product Dock icon
@@ -436,42 +495,42 @@ impl Controller for NativeController {
                 // environment-preserving child (LaunchServices would use the real home).
                 if super::platform::launches_through_workspace() {
                     super::platform::open_agent_app(&agent_app)?;
-                    return Ok("已请求启动一次，返回主窗口可刷新连接状态");
+                    return Ok(text().result_start_requested);
                 }
                 let mut child = maild_client::native_child_command(&exe)
                     .stdin(std::process::Stdio::null())
                     .stdout(std::process::Stdio::null())
                     .stderr(std::process::Stdio::null())
                     .spawn()
-                    .map_err(|_| "无法启动内嵌后台")?;
+                    .map_err(|_| text().error_start_failed)?;
                 // Intentionally independent of the recovery/reader window lifetime (ADR-0039).
                 std::thread::spawn(move || {
                     let _ = child.wait();
                 });
-                Ok("已请求启动一次，返回主窗口可刷新连接状态")
+                Ok(text().result_start_requested)
             }
             Operation::Stop => {
                 self.managed()?;
                 let response = self.call("stopManagedAgent", json!({}), Duration::from_secs(5))?;
                 if response["stopping"] != true {
-                    return Err("后台未确认停止，请刷新状态");
+                    return Err(text().error_stop_unconfirmed);
                 }
-                Ok("后台已接受停止请求，正在保存状态并退出")
+                Ok(text().result_stop_accepted)
             }
             Operation::RegisterLogin => {
                 self.managed()?;
                 super::platform::register()?;
-                Ok("已提交开机启动请求。如系统要求批准，请打开系统登录项设置。")
+                Ok(text().result_login_register_requested)
             }
             Operation::UnregisterLogin => {
                 self.managed()?;
                 super::platform::unregister()?;
-                Ok("已撤销开机启动注册，请返回检查后台状态")
+                Ok(text().result_login_unregistered)
             }
             Operation::SystemSettings => {
                 self.managed()?;
                 super::platform::open_settings();
-                Ok("已请求打开系统登录项设置")
+                Ok(text().result_login_settings_requested)
             }
         }
     }
@@ -521,14 +580,53 @@ mod tests {
             id: "reader".into(),
             independent: true,
         };
+        let zh = &maild_l10n::ZH_HANS.launcher;
         let queued = json!({"queued":true,"activation_requested":false});
-        assert!(mailbox_response(&target, &queued).unwrap().contains("队列"));
+        let requested = json!({"queued":true,"activation_requested":true});
+        assert!(mailbox_response(zh, &target, &queued).unwrap().contains("队列"));
+        let en = &maild_l10n::EN.launcher;
+        assert_eq!(
+            mailbox_response(en, &target, &queued),
+            Ok(en.result_mailbox_queued)
+        );
         target.independent = false;
-        assert!(mailbox_response(&target, &queued).is_err());
-        assert!(
-            mailbox_response(&target, &json!({"queued":true,"activation_requested":true}))
-                .unwrap()
-                .contains("确认邮件窗口打开后")
+        assert!(mailbox_response(zh, &target, &queued).is_err());
+        assert_eq!(
+            mailbox_response(en, &target, &queued),
+            Err(en.error_mailbox_cannot_open)
+        );
+        assert!(mailbox_response(zh, &target, &requested)
+            .unwrap()
+            .contains("确认邮件窗口打开后"));
+        assert_eq!(
+            mailbox_response(en, &target, &requested),
+            Ok(en.result_mailbox_requested)
+        );
+    }
+
+    #[test]
+    fn call_errors_branch_on_rpc_codes_not_on_text() {
+        for messages in [&maild_l10n::ZH_HANS, &maild_l10n::EN] {
+            let t = &messages.launcher;
+            assert_eq!(
+                CallError::Rpc(Some(METHOD_NOT_FOUND)).message(t),
+                t.error_unsupported_by_agent
+            );
+            assert_eq!(
+                CallError::Rpc(Some(REPAIR_INCOMPLETE)).message(t),
+                t.error_repair_incomplete
+            );
+            assert_eq!(CallError::Rpc(Some(-32603)).message(t), t.error_agent_unconfirmed);
+            assert_eq!(CallError::Rpc(None).message(t), t.error_agent_unconfirmed);
+            assert_eq!(CallError::Unconfirmed.message(t), t.error_operation_unconfirmed);
+            assert_eq!(
+                CallError::NoConnection.message(t),
+                t.error_local_connection_unavailable
+            );
+        }
+        assert_eq!(
+            maild_l10n::ZH_HANS.launcher.error_unsupported_by_agent,
+            "后台版本不支持此操作，请先退出旧后台并使用完整的新版本应用"
         );
     }
     #[test]
