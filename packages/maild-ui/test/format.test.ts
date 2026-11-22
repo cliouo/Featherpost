@@ -19,7 +19,7 @@ import {
   MAX_SAFE_UNIX_SECS,
   shortDate,
   toDate,
-  UI_LOCALE,
+  uiLocale,
 } from "../src/mailbox/format";
 import { MessageList } from "../src/mailbox/MessageList";
 import { Reader } from "../src/mailbox/Reader";
@@ -52,8 +52,8 @@ afterEach(() => {
 });
 
 describe("format.ts：边界与防崩保护", () => {
-  it("UI_LOCALE 固定为 zh-CN，toDate 严格拦截 <= 0、非有限值与超上限秒数", () => {
-    expect(UI_LOCALE).toBe("zh-CN");
+  it("未推送语言偏好时 uiLocale() 为 zh-CN，toDate 严格拦截 <= 0、非有限值与超上限秒数", () => {
+    expect(uiLocale()).toBe("zh-CN");
     expect(MAX_SAFE_UNIX_SECS).toBe(8_640_000_000_000);
 
     for (const bad of [

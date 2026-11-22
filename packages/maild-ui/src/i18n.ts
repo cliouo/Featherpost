@@ -1,5 +1,16 @@
-/** The shipped interface is Chinese; provider data and user-authored names are not UI copy. */
-export const UI_LOCALE = "zh-CN";
+import { getUiLocale, type UiLocale } from "@featherpost/i18n";
+import { m } from "@featherpost/i18n/messages";
+
+export { useUiLocale } from "@featherpost/i18n/react";
+export type { UiLocale };
+
+/**
+ * 当前协商出的界面语言（ADR-0048 决策 8），`Intl` 格式化与 `localeCompare` 也用它。
+ * 未收到偏好时为 `zh-CN`。服务商数据与用户自起的名字不是界面文案，不随它翻译。
+ */
+export function uiLocale(): UiLocale {
+  return getUiLocale();
+}
 
 interface DisplayFolder {
   name: string;
@@ -9,24 +20,24 @@ interface DisplayFolder {
 
 const folderNames: Record<
   string,
-  { label: string; aliases: readonly string[] }
+  { label: () => string; aliases: readonly string[] }
 > = {
-  inbox: { label: "收件箱", aliases: ["inbox"] },
+  inbox: { label: m.mailbox_folder_inbox, aliases: ["inbox"] },
   sent: {
-    label: "已发送",
+    label: m.mailbox_folder_sent,
     aliases: ["sent", "sent mail", "sent messages", "sent items"],
   },
-  drafts: { label: "草稿", aliases: ["draft", "drafts"] },
-  archive: { label: "归档", aliases: ["archive", "archives"] },
+  drafts: { label: m.mailbox_folder_drafts, aliases: ["draft", "drafts"] },
+  archive: { label: m.mailbox_folder_archive, aliases: ["archive", "archives"] },
   trash: {
-    label: "已删除",
+    label: m.mailbox_folder_trash,
     aliases: ["trash", "deleted items", "deleted messages"],
   },
   junk: {
-    label: "垃圾邮件",
+    label: m.mailbox_folder_junk,
     aliases: ["junk", "junk email", "junk e-mail", "spam"],
   },
-  all: { label: "全部邮件", aliases: ["all mail", "all messages"] },
+  all: { label: m.mailbox_folder_all, aliases: ["all mail", "all messages"] },
 };
 folderNames.spam = folderNames.junk;
 
@@ -60,47 +71,52 @@ export function folderLabel(
   );
   const visibleLeaf = label.slice(labelSeparator + 1);
   if (!entry.aliases.includes(visibleLeaf.toLowerCase())) return label;
-  return label.slice(0, labelSeparator + 1) + entry.label;
+  return label.slice(0, labelSeparator + 1) + entry.label();
 }
+
+const lifecycleLabels: Record<string, () => string> = {
+  independent: m.extensions_lifecycle_independent,
+  on_demand: m.extensions_lifecycle_on_demand,
+  supervised: m.extensions_lifecycle_supervised,
+};
 
 export function lifecycleLabel(value: string): string {
-  const label = (
-    {
-      independent: "独立运行",
-      on_demand: "按需启动",
-      supervised: "由后台托管运行",
-    } as Record<string, string>
-  )[value];
-  return typeof label === "string"
-    ? label
+  const label = Object.prototype.hasOwnProperty.call(lifecycleLabels, value)
+    ? lifecycleLabels[value]
+    : undefined;
+  return label
+    ? label()
     : value
-      ? `未知运行方式（${value}）`
-      : "未声明运行方式";
+      ? m.extensions_lifecycle_unknown({ value })
+      : m.extensions_lifecycle_undeclared();
 }
 
-export const permissionLabels: Record<string, string> = {
-  messages_read: "读取邮件与账户状态",
-  messages_send: "发送邮件",
-  drafts_read: "读取草稿",
-  drafts_write: "编辑草稿",
-  mailbox_write: "修改邮件与同步队列",
-  accounts_manage: "管理账户与凭据",
-  addresses_manage: "管理发件身份",
-  plugins_manage: "安装和管理其他扩展",
-  settings_read: "读取应用设置",
-  settings_write: "修改应用设置",
-  notifications_read: "读取系统通知授权",
-  frontend_open: "接收导航意图、读取前端清单",
-  transport_provider: "提供邮件收发服务",
-  events_stream: "订阅事件",
-  inbox: "收件箱（读取邮件）",
-  message: "阅读邮件（读取邮件）",
-  compose: "写信（发送邮件）",
-  settings: "设置（读写设置）",
-  background: "后台入口",
+/** 授权词与贡献类型的界面说明；值是消息函数，每次调用按当前语言成文。 */
+export const permissionLabels: Readonly<Record<string, () => string>> = {
+  messages_read: m.extensions_permission_messages_read,
+  messages_send: m.extensions_permission_messages_send,
+  drafts_read: m.extensions_permission_drafts_read,
+  drafts_write: m.extensions_permission_drafts_write,
+  mailbox_write: m.extensions_permission_mailbox_write,
+  accounts_manage: m.extensions_permission_accounts_manage,
+  addresses_manage: m.extensions_permission_addresses_manage,
+  plugins_manage: m.extensions_permission_plugins_manage,
+  settings_read: m.extensions_permission_settings_read,
+  settings_write: m.extensions_permission_settings_write,
+  notifications_read: m.extensions_permission_notifications_read,
+  frontend_open: m.extensions_permission_frontend_open,
+  transport_provider: m.extensions_permission_transport_provider,
+  events_stream: m.extensions_permission_events_stream,
+  inbox: m.extensions_permission_inbox,
+  message: m.extensions_permission_message,
+  compose: m.extensions_permission_compose,
+  settings: m.extensions_permission_settings,
+  background: m.extensions_permission_background,
 };
 
 export function permissionLabel(value: string): string {
-  const label = permissionLabels[value];
-  return typeof label === "string" ? label : "未识别的功能或权限";
+  const label = Object.prototype.hasOwnProperty.call(permissionLabels, value)
+    ? permissionLabels[value]
+    : undefined;
+  return label ? label() : m.extensions_permission_unknown();
 }

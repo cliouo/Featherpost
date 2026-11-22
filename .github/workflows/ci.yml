@@ -45,6 +45,12 @@ jobs:
           pnpm --dir packages/maild-ui exec tsc --noEmit -p tsconfig.json
           pnpm --dir packages/maild-ui test
           pnpm --dir packages/featherpost-studio build
+      # ADR-0048 decision 8: message catalogs, m.<key> references, CJK-literal allowlist, and the type fixture.
+      - name: Lint default-frontend i18n
+        if: runner.os == 'macOS'
+        run: |
+          pnpm run i18n:lint
+          pnpm run i18n:typecheck
       - name: Test macOS packaging scripts
         if: runner.os == 'macOS'
         run: |

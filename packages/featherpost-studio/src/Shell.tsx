@@ -1,4 +1,4 @@
-import { folderLabel, UI_LOCALE } from "../../maild-ui/src/i18n";
+import { folderLabel, uiLocale, useUiLocale } from "../../maild-ui/src/i18n";
 import { Choice } from "../../maild-ui/src/settings/Choice";
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import type { Host } from "../../maild-ui/src/host/host";
@@ -31,6 +31,8 @@ export function Studio({
   composer: ComposeController;
   setup(): void;
 }) {
+  // 订阅界面语言：切换时整棵树随根组件重新渲染（不重挂载、不丢状态）。
+  useUiLocale();
   const state = useStore(host.state),
     mail = useStore(mailbox.store),
     drafts = useStore(composer.store);
@@ -334,7 +336,7 @@ function FolderBranches({
   const matches = (n: FolderNode): boolean =>
     !filter ||
     `${n.folder.name} ${n.folder.display_name} ${folderLabel(n.folder)}`
-      .toLocaleLowerCase(UI_LOCALE)
+      .toLocaleLowerCase(uiLocale())
       .includes(filter) ||
     n.children.some(matches);
   return (

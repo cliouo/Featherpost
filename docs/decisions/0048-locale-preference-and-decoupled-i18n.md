@@ -188,6 +188,19 @@ description = "..."
 - 默认前端的 Tauri 原生菜单（`macos_locale.rs`）属于默认前端而非内核，跟随该前端的协商结果，
   由壳从同一份偏好取得语言，不另读系统设置。
 
+> 实现记录（L3 前半，`packages/i18n`，细节见该包 README）：
+>
+> - 消息文件改为每种语言一个目录、每个命名空间一个文件：`messages/{zh-CN,en}/<命名空间>.json`，命名空间即
+>   key 前缀（`common`、`mailbox`、`compose`、`settings`、`extensions`、`studio`）。inlang 消息格式插件的
+>   `pathPattern` 支持数组，编译结果与单文件相同；分文件是为了让各模块的迁移分支并行合入时互不冲突。
+> - 编译产物不提交，由本包 `postinstall` 与两个前端的 `dev/build/typecheck/test` 脚本生成；插件从
+>   `node_modules` 本地加载，编译不联网。
+> - 类型：Paraglide 以 `--emit-ts-declarations` 生成的声明已能让 `tsc` 报出 key 拼错与缺参、参数名错，
+>   不需要 `i18n:dts`。
+> - 协商补充：无书写系统的 `zh-<地区>` 只有 `TW`、`HK`、`MO` 视为繁体，其余地区（如 `zh-MY`）匹配 `zh-CN`。
+>   `maild-l10n` 的协商函数应采用同一规则。
+> - `UI_LOCALE` 常量换成函数 `uiLocale()`（`maild-ui/src/i18n.ts`），每次调用返回当前协商结果。
+
 ## 交付切片
 
 | 切片 | 内容 | 可独立验收 |

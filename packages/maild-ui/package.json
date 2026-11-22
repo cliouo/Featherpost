@@ -5,12 +5,13 @@
   "type": "module",
   "description": "Maild 默认前端的 webview 侧：宿主、贡献注册底座与内置模块（ADR-0031）",
   "scripts": {
-    "dev": "vite --host 127.0.0.1 --port 1420 --strictPort",
-    "build": "tsc --noEmit -p tsconfig.json && vite build",
-    "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "vitest run"
+    "dev": "pnpm --dir ../i18n compile && vite --host 127.0.0.1 --port 1420 --strictPort",
+    "build": "pnpm --dir ../i18n compile && tsc --noEmit -p tsconfig.json && vite build",
+    "typecheck": "pnpm --dir ../i18n compile && tsc --noEmit -p tsconfig.json",
+    "test": "pnpm --dir ../i18n compile && vitest run"
   },
   "dependencies": {
+    "@featherpost/i18n": "workspace:*",
     "@tauri-apps/api": "^2.8.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1"

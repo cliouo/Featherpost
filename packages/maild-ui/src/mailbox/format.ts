@@ -1,5 +1,5 @@
-import { UI_LOCALE } from '../i18n';
-export { UI_LOCALE } from '../i18n';
+import { uiLocale } from '../i18n';
+export { uiLocale } from '../i18n';
 
 /** JavaScript `Date` 可精确表示的正向 Unix 秒上限（`8.64e15` 毫秒）。 */
 export const MAX_SAFE_UNIX_SECS = 8_640_000_000_000;
@@ -11,6 +11,7 @@ const sameDay = (a: Date, b: Date) =>
 
 interface Formatters {
   tz: string;
+  locale: string;
   time: Intl.DateTimeFormat;
   monthDay: Intl.DateTimeFormat;
   date: Intl.DateTimeFormat;
@@ -20,19 +21,21 @@ interface Formatters {
 let cachedFormatters: Formatters | null = null;
 
 /**
- * 按当前系统时区惰性缓存 `Intl.DateTimeFormat`。
+ * 按当前系统时区与界面语言惰性缓存 `Intl.DateTimeFormat`。
  * 绝不向选项传入固定 `timeZone`，以始终采用操作系统本地时区；当窗口最小化期间系统时区切换时，
- * `resolvedOptions().timeZone` 变化会自动触发重建，避免沿用旧时区实例。
+ * `resolvedOptions().timeZone` 变化会自动触发重建，避免沿用旧时区实例；界面语言切换同理。
  */
 function formatters(): Formatters {
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone ?? '';
-  if (!cachedFormatters || cachedFormatters.tz !== tz) {
+  const locale = uiLocale();
+  if (!cachedFormatters || cachedFormatters.tz !== tz || cachedFormatters.locale !== locale) {
     cachedFormatters = {
       tz,
-      time: new Intl.DateTimeFormat(UI_LOCALE, { hour: '2-digit', minute: '2-digit' }),
-      monthDay: new Intl.DateTimeFormat(UI_LOCALE, { month: 'numeric', day: 'numeric' }),
-      date: new Intl.DateTimeFormat(UI_LOCALE, { year: 'numeric', month: 'numeric', day: 'numeric' }),
-      full: new Intl.DateTimeFormat(UI_LOCALE, {
+      locale,
+      time: new Intl.DateTimeFormat(locale, { hour: '2-digit', minute: '2-digit' }),
+      monthDay: new Intl.DateTimeFormat(locale, { month: 'numeric', day: 'numeric' }),
+      date: new Intl.DateTimeFormat(locale, { year: 'numeric', month: 'numeric', day: 'numeric' }),
+      full: new Intl.DateTimeFormat(locale, {
         year: 'numeric',
         month: 'long',
         day: 'numeric',
