@@ -1,5 +1,13 @@
 /* Studio owns its settings surface. Legacy dev.featherpost.ui is unchanged. */
+body[data-studio-settings] {
+  overflow: hidden;
+}
 body[data-studio-settings] .studio {
+  /* Keep the native titlebar surface outside every form's scroll chain. */
+  position: fixed;
+  inset: 0;
+  height: auto;
+  overflow: clip;
   grid-template-columns: minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
 }
@@ -9,6 +17,7 @@ body[data-studio-settings] .studio > .studio-sidebar {
 }
 body[data-studio-settings] .studio > .studio-workspace {
   grid-area: 1 / 1;
+  overflow: clip;
 }
 .studio-settings {
   --ink: var(--studio-text);
@@ -31,7 +40,7 @@ body[data-studio-settings] .studio > .studio-workspace {
   flex-direction: column;
   min-height: 0;
   flex: 1;
-  overflow: hidden;
+  overflow: clip;
   color: var(--studio-text);
   background: var(--studio-canvas);
   font-size: 13px;
@@ -52,7 +61,7 @@ body[data-studio-settings] .studio > .studio-workspace {
 .studio-settings-topbar .brand-feather { width: 20px; height: 20px; flex-shrink: 0; }
 .studio-settings-location { margin-left: 24px; padding-left: 20px; border-left: 1px solid var(--studio-border); color: var(--studio-muted); font-size: 12px; line-height: 18px; }
 .studio-settings .studio-return { display: flex; align-items: center; gap: 7px; min-height: 30px; padding: 5px 11px; font-size: 12px; }
-.studio-settings .settings-layout { grid-template-columns: 224px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); overflow: hidden; }
+.studio-settings .settings-layout { grid-template-columns: 224px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); overflow: clip; }
 .studio-settings .settings-nav {
   display: flex;
   flex-direction: column;
@@ -74,7 +83,7 @@ body[data-studio-settings] .studio > .studio-workspace {
 .studio-settings-nav-footer > span { display: flex; align-items: center; gap: 6px; }
 .studio-settings .status-dot { width: 5px; height: 5px; background: var(--studio-mark); flex: 0 0 auto; border-radius: 50%; display: inline-block; }
 .studio-settings .status-dot.warn { background: var(--studio-danger); }
-.studio-settings .settings-content { background: var(--studio-canvas); }
+.studio-settings .settings-content { background: var(--studio-canvas); overscroll-behavior: contain; }
 .studio-settings .settings-content .page-column { padding: 35px 44px 28px; max-width: 1440px; width: 100%; margin: 0; }
 .studio-settings-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-bottom: 28px; }
 .studio-settings-title { display: flex; align-items: baseline; gap: 13px; }

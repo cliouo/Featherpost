@@ -1,4 +1,5 @@
 import { folderLabel } from "../i18n";
+import { Choice } from "../settings/Choice";
 import { useEffect, useState } from "react";
 import { Icon } from "../app/Icon";
 import { useStore } from "../host/hooks";
@@ -167,10 +168,10 @@ export function SearchBar({ controller }: { controller: MailboxController }) {
         <div className="mail-search-filters">
           <label>
             账户
-            <select
+            <Choice
               value={account}
-              onChange={(e) => {
-                setAccount(e.target.value);
+              onValueChange={(value) => {
+                setAccount(value);
                 setFolder("");
               }}
             >
@@ -180,14 +181,14 @@ export function SearchBar({ controller }: { controller: MailboxController }) {
                   {controller.label(a.account)}
                 </option>
               ))}
-            </select>
+            </Choice>
           </label>
           <label>
             文件夹
-            <select
+            <Choice
               value={folder}
               disabled={!account}
-              onChange={(e) => setFolder(e.target.value)}
+              onValueChange={setFolder}
             >
               <option value="">全部文件夹</option>
               {controller.foldersOf(account).map((f) => (
@@ -196,7 +197,7 @@ export function SearchBar({ controller }: { controller: MailboxController }) {
                   {f.present ? "" : "（本机历史）"}
                 </option>
               ))}
-            </select>
+            </Choice>
           </label>
           <label>
             发件人

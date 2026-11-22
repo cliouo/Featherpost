@@ -1,4 +1,5 @@
 import { folderLabel } from "../i18n";
+import { Choice } from "../settings/Choice";
 import { useState } from "react";
 import { useStore } from "../host/hooks";
 import { Dialog } from "./Dialog";
@@ -161,10 +162,10 @@ export function Actions({
           ) : (
             <label className="move-target">
               目标文件夹
-              <select
+              <Choice
                 aria-label="目标文件夹"
                 value={targets.some((f) => f.name === target) ? target : ""}
-                onChange={(e) => setTarget(e.target.value)}
+                onValueChange={setTarget}
               >
                 <option value="">请选择</option>
                 {targets.map((f) => (
@@ -172,7 +173,7 @@ export function Actions({
                     {folderLabel(f)}
                   </option>
                 ))}
-              </select>
+              </Choice>
               {targets.length === 0 && (
                 <span>该账户暂时没有其他可用文件夹。</span>
               )}

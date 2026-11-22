@@ -199,16 +199,19 @@ kbd {
   outline: 2px solid var(--studio-mark);
   outline-offset: 1px;
 }
-.studio-search select {
+.studio-search .studio-picker {
+  width: auto;
+  min-height: 28px;
   max-width: 165px;
-  font-size: 10px;
+  font-size: 11px;
+  line-height: 18px;
+  gap: 6px;
   color: var(--studio-muted);
   border: 0;
   border-left: 1px solid var(--studio-border);
-  padding-left: 10px;
-  outline: 0;
+  padding: 0 0 0 10px;
+  border-radius: 0;
   background: transparent;
-  appearance: none;
   text-overflow: ellipsis;
 }
 .studio-search kbd {
@@ -1598,7 +1601,7 @@ kbd {
   .studio-search {
     margin-left: 16px;
   }
-  .studio-search select {
+  .studio-search .studio-picker {
     max-width: 135px;
   }
   .letter-content {
@@ -1631,7 +1634,7 @@ kbd {
   .studio-topbar {
     grid-template-columns: var(--nav-width) minmax(230px, 390px) minmax(0, 1fr);
   }
-  .studio-search select {
+  .studio-search .studio-picker {
     max-width: 110px;
   }
   .topbar-actions {
@@ -1682,7 +1685,7 @@ kbd {
   .back-button {
     display: inline-flex !important;
   }
-  .studio-search select {
+  .studio-search .studio-picker {
     max-width: 95px;
   }
   .topbar-actions {

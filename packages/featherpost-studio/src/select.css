@@ -9,12 +9,12 @@
 }
 .studio-picker > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .studio-picker-chevron { display: flex; flex-shrink: 0; color: var(--studio-secondary); }
-.studio-picker:not(:disabled):hover,
-.studio-settings button.studio-picker:not(:disabled):hover { background: var(--studio-surface); border-color: var(--studio-muted); }
+.studio-picker:not([data-disabled]):hover,
+.studio-settings button.studio-picker:not([data-disabled]):hover { background: var(--studio-surface); border-color: var(--studio-muted); }
 .studio-picker:focus-visible,
 .studio-picker[data-state="open"] { outline: 2px solid var(--studio-mark); outline-offset: 2px; }
-.studio-picker:disabled,
-.studio-settings button.studio-picker:disabled { opacity: .5; cursor: default; }
+.studio-picker[data-disabled],
+.studio-settings button.studio-picker[data-disabled] { opacity: .5; cursor: default; }
 .studio-picker-menu {
   z-index: 1000; min-width: var(--radix-select-trigger-width);
   max-width: min(440px, var(--radix-select-content-available-width));
@@ -38,3 +38,6 @@
 .studio-picker-scroll { display: flex; align-items: center; justify-content: center; height: 22px; color: var(--studio-secondary); }
 .studio-activity .activity-account-filter .studio-picker { width: 220px; max-width: 100%; }
 .studio-settings .settings-actions > .studio-picker { width: auto; min-width: 160px; }
+.studio-settings .setting-row > .studio-picker {
+  width: auto; max-width: min(260px, 100%); flex-shrink: 0;
+}

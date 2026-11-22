@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Choice } from "../settings/Choice";
 import { Icon } from "../app/Icon";
 import { useStore } from "../host/hooks";
 import { clockTime } from "../mailbox/format";
@@ -247,11 +248,11 @@ export function Editor({
             <div className="compose-field">
               <label htmlFor="compose-from">发件人</label>
               <div className="compose-control">
-                <select
+                <Choice
                   id="compose-from"
                   value={fromValue}
                   disabled={locked}
-                  onChange={(e) => controller.setSender(e.target.value)}
+                  onValueChange={(value) => controller.setSender(value)}
                   aria-invalid={!!s.errors.from}
                 >
                   {!s.senders.some(
@@ -270,7 +271,7 @@ export function Editor({
                       {v.available ? "" : "（未配置发信）"}
                     </option>
                   ))}
-                </select>
+                </Choice>
                 {s.errors.from && (
                   <span className="field-error">{s.errors.from}</span>
                 )}

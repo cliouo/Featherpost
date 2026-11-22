@@ -1,6 +1,6 @@
-import { createContext, useContext, type ComponentType, type ReactNode } from "react";
+import { createContext, useContext, type AriaAttributes, type ComponentType, type ReactNode } from "react";
 
-export interface ChoiceProps {
+export interface ChoiceProps extends AriaAttributes {
   value: string;
   onValueChange(value: string): void;
   children: ReactNode;
@@ -8,12 +8,10 @@ export interface ChoiceProps {
   id?: string;
   className?: string;
   title?: string;
-  "aria-label"?: string;
-  "aria-labelledby"?: string;
-  "aria-describedby"?: string;
 }
 
-// Studio supplies a themed picker. Legacy keeps its native select and wire values.
+// All shared dropdowns use this boundary: Studio supplies a themed picker,
+// while the recovery frontend keeps its native select and wire values.
 export const ChoiceRenderer = createContext<ComponentType<ChoiceProps> | null>(null);
 
 export function Choice(props: ChoiceProps) {

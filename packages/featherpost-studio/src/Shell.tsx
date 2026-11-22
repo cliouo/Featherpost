@@ -1,4 +1,5 @@
 import { folderLabel, UI_LOCALE } from "../../maild-ui/src/i18n";
+import { Choice } from "../../maild-ui/src/settings/Choice";
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import type { Host } from "../../maild-ui/src/host/host";
 import { useExternal, useStore } from "../../maild-ui/src/host/hooks";
@@ -150,15 +151,15 @@ export function Studio({
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
-          <select
+          <Choice
             aria-label="搜索范围"
             value={
               allMail || (!searchContext.account && !searchContext.accounts)
                 ? "all"
                 : "current"
             }
-            onChange={(e) => {
-              const all = e.target.value === "all";
+            onValueChange={(value) => {
+              const all = value === "all";
               setAllMail(all);
               if (search.trim())
                 void openMailbox(() =>
@@ -174,7 +175,7 @@ export function Studio({
               </option>
             )}
             <option value="all">全部邮件</option>
-          </select>
+          </Choice>
           {searchText ? (
             <button
               type="button"

@@ -314,14 +314,9 @@
   color: var(--studio-muted);
   margin-top: 4px;
 }
-.mailbox-assignment select {
+.mailbox-assignment .studio-picker {
   width: 150px;
-  padding: 8px;
-  border: 1px solid var(--studio-border);
-  border-radius: 5px;
-  background: var(--studio-surface);
-  color: var(--studio-text);
-  font-size: 11px;
+  flex-shrink: 0;
 }
 @media (max-width: 1120px) {
   .studio.studio-unified {

@@ -22,26 +22,45 @@ export function StudioSelect({ value, onValueChange, children, disabled, classNa
   const items = optionsOf(children);
   const selected = items.findIndex((item) => item.value === value);
   const [open, setOpen] = useState(false);
+  const [trigger, setTrigger] = useState<HTMLButtonElement | null>(null);
+  const [selectionPending, setSelectionPending] = useState(false);
+  // Native modal dialogs live in the top layer. A body portal would be behind
+  // their backdrop and inert, regardless of the menu's z-index.
+  const container = trigger?.closest("dialog") ?? undefined;
+  // Keep option identity stable when a profile/folder refresh reorders items.
+  // The prefix also lets Radix represent our valid empty-string wire values.
+  const keyOf = (wireValue: string) => `choice:${wireValue}`;
   useEffect(() => { if (disabled) setOpen(false); }, [disabled]);
+  // A selection can synchronously disable its form while an async save runs.
+  // Keep this trigger focusable until that save settles: Radix returns focus
+  // on close, and a native disabled button would reject it (or lose it again).
+  // The controlled open/value guards still block interaction while disabled.
+  useEffect(() => {
+    if (!open && !disabled) setSelectionPending(false);
+  }, [open, disabled]);
   return (
-    <Select.Root value={selected < 0 ? "" : `option-${selected}`} open={open && !disabled}
-      onOpenChange={(next) => setOpen(!disabled && next)} disabled={disabled}
+    <Select.Root value={selected < 0 ? "" : keyOf(value)} open={open && !disabled}
+      onOpenChange={(next) => setOpen(!disabled && next)} disabled={disabled && !selectionPending}
       onValueChange={(key) => {
-        const item = items.find((_, index) => key === `option-${index}`);
-        if (!disabled && item && !item.disabled) onValueChange(item.value);
+        const item = items.find((option) => key === keyOf(option.value));
+        if (!disabled && item && !item.disabled) {
+          setSelectionPending(true);
+          onValueChange(item.value);
+        }
       }}>
-      <Select.Trigger {...label} className={`studio-picker ${className ?? ""}`}>
+      <Select.Trigger {...label} ref={setTrigger} aria-disabled={disabled || undefined}
+        data-disabled={disabled ? "" : undefined} className={`studio-picker ${className ?? ""}`}>
         <Select.Value placeholder="请选择">{items[selected]?.label ?? "请选择"}</Select.Value>
         <Select.Icon className="studio-picker-chevron">
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="m4 6 4 4 4-4" /></svg>
         </Select.Icon>
       </Select.Trigger>
-      <Select.Portal>
+      <Select.Portal container={container}>
         <Select.Content className="studio-picker-menu" position="popper" sideOffset={6} collisionPadding={12}>
           <Select.ScrollUpButton className="studio-picker-scroll" aria-label="向上滚动">⌃</Select.ScrollUpButton>
           <Select.Viewport className="studio-picker-options">
-            {items.map((item, index) => (
-              <Select.Item className="studio-picker-option" key={item.value} value={`option-${index}`} disabled={item.disabled} textValue={item.text}>
+            {items.map((item) => (
+              <Select.Item className="studio-picker-option" key={item.value} value={keyOf(item.value)} disabled={item.disabled} textValue={item.text}>
                 <Select.ItemText>{item.label}</Select.ItemText>
                 <Select.ItemIndicator className="studio-picker-check" aria-hidden="true">✓</Select.ItemIndicator>
               </Select.Item>
