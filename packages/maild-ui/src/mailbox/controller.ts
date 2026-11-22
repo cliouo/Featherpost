@@ -925,9 +925,9 @@ export class MailboxController {
   closePrompt() {
     if (!this.state.busy) this.patch({ prompt: null });
   }
-  requestAction(kind: "move" | "delete") {
+  /** Defaults to the checked set or current message; context menus pass the row they were opened on. */
+  requestAction(kind: "move" | "delete", rows = this.targets()) {
     if (this.state.busy || this.state.snapshot.phase !== "online") return;
-    const rows = this.targets();
     if (!rows.length) return;
     if (kind === "move" && new Set(rows.map((r) => r.account)).size !== 1) {
       this.patch({

@@ -26,6 +26,9 @@ import {
   type Grouping,
   type StudioView,
 } from "./layout";
+import { useContextMenu } from "./ContextMenu";
+import { accountMenu, groupMenu } from "./menus";
+import { useStudioActions } from "./studioActions";
 
 export interface NavigationHandle {
   focus(): void;
@@ -41,6 +44,7 @@ export function MailboxNavigation({
   focusRef,
   folders,
   setup,
+  manageAccounts,
 }: {
   mailbox: MailboxController;
   view: StudioView;
@@ -50,8 +54,11 @@ export function MailboxNavigation({
   focusRef: Ref<NavigationHandle>;
   folders(account: string, filter: string): ReactNode;
   setup(): void;
+  manageAccounts(): void;
 }) {
   const mail = useStore(mailbox.store);
+  const menu = useContextMenu(),
+    { copy } = useStudioActions();
   const ids = useMemo(
     () => mail.snapshot.accounts.map((a) => a.account),
     [mail.snapshot.accounts],
@@ -154,7 +161,7 @@ export function MailboxNavigation({
       );
   }, [activeGroup, grouping, ids, mail.scope.kind, mailbox]);
 
-  function selectAccount(id: string) {
+  function selectAccount(id: string, unread = false) {
     const available = mailbox.foldersOf(id).filter((f) => f.present);
     const target =
       (!accountMatches(id)
@@ -171,12 +178,36 @@ export function MailboxNavigation({
     void navigate(() => {
       setExpanded(id);
       mailbox.selectFolder(target);
+      if (unread) mailbox.setUnreadFilter(true);
       if (unified) {
         setFilter("");
         if (directory.current) directory.current.open = false;
       }
     });
   }
+  const groupActions = (
+    group: { id: string; name: string; accounts: string[] },
+    expansion?: { expanded: boolean; toggle(): void },
+  ) =>
+    groupMenu({
+      open: () =>
+        void navigate(() =>
+          mailbox.selectGroup(group.id, group.name, group.accounts),
+        ),
+      openUnread: () =>
+        void navigate(() =>
+          mailbox.selectGroup(group.id, group.name, group.accounts, true),
+        ),
+      manage: () => setManage(true),
+      expansion,
+    });
+  const toggleGroup = (id: string, open: boolean) =>
+    change((g) => ({
+      ...g,
+      collapsed: open
+        ? [...g.collapsed, id]
+        : g.collapsed.filter((c) => c !== id),
+    }));
   const search = (
     <label className="account-filter">
       <Icon name="search" />
@@ -218,13 +249,16 @@ export function MailboxNavigation({
             <button
               className="group-toggle"
               aria-expanded={open}
-              onClick={() =>
-                change((g) => ({
-                  ...g,
-                  collapsed: open
-                    ? [...g.collapsed, group.id]
-                    : g.collapsed.filter((id) => id !== group.id),
-                }))
+              onClick={() => toggleGroup(group.id, open)}
+              onContextMenu={(e) =>
+                menu.offer(e, () =>
+                  groupActions(
+                    group,
+                    needle
+                      ? undefined
+                      : { expanded: open, toggle: () => toggleGroup(group.id, open) },
+                  ),
+                )
               }
             >
               <span className="chevron" aria-hidden="true">
@@ -250,6 +284,37 @@ export function MailboxNavigation({
                       title={`${label(id)}\n${address(id)}`}
                       onClick={() =>
                         opened ? setExpanded(undefined) : selectAccount(id)
+                      }
+                      onContextMenu={(e) =>
+                        menu.offer(e, () =>
+                          accountMenu(address(id), {
+                            open: () => selectAccount(id),
+                            openUnread: () => selectAccount(id, true),
+                            canOpen: mailbox
+                              .foldersOf(id)
+                              .some((f) => f.present),
+                            groups: grouping.groups,
+                            group: grouping.assignments[id] ?? OTHER_GROUP,
+                            assign: (group) =>
+                              change((previous) => ({
+                                ...previous,
+                                assignments: {
+                                  ...previous.assignments,
+                                  [id]: group,
+                                },
+                              })),
+                            manageGroups: () => setManage(true),
+                            copy,
+                            settings: manageAccounts,
+                            expansion: unified
+                              ? undefined
+                              : {
+                                  expanded: opened,
+                                  toggle: () =>
+                                    setExpanded(opened ? undefined : id),
+                                },
+                          }),
+                        )
                       }
                     >
                       <span
@@ -375,6 +440,7 @@ export function MailboxNavigation({
                     mailbox.selectGroup(g.id, g.name, g.accounts),
                   )
                 }
+                onContextMenu={(e) => menu.offer(e, () => groupActions(g))}
               >
                 <span>{g.name}</span>
                 <small>{g.accounts.reduce((n, id) => n + count(id), 0)}</small>
