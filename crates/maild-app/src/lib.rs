@@ -82,6 +82,9 @@ pub struct ViewState {
     /// 最近一次身份 bootstrap 的失败原因；成功即清空。与 `last_error` 分开，
     /// 因为它的修复动作不同——是「去安装/修复前端包」，不是「等网络」。
     pub identity_failure: Option<String>,
+    /// 与 `identity_failure` 同时置位、同时清空的稳定原因（ADR-0048 决策 3）。前端按它用界面语言
+    /// 成文；上面那段文字只作诊断（含 daemon 原文），不直接给用户看。
+    pub identity_failure_code: Option<IdentityFailure>,
     /// ADR-0045：收到发给本前端的 `frontend/intent` 唤醒推送的次数，单调递增、跨重连保留。
     /// 壳观察到它变大就把（可能隐藏在菜单栏的）窗口带回前台并去 claim 意图。
     pub intent_epoch: u64,
@@ -110,9 +113,35 @@ impl ViewState {
             revision: 0,
             principal: None,
             identity_failure: None,
+            identity_failure_code: None,
             intent_epoch: 0,
             shutdown_requested: false,
             locale: None,
+        }
+    }
+}
+
+/// 前端身份绑定为什么失败（ADR-0030 决策 6 的三步）。修复动作各不相同，所以给前端稳定 code。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum IdentityFailure {
+    /// `revealPluginToken` 被拒：前端包未安装或没有身份条目。修复动作是安装。
+    NotInstalled,
+    /// `authenticate` 或 `whoami` 被拒（凭证失效、daemon 应答异常）。
+    Rejected,
+    /// `whoami` 回报的主体不是本前端。
+    PrincipalMismatch,
+    /// 绑定途中连接断开或超时。
+    Unavailable,
+}
+
+impl IdentityFailure {
+    /// snake_case 稳定 code。
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::NotInstalled => "not_installed",
+            Self::Rejected => "rejected",
+            Self::PrincipalMismatch => "principal_mismatch",
+            Self::Unavailable => "unavailable",
         }
     }
 }

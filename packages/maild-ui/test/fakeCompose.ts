@@ -16,6 +16,7 @@ export class FakeCompose implements ComposeBridge {
   sends = 0;
   closed = false;
   replyCalls: MessageIdentity[] = [];
+  replyLocales: Array<string | undefined> = [];
   saveHook:
     | ((id: string, version: number, patch: Patch) => Promise<Draft>)
     | null = null;
@@ -84,7 +85,8 @@ export class FakeCompose implements ComposeBridge {
     this.rows.set(id, next);
     return structuredClone(next);
   }
-  async reply(i: MessageIdentity, _mode: ReplyMode) {
+  async reply(i: MessageIdentity, _mode: ReplyMode, locale?: string) {
+    this.replyLocales.push(locale);
     this.replyCalls.push(i);
     return this.create(i.account, {
       to: ["sender@example.test"],

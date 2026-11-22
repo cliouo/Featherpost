@@ -22,8 +22,11 @@ export const UI_LOCALES: readonly UiLocale[] = locales;
 /** 繁体中文地区：无书写系统子标签时据此判定为 Hant，不匹配 `zh-CN`。 */
 const HANT_REGIONS = new Set(["tw", "hk", "mo"]);
 
-/** 单个 BCP 47 标签能否映射到某个界面语言；不能则返回 `undefined`，由调用方继续看下一项偏好。 */
-function matchTag(tag: string): UiLocale | undefined {
+/**
+ * 单个 BCP 47 标签能否映射到某个界面语言；不能则返回 `undefined`，由调用方继续看下一项偏好。
+ * 也用于反方向：从包作者提供的多语言条目（manifest `l10n`）里挑出与当前界面语言匹配的那条。
+ */
+export function matchTag(tag: string): UiLocale | undefined {
   const subtags = tag.trim().replace(/_/g, "-").toLowerCase().split("-");
   const language = subtags[0];
   if (language === "en") return "en";

@@ -2569,12 +2569,21 @@ fn pending_op_summary_json(op: &crate::pending::PendingOp, subject: Option<&str>
     let mut value = pending_op_json(op);
     value.as_object_mut().unwrap().remove("payload");
     value["subject"] = json!(subject);
-    value["detail"] = json!(match op.state {
-        OpState::Failed if op.detail == "用户放弃" => "用户放弃",
-        OpState::Failed => "服务器明确拒绝或重试次数已达上限，请核对账户与目标文件夹。",
-        OpState::Unknown => "未收到最终回执，请先核对目标文件夹。",
-        _ => "",
-    });
+    // ADR-0048 决策 3：摘要的 `detail` 是内核拼的固定句子，另给稳定 `detail_code` 让前端按界面
+    // 语言成文；`detail` 照旧保留，老前端不受影响。服务器原文只在非摘要形态里作为数据出现。
+    let (detail, code) = match op.state {
+        OpState::Failed if op.detail == "用户放弃" => ("用户放弃", Some("discarded")),
+        OpState::Failed => (
+            "服务器明确拒绝或重试次数已达上限，请核对账户与目标文件夹。",
+            Some("rejected"),
+        ),
+        OpState::Unknown => ("未收到最终回执，请先核对目标文件夹。", Some("unconfirmed")),
+        _ => ("", None),
+    };
+    value["detail"] = json!(detail);
+    if let Some(code) = code {
+        value["detail_code"] = json!(code);
+    }
     if op.kind != crate::pending::OpKind::Append {
         if let Ok(payload) = serde_json::from_str::<Value>(&op.payload) {
             for key in ["target", "flag", "value"] {
@@ -5306,6 +5315,37 @@ mod tests {
 
     use cordis::FiberState;
     use serde_json::json;
+
+    /// ADR-0048 决策 3：写队列摘要的固定说明带稳定 code，服务器原文不进摘要。
+    #[test]
+    fn pending_op_summaries_carry_a_stable_detail_code() {
+        use crate::pending::{OpKind, OpState, PendingOp};
+        let op = |state, detail: &str| PendingOp {
+            id: 1,
+            account: "demo".into(),
+            folder_id: 1,
+            folder: "INBOX".into(),
+            uid: "7".into(),
+            kind: OpKind::Move,
+            payload: r#"{"target":"Archive"}"#.into(),
+            state,
+            attempts: 3,
+            created_at: 1,
+            updated_at: 1,
+            detail: detail.into(),
+        };
+        for (state, detail, code) in [
+            (OpState::Failed, "用户放弃", Some("discarded")),
+            (OpState::Failed, "NO [TRYCREATE] 文件夹不存在", Some("rejected")),
+            (OpState::Unknown, "连接中断", Some("unconfirmed")),
+            (OpState::Pending, "", None),
+        ] {
+            let summary = pending_op_summary_json(&op(state, detail), None);
+            assert_eq!(summary.get("detail_code").and_then(Value::as_str), code, "{summary}");
+            assert!(!summary["detail"].as_str().unwrap().contains("TRYCREATE"));
+        }
+        assert!(pending_op_json(&op(OpState::Failed, "x")).get("detail_code").is_none());
+    }
 
     #[test]
     fn method_policy_table_pins_every_dispatched_method() {

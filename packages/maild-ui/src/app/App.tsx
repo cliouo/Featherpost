@@ -10,7 +10,7 @@ import { Icon } from './Icon';
 import { ErrorBoundary } from './ErrorBoundary';
 import { applyTheme } from './theme';
 import { BRAND } from '../brand';
-import { uiLocale, useUiLocale } from '../i18n';
+import { identityFailureText, uiLocale, useUiLocale } from '../i18n';
 
 function connectionLabel(snapshot: UiSnapshot): { text: string; warn: boolean } {
   if (snapshot.identity_failure) return { text: m.common_app_status_unregistered(), warn: true };
@@ -42,7 +42,7 @@ function IdentityPanel({ snapshot }: { snapshot: UiSnapshot }) {
         <div className="page-column identity-panel">
           <h2>{m.common_app_identity_title({ product: BRAND.productName })}</h2>
           <p className="page-intro">{m.common_app_identity_intro()}</p>
-          <p className="group-note">{m.common_app_identity_reason()}{snapshot.identity_failure}</p>
+          <p className="group-note">{m.common_app_identity_reason()}{identityFailureText(snapshot)}</p>
           <p>{m.common_app_identity_command()}</p>
           <pre className="command">{`${BRAND.cliCtl} plugin install --frontend crates/maild-ui/package`}</pre>
           <p className="group-note">{m.common_app_identity_retry()}</p>

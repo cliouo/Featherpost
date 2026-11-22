@@ -146,6 +146,27 @@ const FLAG_LABELS: Record<string, { set: () => string; clear: () => string }> = 
   deleted: { set: m.mailbox_activity_flag_deleted_set, clear: m.mailbox_activity_flag_deleted_clear },
 };
 const OTHER_FLAG = { set: m.mailbox_activity_flag_other_set, clear: m.mailbox_activity_flag_other_clear };
+/**
+ * 操作是否已被用户放弃。新后台给稳定 `detail_code`（ADR-0048 决策 3）；老后台只有内核写进
+ * `detail` 的放弃标记。
+ */
+export function operationDiscarded(op: Operation): boolean {
+  if (op.state !== "failed") return false;
+  if (op.detail_code !== undefined) return op.detail_code === "discarded";
+  // i18n-lint-allow-cjk: 老后台写入 pending_ops.detail 的放弃标记（store.rs），是协议数据不是文案
+  return op.detail === "用户放弃";
+}
+/** 内核固定说明按 code 用界面语言成文；没有 code（老后台）时原样显示 `detail`。 */
+const DETAIL_TEXTS: Record<string, () => string> = {
+  rejected: m.mailbox_activity_detail_rejected,
+  unconfirmed: m.mailbox_activity_detail_unconfirmed,
+};
+export function operationDetail(op: Operation): string {
+  const code = op.detail_code;
+  return code !== undefined && Object.prototype.hasOwnProperty.call(DETAIL_TEXTS, code)
+    ? DETAIL_TEXTS[code]()
+    : op.detail;
+}
 export function operationLabel(op: Operation) {
   if (op.kind === "move") return m.mailbox_activity_operation_move();
   if (op.kind === "append") return m.mailbox_activity_operation_append();

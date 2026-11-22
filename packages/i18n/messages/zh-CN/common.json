@@ -113,6 +113,11 @@
   "common_error_boundary_body": "本地邮件与草稿不受影响，可点击下方按钮恢复当前界面。",
   "common_error_boundary_reload": "重新载入界面",
   "common_error_boundary_title": "界面遇到意外问题",
+  "common_identity_failure_not_installed": "前端包未安装，或没有身份条目。",
+  "common_identity_failure_principal_mismatch": "后台认出的身份不是这个前端。",
+  "common_identity_failure_rejected": "后台拒绝了这个前端的身份凭证。",
+  "common_identity_failure_unavailable": "绑定身份时与后台的连接中断了。",
+  "common_identity_failure_unknown": "前端身份绑定失败。",
   "common_language_native_en": "English",
   "common_language_native_zh_hans": "简体中文",
   "common_sample_excerpt_title": "邮件摘录（示例）"

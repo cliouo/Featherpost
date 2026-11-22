@@ -96,6 +96,13 @@ describe("compose", () => {
     expect(c.store.getSnapshot().fields?.body).toBe("reply to inbox");
     expect(bridge.replyCalls).toHaveLength(2);
   });
+  it("asks for the reply quote in the current interface language (ADR-0048 decision 7)", async () => {
+    const { bridge, controller: c } = await setup();
+    await c.reply({ account: "demo", folder: "INBOX", uid: "1" }, "reply");
+    applyEffectiveLocales(["en-US"]);
+    await c.reply({ account: "demo", folder: "INBOX", uid: "2" }, "forward");
+    expect(bridge.replyLocales).toEqual(["zh-CN", "en"]);
+  });
   it("freezes repeated send clicks and persists accepted delivery", async () => {
     const { bridge, controller: c } = await setup();
     c.change("to", "person@example.test");

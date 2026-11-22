@@ -1,6 +1,7 @@
 import { m } from "@featherpost/i18n/messages";
 
 import { Store } from "../host/store";
+import { uiLocale } from "../i18n";
 import { bridgeErrorText, errorCode } from "../bridge/errors";
 import type { MessageIdentity } from "../bridge/types";
 import {
@@ -351,7 +352,7 @@ export class ComposeController {
             })
           : null;
         if (!draft || draft.send_state === "sent") {
-          draft = await this.bridge.reply(identity, mode);
+          draft = await this.bridge.reply(identity, mode, uiLocale());
           this.replies.set(key, draft.id);
         }
         this.load(draft, sourceKey(identity), mode !== "forward");

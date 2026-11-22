@@ -7,6 +7,8 @@ import { useStore } from "../host/hooks";
 import type { MailboxController } from "./controller";
 import {
   ActivityController,
+  operationDetail,
+  operationDiscarded,
   operationLabel,
   stateLabel,
 } from "./activityController";
@@ -95,9 +97,7 @@ export function Activity({
                 ["pending", "in_flight", "done", "failed", "unknown"].includes(
                   op.state,
                 );
-              // i18n-lint-allow-cjk: 「用户放弃」是内核写入 detail 的协议标记（api.rs），不是界面文案。
-              const discarded =
-                op.state === "failed" && op.detail === "用户放弃";
+              const discarded = operationDiscarded(op);
               const can =
                 known && !discarded && ["failed", "unknown"].includes(op.state);
               const target =
@@ -144,7 +144,7 @@ export function Activity({
                     </p>
                   )}
                   {op.detail && !discarded && op.state !== "unknown" && (
-                    <p className="operation-detail">{op.detail}</p>
+                    <p className="operation-detail">{operationDetail(op)}</p>
                   )}
                   <div className="operation-actions">
                     {folder && (

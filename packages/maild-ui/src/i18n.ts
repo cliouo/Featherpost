@@ -1,4 +1,4 @@
-import { getUiLocale, type UiLocale } from "@featherpost/i18n";
+import { getUiLocale, matchTag, type UiLocale } from "@featherpost/i18n";
 import { m } from "@featherpost/i18n/messages";
 
 export { useUiLocale } from "@featherpost/i18n/react";
@@ -10,6 +10,68 @@ export type { UiLocale };
  */
 export function uiLocale(): UiLocale {
   return getUiLocale();
+}
+
+/** manifest `[l10n.<tag>]` 的一条（ADR-0048 决策 5）；缺的字段回落顶层。 */
+export interface PackageL10nEntry {
+  name?: string;
+  description?: string;
+}
+
+/** 列表、预览与 `listFrontends` 里带名字的包：顶层是兜底，`l10n` 由 daemon 原样透传。 */
+export interface LocalizablePackage {
+  name: string;
+  description?: string | null;
+  l10n?: Readonly<Record<string, PackageL10nEntry>> | null;
+}
+
+/**
+ * 包的名字与说明按当前界面语言成文（ADR-0048 决策 5）：在 `l10n` 里找与界面语言匹配的标签
+ * （与界面协商同一规则，`zh-Hant*` 不算简体中文），逐字段取第一个有值的条目，都没有就用顶层
+ * `name` / `description`。只在渲染时调用——`previewPluginPackage` 的结果必须原样回传，不能改写。
+ */
+export function packageText(pkg: LocalizablePackage): { name: string; description: string | null } {
+  const locale = getUiLocale();
+  const entries = Object.entries(pkg.l10n ?? {})
+    .filter(([tag]) => matchTag(tag) === locale)
+    .map(([, entry]) => entry);
+  const field = (key: keyof PackageL10nEntry) =>
+    entries.map((entry) => entry[key]).find((value) => typeof value === "string" && value.trim() !== "");
+  return {
+    name: field("name") ?? pkg.name,
+    description: field("description") ?? pkg.description ?? null,
+  };
+}
+
+const IDENTITY_FAILURES: Record<string, () => string> = {
+  not_installed: m.common_identity_failure_not_installed,
+  rejected: m.common_identity_failure_rejected,
+  principal_mismatch: m.common_identity_failure_principal_mismatch,
+  unavailable: m.common_identity_failure_unavailable,
+};
+
+/**
+ * 身份绑定失败的说明（ADR-0048 决策 3）：按壳给的稳定 code 用界面语言成文；没有失败时为 `null`。
+ * actor 拼的中文原因只作诊断，不显示给用户；认不出的 code（或老壳没有 code）给通用说明。
+ */
+export function identityFailureText(snapshot: {
+  identity_failure: string | null;
+  identity_failure_code?: string | null;
+}): string | null {
+  if (snapshot.identity_failure === null && !snapshot.identity_failure_code) return null;
+  const code = snapshot.identity_failure_code ?? "";
+  return Object.prototype.hasOwnProperty.call(IDENTITY_FAILURES, code)
+    ? IDENTITY_FAILURES[code]()
+    : m.common_identity_failure_unknown();
+}
+
+/** 账户的收信插件名：在扩展清单里按 ID 找到就按界面语言成文，找不到就显示 ID。 */
+export function providerName(
+  plugins: ReadonlyArray<LocalizablePackage & { id: string }> | undefined,
+  id: string,
+): string {
+  const plugin = plugins?.find((candidate) => candidate.id === id);
+  return plugin ? packageText(plugin).name : id;
 }
 
 interface DisplayFolder {

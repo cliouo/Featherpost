@@ -277,7 +277,23 @@ description = "..."
 > - 内置贡献（命令、视图、设置分区、模块与可选模块）的标题都写成 getter，切换语言后重新成文；Studio 设置页
 >   按 ID 查标题的过渡表随之删除。第三方贡献沿用其登记的标题。
 > - 已知限制：webview 首帧在启动值返回前按 `zh-CN` 渲染，英文用户可能看到一瞬中文；`identity_failure`、
->   账户 `detail` 等由 actor/daemon 成文的状态文本仍是中文。
+>   账户 `detail` 等由 actor/daemon 成文的状态文本仍是中文。（以下补记已处理前两项。）
+
+> 实现记录（L3 收尾，合入 L4 之后）：
+>
+> - manifest `l10n`（决策 5）：设置 → 扩展（列表、安装与回滚预览）、连接页的本前端信息、账户页的收信插件名
+>   都按当前界面语言协商 `l10n`——规则与界面协商相同（`@featherpost/i18n` 导出的 `matchTag`），逐字段取第一个
+>   匹配条目、缺的回落顶层 `name` / `description`；有说明就显示。只在渲染时本地化，`previewPluginPackage`
+>   的结果原样回传给 commit。桥的 `UiFrontendInfo` 补上 `description` / `l10n`。
+> - 回复引用块（决策 7 首版）：写信控制器把当前界面语言作为 `locale` 交给 `prepareReply`；早于 L4 的 daemon
+>   拒绝未知参数（`-32602`），桥去掉 `locale` 重试一次，得到今天的中文引用块。
+> - 状态文字的稳定 code（决策 3）：actor 的身份绑定失败另给 `identity_failure_code`（`not_installed` /
+>   `rejected` / `principal_mismatch` / `unavailable`），经快照到 webview 翻译，中文原因只作诊断；
+>   `listPendingOps` 摘要的固定说明另给 `detail_code`（`discarded` / `rejected` / `unconfirmed`），`detail`
+>   照旧保留给老前端。账户 `detail`（`account/state`）来自同步循环，多为服务器或连接错误原文，按数据原样显示，
+>   不加 code。
+> - 首帧：两个前端的 `main.tsx` 在首次渲染前等启动语言就绪，最多 300 ms（壳已有偏好时只是一次读缓存的 IPC；
+>   后台未连上或是老 daemon 时到时即按 `zh-CN` 渲染，之后跟推送切换）。
 
 ## 交付切片
 

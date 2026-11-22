@@ -1,3 +1,8 @@
+import type { PackageL10nEntry } from "../i18n";
+
+/** manifest `[l10n.<tag>]` 映射（键为 BCP 47 标签）。 */
+export type PackageL10n = Record<string, PackageL10nEntry>;
+
 export interface Endpoint {
   kind: string;
   server?: string;
@@ -94,6 +99,9 @@ export interface AddressPage {
 export interface Frontend {
   id: string;
   name: string;
+  /** ADR-0048 决策 5：manifest 兜底说明与 `l10n` 原样透传，渲染时经 `packageText` 协商。 */
+  description?: string;
+  l10n?: PackageL10n;
   version: string;
   lifecycle: string;
   capabilities: string[];
@@ -104,6 +112,8 @@ export interface Frontend {
 export interface Plugin {
   id: string;
   name: string;
+  description?: string;
+  l10n?: PackageL10n;
   version: string;
   lifecycle: string;
   capabilities: string[];
@@ -122,6 +132,9 @@ export interface PackagePreview {
   kind: PackageKind;
   id: string;
   name: string;
+  /** 原样回传给 commit（`expected_preview` 逐字段比较），只在渲染时本地化。 */
+  description?: string;
+  l10n?: PackageL10n;
   version: string;
   lifecycle: string;
   capabilities: string[];

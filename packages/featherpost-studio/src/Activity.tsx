@@ -7,6 +7,8 @@ import { useStore } from "../../maild-ui/src/host/hooks";
 import { folderLabel, uiLocale, useUiLocale } from "../../maild-ui/src/i18n";
 import {
   ActivityController,
+  operationDetail,
+  operationDiscarded,
   operationLabel,
   stateLabel,
 } from "../../maild-ui/src/mailbox/activityController";
@@ -184,10 +186,7 @@ export function Activity({
                     "failed",
                     "unknown",
                   ].includes(op.state);
-                const discarded =
-                  op.state === "failed" &&
-                  // i18n-lint-allow-cjk: 内核写入 pending_ops.detail 的放弃标记（store.rs），是协议数据不是文案
-                  op.detail === "用户放弃";
+                const discarded = operationDiscarded(op);
                 const can =
                   known &&
                   !discarded &&
@@ -362,7 +361,7 @@ export function Activity({
                               <p
                                 className={op.state === "failed" ? "error" : ""}
                               >
-                                {op.detail}
+                                {operationDetail(op)}
                               </p>
                             )}
                           </div>

@@ -1,6 +1,8 @@
 import { m } from "@featherpost/i18n/messages";
 import {
+  identityFailureText,
   lifecycleLabel,
+  packageText,
   permissionLabel,
   uiLocale,
   useUiLocale,
@@ -105,7 +107,7 @@ export function settingsModule(
           title={m.studio_connection_principal()}
           description={
             snapshot.principal ??
-            snapshot.identity_failure ??
+            identityFailureText(snapshot) ??
             m.studio_connection_unbound()
           }
         >
@@ -126,8 +128,8 @@ export function settingsModule(
         {frontendInfo && (
           <>
             <Row
-              title={frontendInfo.name}
-              description={`${frontendInfo.id} · ${frontendInfo.version} · ${lifecycleLabel(frontendInfo.lifecycle)}`}
+              title={packageText(frontendInfo).name}
+              description={[packageText(frontendInfo).description, `${frontendInfo.id} · ${frontendInfo.version} · ${lifecycleLabel(frontendInfo.lifecycle)}`].filter(Boolean).join(" — ")}
             >
               <span className="tag">
                 {frontendInfo.is_default

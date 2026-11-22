@@ -1,6 +1,6 @@
 import { m } from "@featherpost/i18n/messages";
 import { Choice } from "./Choice";
-import { lifecycleLabel, permissionLabel, useUiLocale } from "../i18n";
+import { lifecycleLabel, packageText, permissionLabel, useUiLocale } from "../i18n";
 import { useState } from "react";
 import { useStore } from "../host/hooks";
 import type { SettingsController } from "./controller";
@@ -30,9 +30,12 @@ function Preview({ p }: { p: PackagePreview }) {
     p.kind === "frontend"
       ? m.extensions_kind_frontend()
       : m.extensions_kind_plugin();
+  // 只在渲染时本地化：预览对象本身原样回传给 commit。
+  const text = packageText(p);
   return (
     <>
-      <h3>{p.name}</h3>
+      <h3>{text.name}</h3>
+      {text.description && <p className="package-description">{text.description}</p>}
       <p className="group-note">
         {p.id} · {p.version} · {kind} ·{" "}
         {lifecycleLabel(p.lifecycle)}
@@ -124,7 +127,8 @@ export function Extensions({
             <article className="managed-package" key={p.id}>
               <div className="setting-row">
                 <div className="setting-copy">
-                  <strong>{p.name}</strong>
+                  <strong>{packageText(p).name}</strong>
+                  {packageText(p).description && <p className="package-description">{packageText(p).description}</p>}
                   <p>
                     {p.id} · {p.version}
                   </p>
@@ -192,7 +196,8 @@ export function Extensions({
             <article className="managed-package" key={p.id}>
               <div className="setting-row">
                 <div className="setting-copy">
-                  <strong>{p.name}</strong>
+                  <strong>{packageText(p).name}</strong>
+                  {packageText(p).description && <p className="package-description">{packageText(p).description}</p>}
                   <p>
                     {p.id} · {p.version} · {pluginState(p.state)}
                   </p>
@@ -211,7 +216,7 @@ export function Extensions({
                   type="button"
                   role="switch"
                   aria-checked={p.enabled}
-                  aria-label={m.extensions_toggle_label({ name: p.name })}
+                  aria-label={m.extensions_toggle_label({ name: packageText(p).name })}
                   disabled={s.busy || !s.online}
                   onClick={() =>
                     controller.confirmPackage(

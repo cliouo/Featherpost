@@ -4,7 +4,7 @@ import { createRoot } from 'react-dom/client';
 
 import { App } from './app/App';
 import { ErrorBoundary } from './app/ErrorBoundary';
-import { tauriBridge } from './bridge/tauri';
+import { startupLocaleReady, tauriBridge } from './bridge/tauri';
 import { Host } from './host/host';
 import { mailboxModule } from './mailbox/module';
 import { sampleExcerptModule } from './sample/module';
@@ -36,10 +36,13 @@ host.registerOptional('maild.sample-excerpt', { get title() { return m.common_sa
 host.finishAssembly();
 void host.start();
 
-createRoot(document.getElementById('root')!).render(
-  <StrictMode>
-    <ErrorBoundary onReset={() => { void host.bridge.refresh().catch(() => {}); }}>
-      <App host={host} />
-    </ErrorBoundary>
-  </StrictMode>,
-);
+// ADR-0048：首帧前等启动语言（最多几百毫秒），英文用户不会先看到一帧中文。
+void startupLocaleReady().then(() => {
+  createRoot(document.getElementById('root')!).render(
+    <StrictMode>
+      <ErrorBoundary onReset={() => { void host.bridge.refresh().catch(() => {}); }}>
+        <App host={host} />
+      </ErrorBoundary>
+    </StrictMode>,
+  );
+});
