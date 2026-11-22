@@ -14,6 +14,7 @@ import type { Bundle, ViewProps } from "../host/types";
 import type { Preferences } from "../preferences";
 import { BRAND } from "../brand";
 import { Choice } from "./Choice";
+import { LANGUAGE_OPTIONS, LanguageController, languageChoice, type LanguageChoice } from "./language";
 
 export const SETTINGS_VIEW = "maild.settings.page";
 
@@ -42,6 +43,60 @@ export function settingsModule(
   host: Host,
   controller = new SettingsController(host.bridge.settings),
 ): Bundle {
+  const language = new LanguageController(host.bridge.locale);
+  language.start();
+
+  /** ADR-0048：界面语言。偏好归 daemon，所有窗口共用；语言名用其自身语言书写。 */
+  function Language() {
+    useUiLocale();
+    const state = useStore(language.store);
+    const online = useStore(host.state).snapshot.phase === "online";
+    useEffect(() => {
+      if (online) void language.load();
+    }, [online]);
+    if (!language.available) return null;
+    const choice = languageChoice(state.preference);
+    const locked = state.unsupported || state.preference?.persisted === false;
+    return (
+      <>
+        <Row
+          title={m.settings_language()}
+          description={
+            state.unsupported
+              ? m.settings_language_unavailable()
+              : state.preference?.persisted === false
+                ? m.settings_language_not_persisted()
+                : m.settings_language_hint()
+          }
+        >
+          <Choice
+            aria-label={m.settings_language()}
+            value={choice ?? ""}
+            disabled={state.busy || locked || !online || choice === null}
+            onValueChange={(value) => {
+              if (value === "system" || LANGUAGE_OPTIONS.some((option) => option.value === value))
+                void language.choose(value as LanguageChoice);
+            }}
+          >
+            {choice === null && <option value="" disabled />}
+            <option value="system">{m.settings_language_system()}</option>
+            {LANGUAGE_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value} lang={option.value}>
+                {option.name()}
+              </option>
+            ))}
+            {choice === "custom" && (
+              <option value="custom" disabled>
+                {m.settings_language_custom({ languages: state.preference!.languages.join(", ") })}
+              </option>
+            )}
+          </Choice>
+        </Row>
+        {state.error && <p className="group-note" role="alert">{state.error}</p>}
+      </>
+    );
+  }
+
   function Appearance(_props: ViewProps) {
     useUiLocale();
     const { preferences } = useStore(host.state);
@@ -88,6 +143,7 @@ export function settingsModule(
             </option>
           </Choice>
         </Row>
+        <Language />
       </>
     );
   }
@@ -473,6 +529,7 @@ export function settingsModule(
       stopIntent();
       stopGuard();
       stopState();
+      language.dispose();
       controller.dispose();
     },
   };

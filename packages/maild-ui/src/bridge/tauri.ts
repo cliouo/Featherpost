@@ -3,13 +3,15 @@ import { invoke, isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 
 import { BridgeError, errorCode } from './errors';
-import type { MailBridge, OpenIntent, UiError, UiLink, UiSnapshot } from './types';
+import { followDaemonLocale } from './locale';
+import type { LocaleBridge, MailBridge, OpenIntent, UiError, UiLink, UiLocale, UiLocalePreference, UiSnapshot } from './types';
 import { isUiError } from './types';
 import { BRAND } from '../brand';
 
 const STATE_EVENT = 'maild://state';
 const INTENT_EVENT = 'maild://intent';
 const LINK_EVENT = 'maild://link';
+const LOCALE_EVENT = 'maild://locale';
 
 // 每次调用时成文，跟随当前界面语言。
 const notInTauri = (): UiError => ({
@@ -32,6 +34,17 @@ function openExternalUrl(url: string): Promise<void> {
   if (!/^https:\/\/[^\s]+$/.test(url)) return Promise.reject(new BridgeError({ code: 'invalid', message: m.common_bridge_error_invalid_link() }));
   return call('ui_open_external_url', { url });
 }
+
+// ADR-0048：语言偏好由 daemon 拥有，壳转发；协商与切换在 @featherpost/i18n。
+const tauriLocale: LocaleBridge = {
+  current: () => call<UiLocale>('ui_locale'),
+  subscribe: async (handler) => {
+    if (!isTauri()) return () => {};
+    return listen<UiLocale>(LOCALE_EVENT, (event) => handler(event.payload));
+  },
+  preference: () => call<UiLocalePreference>('ui_locale_preference'),
+  setPreference: (update) => call<UiLocalePreference>('ui_set_locale_preference', { update }),
+};
 
 export const tauriBridge: MailBridge = {
   settings: {
@@ -106,6 +119,10 @@ export const tauriBridge: MailBridge = {
   readingPolicy: () => call('ui_reading_policy'),
   setReadingPolicy: (patch) => call('ui_set_reading_policy', { patch }),
   openExternalUrl,
+  locale: tauriLocale,
 };
+
+// 默认前端与 Studio 都从这里取桥：导入即开始跟随 daemon 的语言偏好（启动值 + `maild://locale`）。
+if (isTauri()) void followDaemonLocale(tauriLocale);
 
 export { BridgeError, errorCode } from './errors';

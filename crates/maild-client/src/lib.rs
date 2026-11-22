@@ -197,15 +197,25 @@ impl Notification {
             // ADR-0046：后台即将停机（菜单栏「退出 <产品名>」）。参数恒为空对象，不校验其内容——
             // 帧只是信号，旧/新 daemon 多带字段也不应让前端错过关闭。
             "agent/stopping" => Ok(ServerNotification::AgentStopping),
+            LOCALE_PREFERENCE_NOTIFICATION => {
+                serde_json::from_value::<LocalePreferenceChanged>(self.params)
+                    .map(|params| ServerNotification::LocalePreference {
+                        effective: params.effective,
+                    })
+                    .map_err(|error| {
+                        ClientError::rpc(format!(
+                            "{LOCALE_PREFERENCE_NOTIFICATION} 通知参数无效: {error}"
+                        ))
+                    })
+            }
             _ => Ok(ServerNotification::Unknown(self)),
         }
     }
 
     /// ADR-0048：`preferences/locale` 的类型化解码。不是这条通知时返回 `None`。
     ///
-    /// 有意不作为 [`ServerNotification`] 的新变体：既有消费者（`maild-app`）对该枚举做穷尽匹配，
-    /// 新变体会让它们编译失败；在它们迁移之前，这条通知经 [`ServerNotification::Unknown`] 送达，
-    /// 消费者对其调用本方法即可。
+    /// [`Self::into_server_notification`] 已把它解码为 [`ServerNotification::LocalePreference`]；
+    /// 本方法留给只想看这一条、不走整套分发的消费者。
     pub fn locale_preference_changed(
         &self,
     ) -> Option<Result<LocalePreferenceChanged, ClientError>> {
@@ -485,6 +495,11 @@ pub enum ServerNotification {
     /// ADR-0046：daemon 即将停机（用户在菜单栏点了「退出 <产品名>」）。前端收到后应当刷盘草稿、
     /// 撤下窗口并随后台一起退出。
     AgentStopping,
+    /// ADR-0048：用户的语言偏好变了。`effective` 是解析后的有序偏好列表（永不为空），
+    /// 由各前端与自己支持的语言协商，内核不替前端挑语言。
+    LocalePreference {
+        effective: Vec<String>,
+    },
     Unknown(Notification),
 }
 
@@ -4693,7 +4708,7 @@ mod tests {
     }
 
     #[test]
-    fn locale_preference_notification_decodes_without_a_new_variant() {
+    fn locale_preference_notification_decodes_to_a_typed_variant() {
         let frame = br#"{"jsonrpc":"2.0","method":"preferences/locale","params":{"effective":["en","zh-Hans"],"future":1}}"#;
         let Incoming::Notification(notification) = decode_incoming(frame).unwrap() else {
             panic!("preferences/locale 应解码为通知帧");
@@ -4704,13 +4719,19 @@ mod tests {
                 effective: vec!["en".into(), "zh-Hans".into()]
             }
         );
-        // 经 into_server_notification 走 Unknown，仍可再解码。
-        let ServerNotification::Unknown(unknown) =
-            notification.into_server_notification().unwrap()
-        else {
-            panic!("preferences/locale 应经 Unknown 送达");
-        };
-        assert!(unknown.locale_preference_changed().unwrap().is_ok());
+        // 经 into_server_notification 得到类型化变体；未知字段忽略。
+        assert_eq!(
+            notification.into_server_notification().unwrap(),
+            ServerNotification::LocalePreference {
+                effective: vec!["en".into(), "zh-Hans".into()]
+            }
+        );
+        assert!(Notification {
+            method: LOCALE_PREFERENCE_NOTIFICATION.into(),
+            params: json!({ "effective": "en" }),
+        }
+        .into_server_notification()
+        .is_err());
 
         assert!(Notification {
             method: LOCALE_PREFERENCE_NOTIFICATION.into(),

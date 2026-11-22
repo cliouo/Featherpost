@@ -3592,6 +3592,7 @@ dependencies = [
  "maild-app",
  "maild-brand",
  "maild-client",
+ "maild-l10n",
  "maild-paths",
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",

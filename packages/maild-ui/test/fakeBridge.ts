@@ -2,8 +2,9 @@ import {FakeSettings} from './fakeSettings';
 import {FakeMailbox} from './fakeMailbox';
 import { FakeCompose } from './fakeCompose';
 import type {
-  FolderIdentity, MailBridge, MessageIdentity, OpenIntent, UiDocument, UiFolder, UiFrontendInfo, UiLink,
-  UiMessage, UiPage, UiReadingPolicy, UiReadingPolicyPatch, UiSnapshot, UiSummary,
+  FolderIdentity, LocaleBridge, MailBridge, MessageIdentity, OpenIntent, UiDocument, UiFolder, UiFrontendInfo, UiLink,
+  UiLocale, UiLocalePreference, UiLocaleUpdate, UiMessage, UiPage, UiReadingPolicy, UiReadingPolicyPatch, UiSnapshot,
+  UiSummary,
 } from '../src/bridge/types';
 import { BridgeError } from '../src/bridge/errors';
 import { BRAND } from '../src/brand';
@@ -83,6 +84,8 @@ export class FakeBridge implements MailBridge {
   saveRequests: Array<{ identity: MessageIdentity; partIndex: number; d: ReturnType<typeof deferred<string | null>> }> = [];
   policy: UiReadingPolicy = { remote_content: 'block', trusted_senders: [], persisted: true };
   policyPatches: UiReadingPolicyPatch[] = [];
+  /** ADR-0048：缺省不提供，与没有语言偏好通道的壳一致；需要的用例挂一个 `FakeLocale`。 */
+  locale?: LocaleBridge;
 
   async snapshot() {
     return online;
@@ -153,6 +156,39 @@ export class FakeBridge implements MailBridge {
       .concat((patch.trust ?? []).map((value) => ({ value: value.toLowerCase(), kind: value.includes('@') ? 'address' : 'domain', added_at: 1 })));
     this.policy = { ...this.policy, remote_content: patch.remote_content ?? this.policy.remote_content, trusted_senders: trusted };
     return this.policy;
+  }
+}
+
+/** 语言偏好通道的假实现：记录写入，按 daemon 的规则回应答，并可手动推送 `maild://locale`。 */
+export class FakeLocale implements LocaleBridge {
+  effective: string[] | null = null;
+  preferenceValue: UiLocalePreference = { mode: 'system', languages: [], effective: ['zh-Hans-CN'], persisted: true };
+  updates: UiLocaleUpdate[] = [];
+  preferenceError: BridgeError | null = null;
+  handlers = new Set<(locale: UiLocale) => void>();
+
+  async current() {
+    return { effective: this.effective };
+  }
+  async subscribe(handler: (locale: UiLocale) => void) {
+    this.handlers.add(handler);
+    return () => {
+      this.handlers.delete(handler);
+    };
+  }
+  async preference() {
+    if (this.preferenceError) throw this.preferenceError;
+    return this.preferenceValue;
+  }
+  async setPreference(update: UiLocaleUpdate) {
+    this.updates.push(update);
+    const effective = update.mode === 'system' ? ['zh-Hans-CN'] : update.languages;
+    this.preferenceValue = { mode: update.mode, languages: update.mode === 'system' ? [] : update.languages, effective, persisted: true };
+    return this.preferenceValue;
+  }
+  push(effective: string[] | null) {
+    this.effective = effective;
+    for (const handler of this.handlers) handler({ effective });
   }
 }
 

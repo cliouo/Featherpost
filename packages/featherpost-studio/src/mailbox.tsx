@@ -62,16 +62,19 @@ export function studioMailbox(
         () => host.approveNavigation(MAIL),
       );
   });
-  // 注册表登记时复制描述符，标题在此时按当前界面语言取值、之后不再变化；
-  // Studio 自己渲染的分区与模块名另按 ID 查消息（见 settings/module.tsx 的 localTitle），随语言切换。
+  // 标题写成 getter：注册表保留访问器（copyContribution），切换界面语言后按当前语言重新成文。
   const bundle: Bundle = {
     moduleId: "maild.mailbox",
     apiVersion: 1,
-    title: m.studio_module_mailbox(),
+    get title() {
+      return m.studio_module_mailbox();
+    },
     views: [
       {
         id: MAIL,
-        title: m.studio_view_mail(),
+        get title() {
+          return m.studio_view_mail();
+        },
         role: "mailbox",
         render: () => (
           <Workspace
@@ -85,7 +88,9 @@ export function studioMailbox(
       },
       {
         id: ACTIVITY,
-        title: m.studio_view_activity(),
+        get title() {
+          return m.studio_view_activity();
+        },
         role: "activity",
         render: () => (
           <Activity
@@ -99,7 +104,9 @@ export function studioMailbox(
     settings: [
       {
         id: "maild.mailbox.reading-privacy",
-        title: m.studio_settings_section_reading_privacy(),
+        get title() {
+          return m.studio_settings_section_reading_privacy();
+        },
         order: 15,
         render: () => (
           <ReadingPrivacySection

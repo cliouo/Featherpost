@@ -24,6 +24,11 @@ const MAX_ACCOUNTS: usize = 256;
 const MAX_PENDING_REQUESTS: usize = 64;
 const MAX_REFRESH_WAITERS: usize = 64;
 const MAX_IMMEDIATE_REFRESHES: usize = 1;
+/// ADR-0048：daemon 规范化后最多 8 项、每项不超过 35 字节；这里留余量，只防失控的对端。
+const MAX_LOCALE_TAGS: usize = 32;
+const MAX_LOCALE_TAG_BYTES: usize = 64;
+/// 快照一次发出的请求数：status、listAccounts、listMessageSummaries、getLocalePreference。
+const SNAPSHOT_REQUESTS: usize = 4;
 
 type RefreshWaiter = oneshot::Sender<Result<(), ClientError>>;
 
@@ -78,12 +83,17 @@ enum SnapshotPart {
     Status,
     Accounts,
     Messages,
+    Locale,
 }
 
 struct SnapshotTracker {
     status: Option<Result<Value, ClientError>>,
     accounts: Option<Result<Value, ClientError>>,
     messages: Option<Result<Value, ClientError>>,
+    locale: Option<Result<Value, ClientError>>,
+    /// 快照进行中收到了 `preferences/locale`：推送比快照里的 `getLocalePreference` 应答更新，
+    /// 收尾时不再用应答覆盖它。
+    locale_pushed: bool,
     buffered: VecDeque<ServerNotification>,
     buffered_bytes: usize,
     overflowed: bool,
@@ -101,6 +111,8 @@ impl SnapshotTracker {
             status: None,
             accounts: None,
             messages: None,
+            locale: None,
+            locale_pushed: false,
             buffered: VecDeque::new(),
             buffered_bytes: 0,
             overflowed: false,
@@ -113,11 +125,15 @@ impl SnapshotTracker {
             SnapshotPart::Status => self.status = Some(result),
             SnapshotPart::Accounts => self.accounts = Some(result),
             SnapshotPart::Messages => self.messages = Some(result),
+            SnapshotPart::Locale => self.locale = Some(result),
         }
     }
 
     fn is_complete(&self) -> bool {
-        self.status.is_some() && self.accounts.is_some() && self.messages.is_some()
+        self.status.is_some()
+            && self.accounts.is_some()
+            && self.messages.is_some()
+            && self.locale.is_some()
     }
 
     fn buffer(&mut self, notification: ServerNotification) {
@@ -523,7 +539,7 @@ impl Actor {
             }
             return Err(error);
         }
-        if pending.len().saturating_add(3) > MAX_PENDING_REQUESTS {
+        if pending.len().saturating_add(SNAPSHOT_REQUESTS) > MAX_PENDING_REQUESTS {
             let error = ClientError::connection("pending 请求不足以容纳刷新快照");
             if !waiters.is_empty() {
                 fail_refresh_waiters(&mut waiters, &error);
@@ -543,6 +559,9 @@ impl Actor {
                 "listMessageSummaries",
                 json!({ "limit": self.options.initial_page_size, "offset": 0 }),
             ),
+            // ADR-0048：每次（重）连接与刷新都重读偏好——推送是尽力而为，`system` 模式下系统语言
+            // 变化也只在重读时体现。
+            (SnapshotPart::Locale, "getLocalePreference", json!({})),
         ];
         for (part, method, params) in requests {
             let mut shutdown = self.shutdown.clone();
@@ -611,6 +630,18 @@ impl Actor {
                     }
                     return Ok(None);
                 }
+                // ADR-0048：语言偏好即时生效，不进缓冲；同步期间收到时它比快照里的应答新。
+                if let ServerNotification::LocalePreference { effective } = &notification {
+                    if let Some(snapshot) = snapshot.as_mut() {
+                        snapshot.locale_pushed = true;
+                    }
+                    if self.state.locale.as_ref() != Some(effective) {
+                        self.state.locale = Some(effective.clone());
+                        self.publish();
+                    }
+                    let _ = self.events.send(AppEvent::Notification(notification));
+                    return Ok(None);
+                }
                 let synchronizing = snapshot.is_some();
                 if let Some(snapshot) = snapshot.as_mut() {
                     snapshot.buffer(notification.clone());
@@ -666,6 +697,13 @@ impl Actor {
         let mut snapshot = snapshot
             .take()
             .ok_or_else(|| ClientError::rpc("内部快照状态缺失"))?;
+        let locale = snapshot
+            .locale
+            .take()
+            .expect("complete snapshot has locale");
+        if !snapshot.locale_pushed {
+            apply_locale_result(&mut self.state, locale);
+        }
         let status_value = match snapshot
             .status
             .take()
@@ -924,6 +962,8 @@ impl Actor {
                 deadline,
             )
             .await;
+        // ADR-0048 的语言偏好只在 IPC 快照里取：HTTP 会话恒为 user 主体、不承载推送，
+        // 以前端身份运行的壳（maild-ui）不会走到这里，`locale` 保持 `None`。
         if let Err(error) = &accounts {
             if error.kind == ErrorKind::Connection {
                 return Err(error.clone());
@@ -1119,6 +1159,9 @@ fn notification_bytes(notification: &ServerNotification) -> usize {
             .saturating_add(message.body.len()),
         ServerNotification::FrontendIntent { frontend } => OVERHEAD.saturating_add(frontend.len()),
         ServerNotification::AgentStopping => OVERHEAD,
+        ServerNotification::LocalePreference { effective } => effective
+            .iter()
+            .fold(OVERHEAD, |total, tag| total.saturating_add(tag.len())),
         ServerNotification::Unknown(value) => OVERHEAD
             .saturating_add(value.method.len())
             .saturating_add(value.params.to_string().len()),
@@ -1232,7 +1275,52 @@ fn validate_notification(notification: &ServerNotification) -> Result<(), Client
             frontend,
             MAX_NOTIFICATION_TEXT_BYTES,
         ),
+        ServerNotification::LocalePreference { effective } => validate_locale(effective),
         ServerNotification::AgentStopping | ServerNotification::Unknown(_) => Ok(()),
+    }
+}
+
+/// `effective` 的形状上限（ADR-0048 决策 2：永不为空）。内容是否合法 BCP 47 由前端协商时自行判断，
+/// 认不出的标签只是匹配不上。
+fn validate_locale(effective: &[String]) -> Result<(), ClientError> {
+    if effective.is_empty() {
+        return Err(ClientError::rpc("语言偏好 effective 不能为空"));
+    }
+    if effective.len() > MAX_LOCALE_TAGS {
+        return Err(ClientError::rpc(format!(
+            "语言偏好 effective 超过 {MAX_LOCALE_TAGS} 项上限"
+        )));
+    }
+    for tag in effective {
+        validate_text("语言标签", tag, MAX_LOCALE_TAG_BYTES)?;
+    }
+    Ok(())
+}
+
+/// `getLocalePreference` 应答（ADR-0048）。只取 `effective`：偏好模式由设置页按需另取。
+#[derive(serde::Deserialize)]
+struct LocaleSnapshot {
+    effective: Vec<String>,
+}
+
+/// 把一次 `getLocalePreference` 的结果落进状态。
+///
+/// - 成功：更新为新的 `effective`。
+/// - `-32601`（老 daemon 没有这个方法）或 `-32016`（老 daemon 的授权表不认识它，对前端主体
+///   fail-closed）：daemon 不提供偏好，清空为 `None`，前端回落基础语言。
+/// - 其他失败（超时、应答结构不对）：保留上一次的值，不让一次抖动把界面语言打回默认；也不记进
+///   `partial_snapshot`——语言偏好不是邮箱数据。
+fn apply_locale_result(state: &mut ViewState, result: Result<Value, ClientError>) {
+    match result {
+        Ok(value) => {
+            if let Ok(effective) = decode::<LocaleSnapshot>("getLocalePreference", value)
+                .and_then(|locale| validate_locale(&locale.effective).map(|()| locale.effective))
+            {
+                state.locale = Some(effective);
+            }
+        }
+        Err(error) if matches!(error.rpc_code, Some(-32601 | -32016)) => state.locale = None,
+        Err(_) => {}
     }
 }
 
@@ -1318,9 +1406,10 @@ fn apply_notification(
             state.messages.truncate(limit as usize);
             true
         }
-        // 由 `handle_incoming` 直接计数，从不进快照缓冲。
+        // 由 `handle_incoming` 直接处理，从不进快照缓冲。
         ServerNotification::FrontendIntent { .. }
         | ServerNotification::AgentStopping
+        | ServerNotification::LocalePreference { .. }
         | ServerNotification::Unknown(_) => false,
     }
 }
@@ -1401,17 +1490,25 @@ mod tests {
             /// 每条连接按顺序收到的方法名。
             pub connections: Arc<Mutex<Vec<Vec<String>>>>,
             pub mode: Arc<Mutex<Mode>>,
+            /// ADR-0048：`None` = 老 daemon，`getLocalePreference` 回 `-32601`。
+            pub locale: Arc<Mutex<Option<Vec<String>>>>,
             _dir: tempfile::TempDir,
         }
 
         pub async fn start(mode: Mode) -> Server {
+            start_with_locale(mode, None).await
+        }
+
+        pub async fn start_with_locale(mode: Mode, locale: Option<Vec<String>>) -> Server {
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join("s.sock");
             let listener = UnixListener::bind(&path).unwrap();
             let connections: Arc<Mutex<Vec<Vec<String>>>> = Arc::default();
             let mode = Arc::new(Mutex::new(mode));
+            let locale = Arc::new(Mutex::new(locale));
             let log = connections.clone();
             let mode_ref = mode.clone();
+            let locale_ref = locale.clone();
             tokio::spawn(async move {
                 let issued: Arc<Mutex<Option<String>>> = Arc::default();
                 let mut counter = 0_u64;
@@ -1428,6 +1525,7 @@ mod tests {
                     let log = log.clone();
                     let issued = issued.clone();
                     let mode = mode_ref.clone();
+                    let locale = locale_ref.clone();
                     tokio::spawn(async move {
                         let (read, mut write) = tokio::io::split(stream);
                         let mut read = BufReader::new(read);
@@ -1442,7 +1540,34 @@ mod tests {
                             log.lock().unwrap()[index].push(method.clone());
                             let id = request["id"].clone();
                             let mode = *mode.lock().unwrap();
+                            let current_locale = locale.lock().unwrap().clone();
+                            let mut push = None;
                             let reply = match method.as_str() {
+                                "getLocalePreference" if current_locale.is_some() => json!({
+                                    "jsonrpc": "2.0", "id": id,
+                                    "result": {
+                                        "preference": {"mode": "system", "languages": []},
+                                        "effective": current_locale,
+                                        "persisted": true
+                                    }
+                                }),
+                                // 真 daemon 的行为：应答之后向所有流式连接推送新的 effective。
+                                "setLocalePreference" if current_locale.is_some() => {
+                                    let languages = request["params"]["languages"].clone();
+                                    let effective: Vec<String> =
+                                        serde_json::from_value(languages).unwrap();
+                                    *locale.lock().unwrap() = Some(effective.clone());
+                                    push = Some(json!({
+                                        "jsonrpc": "2.0",
+                                        "method": "preferences/locale",
+                                        "params": {"effective": effective}
+                                    }));
+                                    json!({"jsonrpc": "2.0", "id": id, "result": {
+                                        "preference": {"mode": "explicit", "languages": effective},
+                                        "effective": effective,
+                                        "persisted": true
+                                    }})
+                                }
                                 "revealPluginToken" if mode == Mode::NotInstalled => json!({
                                     "jsonrpc": "2.0", "id": id,
                                     "error": {"code": -32602, "message": "插件未安装或没有身份条目"}
@@ -1479,10 +1604,12 @@ mod tests {
                                 _ => json!({"jsonrpc": "2.0", "id": id,
                                     "error": {"code": -32601, "message": "method not found"}}),
                             };
-                            let mut bytes = serde_json::to_vec(&reply).unwrap();
-                            bytes.push(b'\n');
-                            if write.write_all(&bytes).await.is_err() {
-                                return;
+                            for frame in std::iter::once(reply).chain(push) {
+                                let mut bytes = serde_json::to_vec(&frame).unwrap();
+                                bytes.push(b'\n');
+                                if write.write_all(&bytes).await.is_err() {
+                                    return;
+                                }
                             }
                         }
                     });
@@ -1492,6 +1619,7 @@ mod tests {
                 path,
                 connections,
                 mode,
+                locale,
                 _dir: dir,
             }
         }
@@ -1647,6 +1775,192 @@ mod tests {
         assert_eq!(connections.len(), 1);
         assert!(!connections[0].iter().any(|m| m == "authenticate" || m == "revealPluginToken"));
         handle.shutdown().await.unwrap();
+    }
+
+    /// ADR-0048：每条新连接的首个快照带上 `getLocalePreference`；之后 `preferences/locale` 推送
+    /// 即时更新 `locale` 并广播事件。
+    #[cfg(unix)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn locale_preference_is_fetched_on_connect_and_follows_pushes() {
+        let server = identity_server::start_with_locale(
+            identity_server::Mode::Honest,
+            Some(vec!["zh-Hans-CN".into(), "en-US".into()]),
+        )
+        .await;
+        let handle = ConnectionHandle::spawn(
+            Endpoint::Unix {
+                path: server.path.clone(),
+            },
+            shell_options(),
+        )
+        .unwrap();
+        let mut events = handle.subscribe_events();
+        let mut state = handle.subscribe_state();
+        let online = wait_until(&mut state, |s| s.phase == ConnectionPhase::Online).await;
+        assert_eq!(
+            online.locale,
+            Some(vec!["zh-Hans-CN".to_string(), "en-US".to_string()])
+        );
+        let connections = server.connections.lock().unwrap().clone();
+        let long = connections
+            .iter()
+            .find(|c| c.first().map(String::as_str) == Some("authenticate"))
+            .unwrap();
+        assert!(long.iter().any(|m| m == "getLocalePreference"), "{long:?}");
+
+        handle
+            .request(
+                "setLocalePreference",
+                json!({ "mode": "explicit", "languages": ["en"] }),
+            )
+            .await
+            .unwrap();
+        let switched = wait_until(&mut state, |s| {
+            s.locale.as_deref() == Some(&["en".to_string()])
+        })
+        .await;
+        assert_eq!(
+            switched.phase,
+            ConnectionPhase::Online,
+            "推送不触发重新同步"
+        );
+        assert_eq!(
+            server.locale.lock().unwrap().clone(),
+            Some(vec!["en".to_string()])
+        );
+        let event = tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if let AppEvent::Notification(ServerNotification::LocalePreference { effective }) =
+                    events.recv().await.unwrap()
+                {
+                    return effective;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(event, vec!["en".to_string()]);
+        handle.shutdown().await.unwrap();
+    }
+
+    /// 老 daemon（`-32601`）：连接照常上线，`locale` 保持 `None`，界面停在基础语言。
+    #[cfg(unix)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn an_old_daemon_without_locale_preference_leaves_locale_unset() {
+        let server = identity_server::start(identity_server::Mode::Honest).await;
+        let handle = ConnectionHandle::spawn(
+            Endpoint::Unix {
+                path: server.path.clone(),
+            },
+            shell_options(),
+        )
+        .unwrap();
+        let mut state = handle.subscribe_state();
+        let online = wait_until(&mut state, |s| s.phase == ConnectionPhase::Online).await;
+        assert_eq!(online.locale, None);
+        assert!(!online.partial_snapshot, "缺少语言偏好不算部分快照");
+        assert_eq!(online.last_error, None);
+        handle.shutdown().await.unwrap();
+    }
+
+    #[test]
+    fn locale_results_update_clear_or_keep_the_preference() {
+        let rpc = |code| ClientError {
+            kind: ErrorKind::Rpc,
+            message: "x".into(),
+            rpc_code: Some(code),
+            rpc_data: None,
+        };
+        let mut state = ViewState::new(TransportKind::Unix);
+        apply_locale_result(
+            &mut state,
+            Ok(json!({
+                "preference": { "mode": "explicit", "languages": ["en"] },
+                "effective": ["en"],
+                "persisted": true
+            })),
+        );
+        assert_eq!(state.locale, Some(vec!["en".to_string()]));
+        // 抖动与坏应答不把界面语言打回默认。
+        apply_locale_result(
+            &mut state,
+            Err(ClientError::connection("JSON-RPC 请求超时")),
+        );
+        apply_locale_result(&mut state, Err(rpc(-32603)));
+        apply_locale_result(&mut state, Ok(json!({ "effective": [] })));
+        apply_locale_result(&mut state, Ok(json!({ "effective": "en" })));
+        apply_locale_result(
+            &mut state,
+            Ok(json!({ "effective": ["x".repeat(MAX_LOCALE_TAG_BYTES + 1)] })),
+        );
+        assert_eq!(state.locale, Some(vec!["en".to_string()]));
+        // daemon 不提供该方法：老 daemon 的 -32601，或其授权表对前端主体 fail-closed 的 -32016。
+        for code in [-32601, -32016] {
+            state.locale = Some(vec!["en".into()]);
+            apply_locale_result(&mut state, Err(rpc(code)));
+            assert_eq!(state.locale, None, "{code}");
+        }
+    }
+
+    #[test]
+    fn locale_push_applies_immediately_and_wins_over_the_snapshot_reply() {
+        let (mut actor, _commands, state, mut events, _shutdown) = test_actor();
+        let push = |effective: &[&str]| {
+            Incoming::Notification(maild_client::Notification {
+                method: maild_client::LOCALE_PREFERENCE_NOTIFICATION.into(),
+                params: json!({ "effective": effective }),
+            })
+        };
+        let mut pending = BTreeMap::new();
+        let mut snapshot = Some(page_out_snapshot());
+        let mut synchronized = false;
+
+        actor
+            .handle_incoming(
+                push(&["en-GB"]),
+                &mut pending,
+                &mut snapshot,
+                &mut synchronized,
+                true,
+            )
+            .unwrap();
+        let first = state.borrow().clone();
+        assert_eq!(first.locale, Some(vec!["en-GB".to_string()]));
+        assert!(matches!(
+            events.try_recv(),
+            Ok(AppEvent::Notification(ServerNotification::LocalePreference { effective }))
+                if effective == ["en-GB"]
+        ));
+        let tracker = snapshot.as_ref().unwrap();
+        assert!(tracker.locale_pushed);
+        assert_eq!(tracker.buffered.len(), 1, "推送不进快照缓冲");
+
+        // 同一列表重复推送：不重复发布状态。
+        actor
+            .handle_incoming(
+                push(&["en-GB"]),
+                &mut pending,
+                &mut snapshot,
+                &mut synchronized,
+                true,
+            )
+            .unwrap();
+        assert_eq!(state.borrow().revision, first.revision);
+
+        // 快照里的应答（zh-Hans-CN）早于推送，收尾时不覆盖。
+        actor.finish_snapshot(&mut snapshot, false, true).unwrap();
+        assert_eq!(actor.state.locale, Some(vec!["en-GB".to_string()]));
+
+        // 形状不对的推送是协议错误，与其他通知一致。
+        assert!(actor
+            .handle_incoming(
+                push(&[]),
+                &mut pending,
+                &mut snapshot,
+                &mut synchronized,
+                true
+            )
+            .is_err());
     }
 
     #[test]
@@ -1938,6 +2252,11 @@ mod tests {
             sort_at: 9,
             ..Default::default()
         })));
+        tracker.locale = Some(Ok(json!({
+            "preference": { "mode": "system", "languages": [] },
+            "effective": ["zh-Hans-CN"],
+            "persisted": true
+        })));
         tracker
     }
 
@@ -1975,6 +2294,16 @@ mod tests {
                 SnapshotPart::Messages,
                 Ok(json!({ "messages": [], "total": 0 })),
             );
+            assert!(!tracker.is_complete(), "语言偏好也是快照的一部分");
+            tracker.record(
+                SnapshotPart::Locale,
+                Err(ClientError {
+                    kind: ErrorKind::Rpc,
+                    message: "method not found".into(),
+                    rpc_code: Some(-32601),
+                    rpc_data: None,
+                }),
+            );
         }
         assert!(
             !actor
@@ -1984,6 +2313,10 @@ mod tests {
         );
         reply_rx.await.unwrap().unwrap();
         assert_eq!(actor.state.phase, ConnectionPhase::Online);
+        assert_eq!(
+            actor.state.locale, None,
+            "老 daemon：不提供偏好，前端回落基础语言"
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -1999,7 +2332,7 @@ mod tests {
             let (read, mut write) = tokio::io::split(server);
             let mut read = BufReader::new(read);
             let mut requests = BTreeMap::new();
-            for _ in 0..3 {
+            for _ in 0..SNAPSHOT_REQUESTS {
                 let mut line = String::new();
                 read.read_line(&mut line).await.unwrap();
                 let request: Value = serde_json::from_str(&line).unwrap();
@@ -2021,6 +2354,9 @@ mod tests {
             ).await.unwrap();
             write.write_all(
                 format!("{{\"jsonrpc\":\"2.0\",\"result\":{{\"messages\":[{message}],\"total\":1}},\"id\":{}}}\n", requests["listMessageSummaries"]).as_bytes()
+            ).await.unwrap();
+            write.write_all(
+                format!("{{\"jsonrpc\":\"2.0\",\"result\":{{\"preference\":{{\"mode\":\"explicit\",\"languages\":[\"en\"]}},\"effective\":[\"en\"],\"persisted\":true}},\"id\":{}}}\n", requests["getLocalePreference"]).as_bytes()
             ).await.unwrap();
             write.write_all(
                 format!("{{\"jsonrpc\":\"2.0\",\"result\":{{\"version\":\"0.1.0\",\"accounts\":[],\"message_count\":1}},\"id\":{}}}\n", requests["status"]).as_bytes()
@@ -2066,6 +2402,7 @@ mod tests {
         .unwrap();
         assert_eq!(state_rx.borrow().messages.len(), 1);
         assert_eq!(state_rx.borrow().total_messages, 1);
+        assert_eq!(state_rx.borrow().locale, Some(vec!["en".to_string()]));
         assert!(matches!(
             events.recv().await.unwrap(),
             AppEvent::Notification(ServerNotification::MessageReceived(message)) if message.uid == "7"

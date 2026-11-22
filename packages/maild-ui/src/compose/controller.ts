@@ -1,7 +1,7 @@
 import { m } from "@featherpost/i18n/messages";
 
 import { Store } from "../host/store";
-import { errorCode } from "../bridge/errors";
+import { bridgeErrorText, errorCode } from "../bridge/errors";
 import type { MessageIdentity } from "../bridge/types";
 import {
   attachmentInput,
@@ -624,7 +624,7 @@ export class ComposeController {
     const s = this.store.getSnapshot();
     for (const result of results) {
       if ("Err" in result) {
-        this.store.patch({ error: result.Err.message });
+        this.store.patch({ error: bridgeErrorText(result.Err) });
         continue;
       }
       if (!s.draft || !this.editable() || s.busy || s.closing) {

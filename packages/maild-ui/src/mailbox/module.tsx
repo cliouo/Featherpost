@@ -201,11 +201,15 @@ export function mailboxModule(
   return {
     moduleId: "maild.mailbox",
     apiVersion: 1,
-    title: m.mailbox_module_title(),
+    get title() {
+      return m.mailbox_module_title();
+    },
     views: [
       {
         id: MAILBOX_VIEW,
-        title: m.mailbox_view_mail(),
+        get title() {
+          return m.mailbox_view_mail();
+        },
         icon: "inbox",
         role: "mailbox",
         order: 0,
@@ -214,7 +218,9 @@ export function mailboxModule(
       },
       {
         id: ACTIVITY_VIEW,
-        title: m.mailbox_activity_title(),
+        get title() {
+          return m.mailbox_activity_title();
+        },
         icon: "activity",
         role: "activity",
         render: ActivityView,
@@ -224,7 +230,9 @@ export function mailboxModule(
     settings: [
       {
         id: "maild.mailbox.reading-privacy",
-        title: m.mailbox_reading_title(),
+        get title() {
+          return m.mailbox_reading_title();
+        },
         order: 15,
         render: ReadingPrivacy,
       },
@@ -232,7 +240,9 @@ export function mailboxModule(
     commands: [
       {
         id: "maild.mailbox.search",
-        title: m.mailbox_shortcut_search_mail(),
+        get title() {
+          return m.mailbox_shortcut_search_mail();
+        },
         icon: "search",
         locations: ["navigation"],
         order: 20,
@@ -240,7 +250,9 @@ export function mailboxModule(
       },
       {
         id: "maild.mailbox.open-activity",
-        title: m.mailbox_activity_title(),
+        get title() {
+          return m.mailbox_activity_title();
+        },
         icon: "activity",
         locations: ["navigation"],
         order: 30,
@@ -248,7 +260,9 @@ export function mailboxModule(
       },
       {
         id: "maild.mailbox.read",
-        title: m.mailbox_command_mark_read(),
+        get title() {
+          return m.mailbox_command_mark_read();
+        },
         icon: "mail",
         locations: ["toolbar", "menu"],
         order: 40,
@@ -263,7 +277,9 @@ export function mailboxModule(
       },
       {
         id: "maild.mailbox.unread",
-        title: m.mailbox_command_mark_unread(),
+        get title() {
+          return m.mailbox_command_mark_unread();
+        },
         icon: "mail",
         locations: ["menu"],
         order: 41,
@@ -278,7 +294,9 @@ export function mailboxModule(
       },
       {
         id: "maild.mailbox.archive",
-        title: m.mailbox_command_archive(),
+        get title() {
+          return m.mailbox_command_archive();
+        },
         icon: "archive",
         locations: ["toolbar", "menu"],
         order: 50,
@@ -289,7 +307,9 @@ export function mailboxModule(
       },
       {
         id: "maild.mailbox.move",
-        title: m.mailbox_command_move(),
+        get title() {
+          return m.mailbox_command_move();
+        },
         icon: "folder",
         locations: ["menu"],
         order: 51,
@@ -298,7 +318,9 @@ export function mailboxModule(
       },
       {
         id: "maild.mailbox.delete",
-        title: m.mailbox_command_delete(),
+        get title() {
+          return m.mailbox_command_delete();
+        },
         icon: "trash",
         locations: ["toolbar", "menu"],
         order: 60,
@@ -307,7 +329,9 @@ export function mailboxModule(
       },
       {
         id: "maild.mailbox.refresh",
-        title: m.mailbox_command_refresh(),
+        get title() {
+          return m.mailbox_command_refresh();
+        },
         icon: "refresh",
         locations: ["toolbar", "menu"],
         order: 100,
@@ -322,7 +346,9 @@ export function mailboxModule(
       },
       {
         id: "maild.mailbox.shortcuts",
-        title: m.mailbox_shortcut_help_title(),
+        get title() {
+          return m.mailbox_shortcut_help_title();
+        },
         locations: ["menu"],
         order: 200,
         execute: () => {

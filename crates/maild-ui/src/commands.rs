@@ -7,8 +7,8 @@
 use tauri::State;
 
 use crate::bridge::{
-    UiDocument, UiError, UiFolder, UiFrontendInfo, UiMessage, UiPage, UiReadingPolicy,
-    UiReadingPolicyPatch, UiSnapshot,
+    UiDocument, UiError, UiFolder, UiFrontendInfo, UiLocale, UiLocalePreference, UiLocaleUpdate,
+    UiMessage, UiPage, UiReadingPolicy, UiReadingPolicyPatch, UiSnapshot,
 };
 use crate::html::LinkKind;
 use crate::{system, AppState};
@@ -109,16 +109,16 @@ pub(crate) fn ui_open_link(
     let document = state
         .documents
         .get(&token)
-        .ok_or_else(|| UiError::not_found("这封邮件的文档已释放，请重新选择它。"))?;
+        .ok_or_else(|| UiError::not_found("link_document_released", "这封邮件的文档已释放，请重新选择它。"))?;
     let link = document
         .links
         .get(index)
-        .ok_or_else(|| UiError::not_found("链接不存在。"))?;
+        .ok_or_else(|| UiError::not_found("link_missing", "链接不存在。"))?;
     if !matches!(link.kind, LinkKind::Http | LinkKind::Https) {
-        return Err(UiError::invalid("只有 http/https 链接会交给系统浏览器。"));
+        return Err(UiError::invalid("link_scheme", "只有 http/https 链接会交给系统浏览器。"));
     }
     system::open_external(&link.href)
-        .map_err(|error| UiError::failed("open_external", error, "无法打开系统浏览器。"))
+        .map_err(|error| UiError::failed("open_external", error, "browser_failed", "无法打开系统浏览器。"))
 }
 
 /// 保存附件：先取字节，再在主线程弹系统保存面板（rfd 的 macOS 后端要求），最后原子写入。
@@ -142,21 +142,22 @@ pub(crate) async fn ui_save_attachment(
         let picked = rfd::FileDialog::new().set_file_name(&suggested).save_file();
         let _ = sender.send(picked);
     })
-    .map_err(|error| UiError::failed("save_dialog", error, "无法打开保存面板。"))?;
+    .map_err(|error| UiError::failed("save_dialog", error, "save_dialog_failed", "无法打开保存面板。"))?;
     let Some(path) = receiver
         .await
-        .map_err(|error| UiError::failed("save_dialog", error, "无法打开保存面板。"))?
+        .map_err(|error| UiError::failed("save_dialog", error, "save_dialog_failed", "无法打开保存面板。"))?
     else {
         return Ok(None);
     };
     let bytes = saved.bytes;
     let written = tokio::task::spawn_blocking(move || system::write_atomically(&path, &bytes))
         .await
-        .map_err(|error| UiError::failed("save_attachment", error, "保存未完成。"))?
+        .map_err(|error| UiError::failed("save_attachment", error, "save_failed", "保存未完成。"))?
         .map_err(|error| {
             UiError::failed(
                 "save_attachment",
                 error,
+                "save_write_failed",
                 "无法写入所选位置，已有文件未被改动。",
             )
         })?;
@@ -176,6 +177,27 @@ pub(crate) async fn ui_set_reading_policy(
     patch: UiReadingPolicyPatch,
 ) -> Result<UiReadingPolicy, UiError> {
     state.bridge.set_reading_policy(&patch).await
+}
+
+/// ADR-0048：actor 手里当前的偏好列表；不发请求。webview 启动时取一次，之后跟 `maild://locale`。
+#[tauri::command]
+pub(crate) fn ui_locale(state: State<'_, AppState>) -> UiLocale {
+    state.bridge.locale()
+}
+
+#[tauri::command]
+pub(crate) async fn ui_locale_preference(
+    state: State<'_, AppState>,
+) -> Result<UiLocalePreference, UiError> {
+    state.bridge.locale_preference().await
+}
+
+#[tauri::command]
+pub(crate) async fn ui_set_locale_preference(
+    state: State<'_, AppState>,
+    update: UiLocaleUpdate,
+) -> Result<UiLocalePreference, UiError> {
+    state.bridge.set_locale_preference(&update).await
 }
 
 // ADR-0036: compose commands. No generic RPC or local-path entry point is exposed.
@@ -262,10 +284,10 @@ pub(crate) async fn ui_pick_files(
     app.run_on_main_thread(move || {
         let _ = tx.send(rfd::FileDialog::new().pick_files());
     })
-    .map_err(|e| UiError::failed("pick", e, "无法打开文件选择器。"))?;
+    .map_err(|e| UiError::failed("pick", e, "file_picker_failed", "无法打开文件选择器。"))?;
     let paths = rx
         .await
-        .map_err(|e| UiError::failed("pick", e, "无法打开文件选择器。"))?
+        .map_err(|e| UiError::failed("pick", e, "file_picker_failed", "无法打开文件选择器。"))?
         .unwrap_or_default();
     Ok(paths.iter().map(|p| state.files.select(p)).collect())
 }
@@ -423,8 +445,8 @@ pub(crate) async fn ui_settings_pick_package(app: tauri::AppHandle,state: State<
     crate::settings::check_kind(&kind)?;
     let (tx,rx)=tokio::sync::oneshot::channel();
     app.run_on_main_thread(move || { let _=tx.send(rfd::FileDialog::new().set_title(format!("选择完整的 {} 扩展包目录", maild_brand::PRODUCT_NAME)).pick_folder()); })
-        .map_err(|_|UiError::invalid("无法打开目录选择器。"))?;
-    let Some(path)=rx.await.map_err(|_|UiError::invalid("目录选择器未返回。"))? else {return Ok(None)};
+        .map_err(|_|UiError::invalid("folder_picker_failed", "无法打开目录选择器。"))?;
+    let Some(path)=rx.await.map_err(|_|UiError::invalid("folder_picker_no_result", "目录选择器未返回。"))? else {return Ok(None)};
     state.packages.select(&state.bridge,&path,&kind).await.map(Some)
 }
 
@@ -486,5 +508,5 @@ pub(crate) async fn ui_discover_provider(
 #[tauri::command(rename_all = "snake_case")]
 pub(crate) fn ui_open_external_url(url: String) -> Result<(), UiError> {
     system::open_web_url(&url)
-        .map_err(|error| UiError::failed("ui_open_external_url", error, "无法打开这个链接。"))
+        .map_err(|error| UiError::failed("ui_open_external_url", error, "external_link_failed", "无法打开这个链接。"))
 }
