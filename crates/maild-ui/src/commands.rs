@@ -245,10 +245,11 @@ pub(crate) async fn ui_reply_draft(
     folder: String,
     uid: String,
     mode: String,
+    locale: Option<String>,
 ) -> Result<crate::compose::UiDraft, UiError> {
     state
         .bridge
-        .reply_draft(&account, &folder, &uid, &mode)
+        .reply_draft(&account, &folder, &uid, &mode, locale.as_deref())
         .await
 }
 #[tauri::command]

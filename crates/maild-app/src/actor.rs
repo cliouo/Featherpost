@@ -12,8 +12,8 @@ use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tokio::time::Instant;
 
 use crate::{
-    AccountsResult, ActorOptions, AppEvent, ConnectionPhase, MessageSummariesResult,
-    MessageSummary, StatusResult, ViewState,
+    AccountsResult, ActorOptions, AppEvent, ConnectionPhase, IdentityFailure,
+    MessageSummariesResult, MessageSummary, StatusResult, ViewState,
 };
 
 const MAX_BUFFERED_NOTIFICATIONS: usize = 256;
@@ -266,17 +266,24 @@ impl Actor {
                     return;
                 };
                 let bound = bound
-                    .map_err(|_| ClientError::connection("前端身份绑定超时"))
+                    .map_err(|_| {
+                        (
+                            IdentityFailure::Unavailable,
+                            ClientError::connection("前端身份绑定超时"),
+                        )
+                    })
                     .and_then(|result| result);
                 match bound {
                     Ok(principal) => {
                         self.state.principal = Some(principal);
                         self.state.identity_failure = None;
+                        self.state.identity_failure_code = None;
                         self.publish();
                     }
-                    Err(error) => {
+                    Err((code, error)) => {
                         self.state.principal = None;
                         self.state.identity_failure = Some(error.message.clone());
+                        self.state.identity_failure_code = Some(code);
                         self.set_error(&error);
                         attempt = attempt.saturating_add(1);
                         if matches!(self.wait_retry(attempt).await, LoopControl::Stop) {
@@ -1332,31 +1339,47 @@ async fn bind_identity(
     client: &RpcClient,
     connection: &mut StreamConnection,
     identity: &crate::FrontendIdentity,
-) -> Result<String, ClientError> {
+) -> Result<String, (IdentityFailure, ClientError)> {
     let token = client
         .reveal_plugin_token(&identity.frontend_id, Some("frontend"))
         .await
         .map_err(|error| match error.kind {
             // 参数错误 = 包不在册或没有身份条目：修复动作是安装，不是等待。
-            ErrorKind::Rpc => ClientError::rpc(format!(
-                "前端包 `{}` 未安装或没有身份条目（{}）",
-                identity.frontend_id, error.message
-            )),
-            ErrorKind::Connection => error,
+            ErrorKind::Rpc => (
+                IdentityFailure::NotInstalled,
+                ClientError::rpc(format!(
+                    "前端包 `{}` 未安装或没有身份条目（{}）",
+                    identity.frontend_id, error.message
+                )),
+            ),
+            ErrorKind::Connection => (IdentityFailure::Unavailable, error),
         })?;
     connection.authenticate(&token).await.map_err(|error| {
-        ClientError::rpc(format!("前端 `{}` 认证被拒绝：{}", identity.frontend_id, error.message))
+        (
+            IdentityFailure::Rejected,
+            ClientError::rpc(format!("前端 `{}` 认证被拒绝：{}", identity.frontend_id, error.message)),
+        )
     })?;
     drop(token);
-    let whoami = connection.call("whoami", json!({}), |_| {}).await?;
-    let principal = whoami["principal"]
-        .as_str()
-        .ok_or_else(|| ClientError::rpc("whoami 应答缺少 principal"))?;
+    let whoami = connection
+        .call("whoami", json!({}), |_| {})
+        .await
+        .map_err(|error| match error.kind {
+            ErrorKind::Connection => (IdentityFailure::Unavailable, error),
+            ErrorKind::Rpc => (IdentityFailure::Rejected, error),
+        })?;
+    let principal = whoami["principal"].as_str().ok_or_else(|| {
+        (
+            IdentityFailure::Rejected,
+            ClientError::rpc("whoami 应答缺少 principal"),
+        )
+    })?;
     let expected = identity.expected_principal();
     if principal != expected {
-        return Err(ClientError::rpc(format!(
-            "会话主体是 {principal}，不是预期的 {expected}"
-        )));
+        return Err((
+            IdentityFailure::PrincipalMismatch,
+            ClientError::rpc(format!("会话主体是 {principal}，不是预期的 {expected}")),
+        ));
     }
     Ok(principal.to_owned())
 }
@@ -1708,6 +1731,7 @@ mod tests {
             "{failed:?}"
         );
         assert_eq!(failed.principal, None);
+        assert_eq!(failed.identity_failure_code, Some(IdentityFailure::NotInstalled));
         assert_ne!(failed.phase, ConnectionPhase::Online);
 
         // 第二次 reveal 到达 = 在退避重试，而不是放弃。
@@ -1733,6 +1757,7 @@ mod tests {
         *server.mode.lock().unwrap() = identity_server::Mode::Honest;
         let online = wait_until(&mut state, |s| s.phase == ConnectionPhase::Online).await;
         assert_eq!(online.identity_failure, None);
+        assert_eq!(online.identity_failure_code, None, "成功绑定同时清空 code");
         assert_eq!(online.principal.as_deref(), Some("frontend:com.example.shell"));
         handle.shutdown().await.unwrap();
     }
@@ -1752,6 +1777,7 @@ mod tests {
         let mut state = handle.subscribe_state();
         let failed = wait_until(&mut state, |s| s.identity_failure.is_some()).await;
         assert!(failed.identity_failure.as_deref().unwrap().contains("frontend:org.other"));
+        assert_eq!(failed.identity_failure_code, Some(IdentityFailure::PrincipalMismatch));
         assert_eq!(failed.principal, None);
         handle.shutdown().await.unwrap();
     }

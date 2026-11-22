@@ -229,6 +229,23 @@ async fn tauri_frontend_syncs_discovers_and_pulls_server_history_into_an_isolate
     })
     .await;
 
+    // ADR-0048 决策 7：回复引用块跟随桥传来的界面语言；不传时按 daemon 偏好（缺省中文）。
+    let english = bridge
+        .reply_draft("legacy", "INBOX", "4", "reply", Some("en"))
+        .await
+        .unwrap();
+    assert!(english.body.contains(" wrote:"), "{}", english.body);
+    let chinese = bridge
+        .reply_draft("legacy", "INBOX", "4", "reply", Some("zh-CN"))
+        .await
+        .unwrap();
+    assert!(chinese.body.contains("写道："), "{}", chinese.body);
+    let invalid = bridge
+        .reply_draft("legacy", "INBOX", "4", "reply", Some("not a tag"))
+        .await
+        .unwrap();
+    assert!(invalid.body.contains("写道："), "非法标签按旧后台处理：去掉 locale 重试");
+
     // 2. 服务商识别：预设命中零网络；无法识别的输入投影为 None 而不是错误。
     let qq = bridge
         .discover_provider("alice@qq.com".into(), false)

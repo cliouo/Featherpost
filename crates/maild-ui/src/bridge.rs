@@ -10,11 +10,13 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use maild_app::{
-    ActorOptions, CompatVerdict, ConnectionHandle, ConnectionPhase, FrontendIdentity, ViewState,
+    ActorOptions, CompatVerdict, ConnectionHandle, ConnectionPhase, FrontendIdentity,
+    IdentityFailure, ViewState,
 };
 use maild_client::{
     assemble_attachment, AttachmentBytes, AttachmentChunk, ClientError, Endpoint, ErrorKind,
     FrontendsResult, LocalePreferenceResult, LocalePreferenceUpdate, MailAttachment, MailFolder,
+    PackageL10n,
     MailMessage, MessageResult, MessageSummariesResult, MessageSummary, OpenIntent,
     ReadingPolicyPatch, ReadingPolicyResult,
 };
@@ -265,6 +267,9 @@ pub struct UiSnapshot {
     pub principal: Option<String>,
     /// 身份 bootstrap 失败原因（我们自己拼的文案，不含路径）。修复动作是安装前端包。
     pub identity_failure: Option<String>,
+    /// 失败的稳定原因（`not_installed` / `rejected` / `principal_mismatch` / `unavailable`，
+    /// ADR-0048 决策 3）。webview 按它用界面语言成文，上面的中文只作诊断。
+    pub identity_failure_code: Option<&'static str>,
     /// 快照有部分失败（actor 的 `partial_snapshot`）。
     pub partial: bool,
     /// 最近一次版本握手结论（ADR-0016）。重连后在新结论出来前沿用上一次的。
@@ -304,6 +309,7 @@ pub fn project(state: &ViewState, frontend_id: &str, compat: UiCompat) -> UiSnap
             .collect(),
         principal: state.principal.clone(),
         identity_failure: state.identity_failure.clone(),
+        identity_failure_code: state.identity_failure_code.map(IdentityFailure::code),
         partial: state.partial_snapshot,
         compat,
     }
@@ -638,6 +644,11 @@ impl From<MessageResult> for UiMessage {
 pub struct UiFrontendInfo {
     pub id: String,
     pub name: String,
+    /// ADR-0048 决策 5：manifest 的兜底说明与 `[l10n.<tag>]` 原样透传，webview 渲染时协商。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "PackageL10n::is_empty")]
+    pub l10n: PackageL10n,
     pub version: String,
     pub lifecycle: String,
     pub capabilities: Vec<String>,
@@ -1093,6 +1104,8 @@ impl Bridge {
             default_frontend: result.default,
             id: me.id,
             name: me.name,
+            description: me.description,
+            l10n: me.l10n,
             version: me.version,
             lifecycle: me.lifecycle,
             capabilities: me.capabilities,
@@ -1149,6 +1162,7 @@ mod tests {
             revision: 9,
             principal: None,
             identity_failure: Some(format!("前端包 `{FRONTEND_ID}` 未安装或没有身份条目")),
+            identity_failure_code: Some(IdentityFailure::NotInstalled),
             intent_epoch: 0,
             shutdown_requested: false,
             locale: None,
@@ -1174,6 +1188,7 @@ mod tests {
             .as_deref()
             .unwrap()
             .contains("未安装"));
+        assert_eq!(snapshot.identity_failure_code, Some("not_installed"));
     }
 
     /// ADR-0016：版本不一致时只放行只读请求，新方法默认按写入处理；未知/兼容不挡任何请求。

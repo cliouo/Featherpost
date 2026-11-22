@@ -145,13 +145,24 @@ impl Bridge {
         folder: &str,
         uid: &str,
         mode: &str,
+        locale: Option<&str>,
     ) -> Result<UiDraft, UiError> {
-        let reply: PrepareReplyResult = self
-            .compose_call(
-                "prepareReply",
-                json!({"account":account,"folder":folder,"uid":uid,"mode":mode}),
-            )
-            .await?;
+        let params = json!({"account":account,"folder":folder,"uid":uid,"mode":mode});
+        // ADR-0048 决策 7：引用块语言首版跟随界面语言。早于 L4 的 daemon 拒绝未知参数（-32602），
+        // 去掉 `locale` 重试一次，得到与今天相同的中文引用块。
+        let reply: PrepareReplyResult = match locale {
+            Some(locale) => {
+                let mut localized = params.clone();
+                localized["locale"] = json!(locale);
+                match self.compose_call("prepareReply", localized).await {
+                    Err(error) if error.code == crate::bridge::UiErrorCode::Invalid => {
+                        self.compose_call("prepareReply", params).await?
+                    }
+                    result => result?,
+                }
+            }
+            None => self.compose_call("prepareReply", params).await?,
+        };
         let MessageDraft {
             to,
             cc,

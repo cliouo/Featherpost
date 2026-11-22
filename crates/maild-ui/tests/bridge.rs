@@ -824,6 +824,7 @@ async fn an_uninstalled_shell_reports_the_missing_package_instead_of_running_as_
             .contains("未安装"),
         "{snapshot:?}"
     );
+    assert_eq!(snapshot.identity_failure_code, Some("not_installed"));
     assert_ne!(snapshot.phase, "online");
     assert_eq!(snapshot.principal, None);
     let error = bridge.list_folders("demo").await.unwrap_err();
