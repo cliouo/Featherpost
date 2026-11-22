@@ -260,7 +260,10 @@ mod tests {
             (zh.app_outdated_warning)("featherpostctl", "Featherpost"),
             "警告: featherpostctl 较旧（内核协议代更新），建议更新 Featherpost"
         );
-        assert_eq!((zh.backup_done)("\"/b.sqlite3\""), "备份完成: \"/b.sqlite3\"");
+        assert_eq!(
+            (zh.backup_done)("\"/b.sqlite3\""),
+            "备份完成: \"/b.sqlite3\""
+        );
         assert_eq!((zh.backup_failed)("x"), "备份失败: x");
         assert_eq!(
             (zh.restore_done)("\"/a\"", "\"/r\""),
