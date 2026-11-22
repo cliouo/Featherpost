@@ -3504,6 +3504,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "maild-l10n"
+version = "0.1.0"
+
+[[package]]
 name = "maild-launcher"
 version = "0.1.0"
 dependencies = [
