@@ -1954,6 +1954,14 @@ async fn set_locale_preference(ctx: &Context, params: &Value) -> HandlerResult {
     locale_view_response(view)
 }
 
+/// 进程内读 `effective`（ADR-0048 决策 2）。没有装配偏好服务（纯 store 装配、测试）时回落
+/// [`FALLBACK_LANGUAGE`](crate::locale_preference::FALLBACK_LANGUAGE)，即今天的中文行为。
+fn effective_locales(ctx: &Context) -> Vec<String> {
+    ctx.get::<LocalePreference>()
+        .map(|preference| preference.effective())
+        .unwrap_or_else(|| vec![crate::locale_preference::FALLBACK_LANGUAGE.to_owned()])
+}
+
 // —— 草稿（ADR-0034）——
 
 use crate::drafts::{generate_draft_id, validate_patch, DraftInvalid, DraftPatch};
@@ -3859,10 +3867,10 @@ async fn prepare_reply(ctx: &Context, params: &Value) -> HandlerResult {
         .ok_or_else(|| invalid_params("参数必须是对象"))?;
     if object
         .keys()
-        .any(|key| key != "account" && key != "folder" && key != "uid" && key != "mode")
+        .any(|key| !matches!(key.as_str(), "account" | "folder" | "uid" | "mode" | "locale"))
     {
         return Err(invalid_params(
-            "参数只能包含 `account`、`folder`、`uid` 和 `mode`",
+            "参数只能包含 `account`、`folder`、`uid`、`mode` 和 `locale`",
         ));
     }
     let account = object
@@ -3889,6 +3897,22 @@ async fn prepare_reply(ctx: &Context, params: &Value) -> HandlerResult {
         .and_then(Value::as_str)
         .and_then(compose::DraftMode::parse)
         .ok_or_else(|| invalid_params("`mode` 必须是 reply / reply_all / forward"))?;
+    // ADR-0048 决策 7：引用块是邮件内容的语言，可与界面语言不同。给了 `locale` 就只用它协商，
+    // 否则用偏好的 `effective` 列表；协商不出结果回落中文（即今天的行为）。
+    let locale = match object.get("locale") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(value)) => Some(
+            crate::locale_preference::normalize_tag(value)
+                .map_err(|error| invalid_params(&format!("`locale` 无效：{error}")))?,
+        ),
+        Some(_) => return Err(invalid_params("`locale` 必须是 BCP 47 字符串或 null")),
+    };
+    let quote = &match locale {
+        Some(tag) => maild_l10n::negotiate(&[tag]),
+        None => maild_l10n::negotiate(&effective_locales(ctx)),
+    }
+    .messages()
+    .quote;
 
     let store = ctx.get::<Store>().ok_or_else(|| unavailable("store"))?;
     let lookup = (account.clone(), folder.clone(), uid.clone());
@@ -3910,7 +3934,7 @@ async fn prepare_reply(ctx: &Context, params: &Value) -> HandlerResult {
         .map(|manager| manager.own_addresses(&account))
         .unwrap_or_default();
 
-    let date = compose::attribution_date(original.date_at.unwrap_or(original.received_at));
+    let date = compose::attribution_date(quote, original.date_at.unwrap_or(original.received_at));
     let sender_addresses = compose::extract_addresses(&original.sender);
     let draft = match mode {
         compose::DraftMode::Reply | compose::DraftMode::ReplyAll => {
@@ -3938,7 +3962,7 @@ async fn prepare_reply(ctx: &Context, params: &Value) -> HandlerResult {
                 "to": compose::without_self(to, &mine),
                 "cc": cc,
                 "subject": compose::reply_subject(&original.subject),
-                "body": compose::quote_reply(&original.sender, &date, &original.body),
+                "body": compose::quote_reply(quote, &original.sender, &date, &original.body),
                 "in_reply_to": original.message_id,
                 "references": compose::inherited_references(
                     &original.references,
@@ -3969,6 +3993,7 @@ async fn prepare_reply(ctx: &Context, params: &Value) -> HandlerResult {
                 "cc": [],
                 "subject": compose::forward_subject(&original.subject),
                 "body": compose::quote_forward(
+                    quote,
                     &original.sender,
                     &date,
                     &original.subject,
@@ -6443,6 +6468,109 @@ mod tests {
         )
         .await;
         assert_eq!(missing.error.unwrap().code, MESSAGE_NOT_FOUND);
+    }
+
+    /// ADR-0048 决策 7：引用块语言 = `locale` 协商，缺省用 `effective` 协商；主题前缀与语言无关。
+    #[tokio::test(flavor = "current_thread")]
+    async fn prepare_reply_quote_language_follows_locale_then_effective() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = Context::new();
+        let store = Arc::new(Store::open("").unwrap());
+        store
+            .upsert_folder("a", "INBOX", "INBOX", Some(FolderRole::Inbox))
+            .unwrap();
+        store
+            .insert_message(&MailMessage {
+                account: "a".into(),
+                uid: "7".into(),
+                sender: "Alice <alice@example.test>".into(),
+                recipient: "me@example.test".into(),
+                subject: "答复: Weekly".into(),
+                body: "line".into(),
+                // < 1971：引用日期回退 RFC 5322，与时区、语言无关，断言才能逐字节。
+                received_at: 1234,
+                date_at: Some(1234),
+                folder: "INBOX".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        ctx.provide::<Store>(store);
+        let draft = |params: Value| {
+            let ctx = ctx.clone();
+            async move {
+                dispatch(&ctx, &request("prepareReply", params, json!(1)))
+                    .await
+                    .result
+                    .expect("成功")["draft"]
+                    .clone()
+            }
+        };
+        let date = crate::compose::rfc5322_date(1234);
+
+        // 没有偏好服务：回落 zh-Hans，与今天逐字节一致。
+        let reply = draft(json!({ "account": "a", "uid": "7", "mode": "reply" })).await;
+        assert_eq!(
+            reply["body"],
+            format!("\n\n在 {date}，Alice <alice@example.test> 写道：\n> line")
+        );
+
+        // 显式 `locale`：英文引用行；主题前缀仍是 `Re:`，中文前缀照样被剥掉。
+        let reply = draft(json!({ "account": "a", "uid": "7", "mode": "reply", "locale": "EN-gb" })).await;
+        assert_eq!(reply["subject"], "Re: Weekly");
+        assert_eq!(
+            reply["body"],
+            format!("\n\nOn {date}, Alice <alice@example.test> wrote:\n> line")
+        );
+        let forward =
+            draft(json!({ "account": "a", "uid": "7", "mode": "forward", "locale": "en" })).await;
+        assert_eq!(forward["subject"], "Fwd: Weekly");
+        assert_eq!(
+            forward["body"],
+            format!(
+                "\n\n---------- Forwarded message ----------\n\
+                 From: Alice <alice@example.test>\nDate: {date}\nSubject: 答复: Weekly\n\
+                 To: me@example.test\n\nline"
+            )
+        );
+
+        // 偏好的 `effective` 为英文首选：不带 `locale` 也是英文；`locale` 优先于 `effective`；
+        // `null` 等于缺省；内核不支持的语言（含繁体）协商回落中文。
+        ctx.provide::<LocalePreference>(Arc::new(LocalePreference::open_with_system(
+            dir.path().join(crate::locale_preference::PREFERENCE_FILE),
+            || vec!["en-US".into(), "zh-Hans-CN".into()],
+        )));
+        for (locale, english) in [
+            (None, true),
+            (Some(Value::Null), true),
+            (Some(json!("zh-CN")), false),
+            (Some(json!("zh-Hant-TW")), false),
+            (Some(json!("ja")), false),
+        ] {
+            let mut params = json!({ "account": "a", "uid": "7", "mode": "reply" });
+            if let Some(locale) = locale.clone() {
+                params["locale"] = locale;
+            }
+            let body = draft(params).await["body"].as_str().unwrap().to_owned();
+            assert_eq!(body.contains(" wrote:"), english, "{locale:?}: {body}");
+            assert_eq!(body.contains("写道："), !english, "{locale:?}: {body}");
+        }
+
+        for locale in [json!(""), json!("not a tag"), json!("x".repeat(36)), json!(5), json!(["en"])] {
+            let response = dispatch(
+                &ctx,
+                &request(
+                    "prepareReply",
+                    json!({ "account": "a", "uid": "7", "mode": "reply", "locale": locale }),
+                    json!(2),
+                ),
+            )
+            .await;
+            assert_eq!(response.error.unwrap().code, INVALID_PARAMS, "{locale}");
+        }
+        assert!(
+            !dir.path().join(crate::locale_preference::PREFERENCE_FILE).exists(),
+            "prepareReply 只读偏好"
+        );
     }
 
     /// ADR-0034：草稿的参数面也要「拼错就报错」。自动保存每隔几秒发一次，

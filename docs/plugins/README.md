@@ -45,10 +45,11 @@ marketplace、下载签名与自动升级不在 v1 内：不能把网络下载�
 ## Manifest
 
 ```toml
-schema_version = 2             # 1 仍受支持；permissions 需要 2
+schema_version = 3             # 1、2 仍受支持；permissions 需要 ≥2，description / l10n 需要 3
 protocol_version = 1
 id = "org.example.reader"       # 必须等于目录名
 name = "Example Reader"
+description = "A reader for Featherpost"   # 可选，兜底描述
 version = "1.0.0"
 lifecycle = "on_demand"        # on_demand | independent
 capabilities = ["inbox", "message", "compose", "settings", "background"]
@@ -57,6 +58,10 @@ permissions = ["mailbox_write", "accounts_manage"]   # 可选，缺省空表
 [launch]
 kind = "macos_application"
 path = "Reader.app"             # 只能是 package 内相对路径
+
+[l10n."zh-Hans"]                # 可选，见下文「多语言名称与描述」
+name = "示例阅读器"
+description = "Featherpost 的阅读器"
 ```
 
 - `on_demand` 必须有 `launch`。首版只接受 `macos_application`，由 LaunchServices 激活且不传
@@ -88,6 +93,9 @@ path = "Reader.app"             # 只能是 package 内相对路径
   `permissions` 只允许出现在 `schema_version = 2`；v1 manifest 写了它**整包拒绝**，不降权
   静默装上——一个需要写权限才能工作的前端，不该以零权限的形态被装上去。同理，未知词、
   重复词、超过 16 项都是整包拒绝而非忽略。
+- `description` 与 `[l10n.<tag>]` 只允许出现在 `schema_version = 3`（v3 是 v2 的超集，仍可声明
+  `permissions`）；v1/v2 manifest 写了它们**整包拒绝**——旧 daemon 对未知键本来就拒绝整包，新旧 daemon
+  对同一个包的判断因此一致。规则见下文[多语言名称与描述](#多语言名称与描述adr-0048-决策-5)。
 - **`plugins_manage` 是四个里最重的：声明它等于声明「我可以代表用户安装任意受管包」。**
   安装界面因此必须显示包来源与它将获得的 permissions；`maildctl frontend list` 会把每个
   前端的 permissions 单独列出来。
@@ -101,6 +109,33 @@ path = "Reader.app"             # 只能是 package 内相对路径
 - frontend manifest 不接受 `supervised`；通用进程使用下方独立的 external manifest。逐插件
   凭据和细粒度 API capability enforcement 已按 ADR-0017/0018 落地（route 翻译表见上），
   当前 manifest 仍 fail-closed 拒绝未定义值。
+
+## 多语言名称与描述（ADR-0048 决策 5）
+
+包的名称与描述会出现在任何一个前端的设置页与安装预览里，只能由包作者提供翻译。frontend manifest
+（`schema_version = 3`）与下文 external manifest（`schema_version = 2`）共用同一套规则：
+
+```toml
+name = "Example Reader"             # 兜底，必填
+description = "A reader"            # 兜底，可选
+
+[l10n.en]
+description = "A reader for Featherpost"
+
+[l10n."zh-Hans"]
+name = "示例阅读器"
+description = "Featherpost 的阅读器"
+```
+
+- `description`：非空、≤1024 字节、不含控制字符。
+- `l10n` 的键是 BCP 47 标签（与 `setLocalePreference` 同一套形状校验，≤35 字节），daemon 规范大小写后
+  存储，规范化后重名（如 `en` 与 `EN`）整包拒绝；最多 16 种语言。
+- 每种语言的表只允许 `name`、`description` 两个键，至少写一个；长度上限与兜底字段相同
+  （`name` ≤160 字节、`description` ≤1024 字节），非空、不含控制字符。
+- 任何一条不合规都是**整包拒绝**，与 `permissions` 一致。
+- daemon 不按用户语言挑选：`listFrontends` / `listExternalPlugins` / `previewPluginPackage` 原样返回
+  规范化后的映射（形状见[协议文档](../protocol/README.md#包的多语言名称与描述adr-0048-决策-5)），由正在显示它的
+  前端与自己支持的语言协商，缺的字段回落到兜底 `name` / `description`。
 
 ## API
 
@@ -119,16 +154,24 @@ path = "Reader.app"             # 只能是 package 内相对路径
 64 KiB manifest 和相对路径约束：
 
 ```toml
-schema_version = 1
+schema_version = 2             # 1 仍受支持；description / l10n 需要 2
 protocol_version = 1
 id = "org.example.automation"
 name = "Example Automation"
+description = "Files receipts automatically"   # 可选，兜底描述
 version = "1.0.0"
 lifecycle = "supervised"       # supervised | independent
 capabilities = ["events_stream", "messages_read", "frontend_open"]
 executable = "bin/automation"  # 只有 supervised 必填
 ui_executable = "bin/manage"    # 可选；由插件页打开的原生管理界面
+
+[l10n."zh-Hans"]                # 可选
+name = "示例自动化"
 ```
+
+`description` 与 `[l10n.<tag>]` 的规则见上文[多语言名称与描述](#多语言名称与描述adr-0048-决策-5)。它们只允许出现在
+`schema_version = 2`；v1 manifest 写了它们整包拒绝（旧 daemon 本来就拒绝未知键与 v2）。v2 除这两个键外
+与 v1 完全相同。
 
 可声明的 capability 为 `events_stream`、`messages_read`、`messages_send`、`settings_read`、
 `settings_write`、`frontend_open`、`notifications_read`、`transport_provider`，以及

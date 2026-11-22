@@ -33,7 +33,7 @@ fn follow_system_timezone_and_reply_attribution_respect_tz_and_dst() {
     assert_eq!(parts.minute, 35);
     assert_eq!(parts.utc_offset_minutes, 480);
     assert_eq!(
-        compose::attribution_date(shanghai_ts),
+        compose::attribution_date(&maild_l10n::ZH_HANS.quote, shanghai_ts),
         "2026年11月18日 周三 19:35（UTC+08:00）"
     );
 
@@ -57,8 +57,8 @@ fn follow_system_timezone_and_reply_attribution_respect_tz_and_dst() {
     // 3. 半小时时区 Asia/Kolkata (UTC+05:30)
     std::env::set_var("TZ", "Asia/Kolkata");
     assert!(
-        compose::attribution_date(shanghai_ts).ends_with("（UTC+05:30）"),
+        compose::attribution_date(&maild_l10n::ZH_HANS.quote, shanghai_ts).ends_with("（UTC+05:30）"),
         "actual={}",
-        compose::attribution_date(shanghai_ts)
+        compose::attribution_date(&maild_l10n::ZH_HANS.quote, shanghai_ts)
     );
 }

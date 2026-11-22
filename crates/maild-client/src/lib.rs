@@ -707,11 +707,31 @@ pub struct OpenFrontendResult {
     pub activation_requested: bool,
 }
 
+/// manifest `[l10n.<tag>]` 的一项（ADR-0048 决策 5）：包作者给某种语言提供的名称与描述。
+/// 缺的字段由前端回落到兜底的 `name` / `description`。
+#[derive(Clone, Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
+pub struct PackageL10nEntry {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+/// BCP 47 标签（daemon 已规范大小写）→ 该语言的名称/描述。daemon 原样透传，
+/// **不按语言偏好挑选**；由前端与自己支持的语言协商（ADR-0048 决策 5）。
+pub type PackageL10n = std::collections::BTreeMap<String, PackageL10nEntry>;
+
 /// Public metadata for a discovered out-of-process frontend.
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 pub struct FrontendInfo {
     pub id: String,
     pub name: String,
+    /// ADR-0048 决策 5：manifest 兜底描述（`schema_version = 3` 起），缺省省略。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// ADR-0048 决策 5：manifest 的 `[l10n.<tag>]` 原样透传，空时省略。
+    #[serde(default, skip_serializing_if = "PackageL10n::is_empty")]
+    pub l10n: PackageL10n,
     pub version: String,
     pub lifecycle: String,
     #[serde(default)]
@@ -740,6 +760,12 @@ pub struct FrontendsResult {
 pub struct ExternalPluginInfo {
     pub id: String,
     pub name: String,
+    /// ADR-0048 决策 5：manifest 兜底描述（`schema_version = 2` 起），缺省省略。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// ADR-0048 决策 5：manifest 的 `[l10n.<tag>]` 原样透传，空时省略。
+    #[serde(default, skip_serializing_if = "PackageL10n::is_empty")]
+    pub l10n: PackageL10n,
     pub version: String,
     pub lifecycle: String,
     #[serde(default)]
@@ -781,6 +807,13 @@ pub struct PackagePreview {
     pub kind: String,
     pub id: String,
     pub name: String,
+    /// ADR-0048 决策 5：兜底描述，缺省省略。与其余字段一样参与 `expected_preview` 比对——
+    /// 用户批准的是看到的文字。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// ADR-0048 决策 5：manifest 的 `[l10n.<tag>]` 原样透传，空时省略。
+    #[serde(default, skip_serializing_if = "PackageL10n::is_empty")]
+    pub l10n: PackageL10n,
     pub version: String,
     pub lifecycle: String,
     pub capabilities: Vec<String>,
@@ -2570,18 +2603,22 @@ impl RpcClient {
 
     /// `prepareReply`：在内核侧成型回复/全部回复/转发草稿（ADR-0028）。
     /// `mode` 取 `reply` / `reply_all` / `forward`。
+    ///
+    /// `locale`（BCP 47）决定引用块的语言（ADR-0048 决策 7）；`None` 时 daemon 用语言偏好的
+    /// `effective` 协商。`None` 时请求里不带该键，旧 daemon（拒绝未知参数）照常可用。
     pub async fn prepare_reply(
         &self,
         account: &str,
         folder: Option<&str>,
         uid: &str,
         mode: &str,
+        locale: Option<&str>,
     ) -> Result<PrepareReplyResult, ClientError> {
-        self.call_typed(
-            "prepareReply",
-            json!({ "account": account, "folder": folder, "uid": uid, "mode": mode }),
-        )
-        .await
+        let mut params = json!({ "account": account, "folder": folder, "uid": uid, "mode": mode });
+        if let Some(locale) = locale {
+            params["locale"] = json!(locale);
+        }
+        self.call_typed("prepareReply", params).await
     }
 
     /// 富消息发信。`account` 非空时走 `sendFromAccount`（受管账户、可选别名 From），
@@ -5346,6 +5383,83 @@ mod tests {
             }
         );
         server.await.unwrap();
+    }
+
+    /// 起一个只应答一次的 HTTP 端点，返回它收到的 JSON-RPC `params`。
+    async fn capture_params_once(
+        response_result: &'static str,
+    ) -> (String, tokio::task::JoinHandle<Value>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut received = Vec::new();
+            let mut chunk = [0_u8; 4096];
+            let body = loop {
+                let read = stream.read(&mut chunk).await.unwrap();
+                assert!(read > 0, "请求未读完连接就关闭了");
+                received.extend_from_slice(&chunk[..read]);
+                let text = String::from_utf8_lossy(&received).into_owned();
+                let Some((head, body)) = text.split_once("\r\n\r\n") else {
+                    continue;
+                };
+                let length: usize = head
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse().ok())?
+                    })
+                    .unwrap();
+                if body.len() >= length {
+                    break body[..length].to_owned();
+                }
+            };
+            let request: Value = serde_json::from_str(&body).unwrap();
+            let reply = format!(r#"{{"jsonrpc":"2.0","result":{response_result},"id":{}}}"#, request["id"]);
+            stream
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                        reply.len()
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+            request["params"].clone()
+        });
+        (format!("http://{address}/rpc"), server)
+    }
+
+    /// ADR-0048 决策 7：`locale` 只在给出时上线，旧 daemon（拒绝未知参数）不受影响。
+    #[tokio::test(flavor = "current_thread")]
+    async fn prepare_reply_sends_locale_only_when_given() {
+        const DRAFT: &str = r#"{"draft":{"subject":"Re: x","body":"\n\nOn D, A wrote:\n> x"}}"#;
+        for (locale, expected) in [
+            (
+                Some("en"),
+                json!({ "account": "a", "folder": "INBOX", "uid": "7", "mode": "reply", "locale": "en" }),
+            ),
+            (
+                None,
+                json!({ "account": "a", "folder": "INBOX", "uid": "7", "mode": "reply" }),
+            ),
+        ] {
+            let (url, server) = capture_params_once(DRAFT).await;
+            let client = RpcClient::new(Endpoint::Http {
+                url,
+                token: "t".repeat(32),
+            })
+            .unwrap();
+            let draft = client
+                .prepare_reply("a", Some("INBOX"), "7", "reply", locale)
+                .await
+                .unwrap()
+                .draft;
+            assert_eq!(draft.subject, "Re: x");
+            assert_eq!(server.await.unwrap(), expected);
+        }
     }
 
     async fn serve_agent_info_once(response_body: &'static str) -> String {

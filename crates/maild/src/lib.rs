@@ -33,6 +33,7 @@ pub mod frontend;
 pub mod loader;
 pub mod locale_preference;
 pub mod localtime;
+pub(crate) mod manifest_l10n;
 pub mod menu;
 pub mod mime;
 pub mod notify;

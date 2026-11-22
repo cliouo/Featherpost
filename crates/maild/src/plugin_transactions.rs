@@ -128,12 +128,14 @@ pub(crate) fn preview(
         TxKind::External => {
             let r = crate::external::inspect_staged(&path)?;
             maild_client::PackagePreview { kind: "plugin".into(), id: r.id, name: r.name,
+                description: r.text.description, l10n: r.text.l10n,
                 version: r.version, lifecycle: r.lifecycle.as_str().into(), capabilities: r.capabilities,
                 permissions: vec![], has_ui: r.ui_executable.is_some() }
         }
         TxKind::Frontend => {
             let r = crate::frontend::inspect_staged_frontend(&path)?.info;
             maild_client::PackagePreview { kind: "frontend".into(), id: r.id, name: r.name,
+                description: r.description, l10n: r.l10n,
                 version: r.version, lifecycle: r.lifecycle, capabilities: r.capabilities,
                 permissions: r.permissions, has_ui: true }
         }

@@ -22,7 +22,9 @@ use serde::Deserialize;
 use crate::plugin_identity::{IdentitySeam, PluginKind, TOKEN_ENV};
 
 const MANIFEST_FILE: &str = "plugin.toml";
-const MANIFEST_SCHEMA_VERSION: u32 = 1;
+/// v1 是初版；v2 起可另外声明兜底 `description` 与 `[l10n.<tag>]`（ADR-0048 决策 5）。
+const MANIFEST_SCHEMA_VERSION_V1: u32 = 1;
+const MANIFEST_SCHEMA_VERSION_L10N: u32 = 2;
 const API_PROTOCOL_VERSION: u32 = 1;
 const MAX_PLUGINS: usize = 32;
 const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
@@ -167,6 +169,12 @@ struct ExternalManifest {
     executable: Option<PathBuf>,
     #[serde(default)]
     ui_executable: Option<PathBuf>,
+    /// ADR-0048 决策 5：兜底描述，仅 `schema_version = 2` 起允许。
+    #[serde(default)]
+    description: Option<String>,
+    /// ADR-0048 决策 5：各语言的名称/描述，仅 `schema_version = 2` 起允许。
+    #[serde(default)]
+    l10n: crate::manifest_l10n::ManifestL10n,
 }
 
 #[derive(Clone)]
@@ -179,6 +187,8 @@ pub(crate) struct ExternalRecord {
     pub(crate) package: PathBuf,
     pub(crate) executable: Option<PathBuf>,
     pub(crate) ui_executable: Option<PathBuf>,
+    /// 校验后的 `description` / `l10n`，原样进 `listExternalPlugins` 与预览。
+    pub(crate) text: crate::manifest_l10n::PackageText,
 }
 
 /// 三段数字版本（缺段补 0）；无法解析为 None（比较即失败，fail-closed）。
@@ -519,6 +529,8 @@ impl ExternalPluginManager {
                     ExternalPluginInfo {
                         id: record.id.clone(),
                         name: record.name.clone(),
+                        description: record.text.description.clone(),
+                        l10n: record.text.l10n.clone(),
                         version: record.version.clone(),
                         lifecycle: record.lifecycle.as_str().into(),
                         capabilities: record.capabilities.clone(),
@@ -1088,7 +1100,7 @@ fn inspect_package_inner(
     let manifest_text = read_manifest(&package.join(MANIFEST_FILE))?;
     let manifest: ExternalManifest =
         toml::from_str(&manifest_text).map_err(|_| "external manifest is invalid".to_string())?;
-    validate_manifest(&manifest, expected_id)?;
+    let text = validate_manifest(&manifest, expected_id)?;
     let executable = match (manifest.lifecycle, manifest.executable) {
         (ExternalLifecycle::Supervised, Some(path)) => Some(resolve_executable(package, &path)?),
         (ExternalLifecycle::Supervised, None) => {
@@ -1118,6 +1130,7 @@ fn inspect_package_inner(
         package: package.to_path_buf(),
         executable,
         ui_executable,
+        text,
     })
 }
 
@@ -1143,12 +1156,15 @@ fn read_manifest(path: &Path) -> Result<String, String> {
     String::from_utf8(bytes).map_err(|_| "external manifest is not UTF-8".into())
 }
 
+/// 校验通过时返回校验后的 `description` / `l10n`（ADR-0048 决策 5）。
 fn validate_manifest(
     manifest: &ExternalManifest,
     package_id: Option<&str>,
-) -> Result<(), String> {
-    if manifest.schema_version != MANIFEST_SCHEMA_VERSION
-        || manifest.protocol_version != API_PROTOCOL_VERSION
+) -> Result<crate::manifest_l10n::PackageText, String> {
+    if !matches!(
+        manifest.schema_version,
+        MANIFEST_SCHEMA_VERSION_V1 | MANIFEST_SCHEMA_VERSION_L10N
+    ) || manifest.protocol_version != API_PROTOCOL_VERSION
     {
         return Err("external manifest version is unsupported".into());
     }
@@ -1178,7 +1194,14 @@ fn validate_manifest(
     {
         return Err("external capabilities are invalid".into());
     }
-    Ok(())
+    // v1 包写了这两个键直接拒：旧 daemon 本来也会因未知键拒绝它，行为与新旧 daemon 一致。
+    if manifest.schema_version < MANIFEST_SCHEMA_VERSION_L10N
+        && (manifest.description.is_some() || !manifest.l10n.is_empty())
+    {
+        return Err("external description and l10n require manifest schema_version 2".into());
+    }
+    crate::manifest_l10n::validate(manifest.description.as_deref(), &manifest.l10n, MAX_NAME_BYTES)
+        .map_err(|reason| format!("external {reason}"))
 }
 
 fn validate_id(value: &str) -> Result<(), String> {
@@ -1433,6 +1456,58 @@ mod tests {
         );
     }
 
+    /// ADR-0048 决策 5：`description` 与 `[l10n.<tag>]` 只在 plugin.toml v2 起允许，校验后
+    /// 原样进 `listExternalPlugins`；v1 包照旧，JSON 里不出现这两个键。
+    #[cfg(unix)]
+    #[test]
+    fn l10n_requires_schema_two_and_passes_through_listing() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = secure_tempdir();
+        let install_root = root.path().join("plugins");
+        fs::create_dir(&install_root).unwrap();
+        fs::set_permissions(&install_root, fs::Permissions::from_mode(0o700)).unwrap();
+        write_package(&install_root, "org.example.v1", "independent", None, None);
+        for (id, schema_version, extra) in [
+            (
+                "org.example.l10n",
+                2,
+                "description = \"Spam filter\"\n[l10n.\"zh-hans-cn\"]\nname = \"垃圾邮件过滤\"\n",
+            ),
+            ("org.example.v1l10n", 1, "[l10n.en]\nname = \"n\"\n"),
+            ("org.example.v1desc", 1, "description = \"d\"\n"),
+            ("org.example.future", 3, ""),
+        ] {
+            let package = install_root.join(id);
+            fs::create_dir(&package).unwrap();
+            fs::set_permissions(&package, fs::Permissions::from_mode(0o700)).unwrap();
+            fs::write(
+                package.join(MANIFEST_FILE),
+                format!(
+                    "schema_version = {schema_version}\nprotocol_version = 1\nid = \"{id}\"\nname = \"Test plugin\"\nversion = \"1.0.0\"\nlifecycle = \"independent\"\ncapabilities = [\"messages_read\"]\n{extra}"
+                ),
+            )
+            .unwrap();
+            fs::set_permissions(package.join(MANIFEST_FILE), fs::Permissions::from_mode(0o600))
+                .unwrap();
+        }
+        let (records, skipped) = load_catalog(&install_root).unwrap();
+        assert_eq!(skipped, 3, "v1 写 l10n/description 与未知的 v3 都整包拒绝");
+        let manager = manager_over(root.path(), install_root, records);
+        let listed = serde_json::to_value(manager.status(None, None)).unwrap();
+        let plugins = listed["plugins"].as_array().unwrap();
+        assert_eq!(plugins.len(), 2);
+        let localized = plugins.iter().find(|p| p["id"] == "org.example.l10n").unwrap();
+        assert_eq!(localized["name"], "Test plugin");
+        assert_eq!(localized["description"], "Spam filter");
+        assert_eq!(
+            localized["l10n"],
+            serde_json::json!({ "zh-Hans-CN": { "name": "垃圾邮件过滤" } })
+        );
+        let plain = plugins.iter().find(|p| p["id"] == "org.example.v1").unwrap();
+        assert!(plain.get("l10n").is_none() && plain.get("description").is_none());
+    }
+
     #[cfg(unix)]
     fn ui_manager(root: &Path, id: &str, body: &str) -> ExternalPluginManager {
         use std::os::unix::fs::PermissionsExt as _;
@@ -1455,17 +1530,33 @@ mod tests {
         fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
         let (records, skipped) = load_catalog(&install_root).unwrap();
         assert_eq!(skipped, 0);
+        manager_over(root, install_root, records)
+    }
 
+    /// 已扫描好的目录之上的管理器：全部记录都是 `independent` 状态，不启动任何子进程。
+    #[cfg(unix)]
+    fn manager_over(
+        root: &Path,
+        install_root: PathBuf,
+        records: BTreeMap<String, ExternalRecord>,
+    ) -> ExternalPluginManager {
         let state_path = root.join("plugin_state.toml");
         let state = Arc::new(crate::plugin_state::PluginState::load(&state_path));
         let seam = IdentitySeam::open(root.join("plugin_auth.toml"));
-        let states = Arc::new(Mutex::new(BTreeMap::from([(
-            id.to_owned(),
-            RuntimeState {
-                state: "independent",
-                restart_count: 0,
-            },
-        )])));
+        let states = Arc::new(Mutex::new(
+            records
+                .keys()
+                .map(|id| {
+                    (
+                        id.clone(),
+                        RuntimeState {
+                            state: "independent",
+                            restart_count: 0,
+                        },
+                    )
+                })
+                .collect::<BTreeMap<_, _>>(),
+        ));
         ExternalPluginManager {
             core: Mutex::new(ManagerCore {
                 records,
@@ -1673,6 +1764,7 @@ mod tests {
             package: root.path().into(),
             executable: Some(executable),
             ui_executable: None,
+            text: Default::default(),
         };
         let states = Arc::new(Mutex::new(BTreeMap::new()));
         states.lock().unwrap().insert(
