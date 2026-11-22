@@ -701,9 +701,18 @@ pub(crate) fn inspect_staged_frontend(package: &Path) -> Result<InspectedStagedF
 /// values (`1..=max_protocol_version`) are eligible to be upgraded to the current bundled payload,
 /// while damaged packages or future protocol generations (`> max_protocol_version`, e.g. after an
 /// app rollback) are rejected so `refresh` leaves them untouched.
+#[cfg(test)]
 pub(crate) fn inspect_installed_for_upgrade(
     package: &Path,
     max_protocol_version: u32,
+) -> Result<String, String> {
+    inspect_installed_payload_for_upgrade(package, max_protocol_version, crate::recovery::LEGACY_PAYLOAD)
+}
+
+pub(crate) fn inspect_installed_payload_for_upgrade(
+    package: &Path,
+    max_protocol_version: u32,
+    identity: crate::recovery::BundledIdentity,
 ) -> Result<String, String> {
     let metadata = fs::symlink_metadata(package)
         .map_err(|_| "frontend package cannot be inspected".to_string())?;
@@ -716,7 +725,7 @@ pub(crate) fn inspect_installed_for_upgrade(
         toml::from_str(&manifest_text).map_err(|_| "frontend manifest is invalid".to_string())?;
     validate_manifest_with_protocol(
         &manifest,
-        Some(crate::recovery::BUNDLED_FRONTEND_ID),
+        Some(identity.id),
         1..=max_protocol_version,
     )?;
     match (manifest.lifecycle, manifest.launch) {
@@ -728,19 +737,22 @@ pub(crate) fn inspect_installed_for_upgrade(
     Ok(manifest.version)
 }
 
-/// Recovery only accepts the fixed launchable Tauri payload, never a development manifest.
-pub(crate) fn inspect_bundled_frontend(package: &Path) -> Result<String, String> {
+/// Fixed bundled payloads must be complete embedded applications, never development manifests.
+pub(crate) fn inspect_bundled_payload(
+    package: &Path,
+    identity: crate::recovery::BundledIdentity,
+) -> Result<String, String> {
     let record = load_package_at(package, None)?;
-    if record.info.id != crate::recovery::BUNDLED_FRONTEND_ID
+    if record.info.id != identity.id
         || !matches!(&record.launch, LaunchTarget::MacosApplication(path)
-            if *path == package.join(maild_brand::UI_BUNDLE_NAME))
+            if *path == package.join(identity.app))
         || !FrontendCapability::ALL
             .iter()
             .all(|cap| record.capabilities.contains(cap))
     {
         return Err("恢复副本不是完整内置 Tauri 前端".into());
     }
-    let contents = package.join(maild_brand::UI_BUNDLE_NAME).join("Contents");
+    let contents = package.join(identity.app).join("Contents");
     // The staging copier already rejected links/special entries throughout the payload.
     for path in [&contents, &contents.join("MacOS")] {
         let metadata = fs::symlink_metadata(path).map_err(|_| "恢复应用目录不完整")?;
@@ -749,7 +761,7 @@ pub(crate) fn inspect_bundled_frontend(package: &Path) -> Result<String, String>
         }
         validate_owned_entry(&metadata)?;
     }
-    let exe = contents.join("MacOS").join(maild_brand::UI_BIN);
+    let exe = contents.join("MacOS").join(identity.binary);
     let metadata = fs::symlink_metadata(&exe).map_err(|_| "恢复应用缺少可执行文件")?;
     if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() < 32 {
         return Err("恢复应用可执行文件无效".into());
@@ -799,8 +811,8 @@ pub(crate) fn inspect_bundled_frontend(package: &Path) -> Result<String, String>
         .map_err(|_| "恢复应用 Info.plist 解析失败")?;
     let info = info.as_dictionary().ok_or("恢复应用 Info.plist 不是字典")?;
     for (key, expected) in [
-        ("CFBundleExecutable", maild_brand::UI_BIN),
-        ("CFBundleIdentifier", crate::recovery::BUNDLED_FRONTEND_ID),
+        ("CFBundleExecutable", identity.binary),
+        ("CFBundleIdentifier", identity.id),
         ("CFBundlePackageType", "APPL"),
         ("CFBundleShortVersionString", record.info.version.as_str()),
     ] {
@@ -890,11 +902,19 @@ fn inspect_installed_bundled_frontend(
     installed: &Path,
     bundled: &Path,
 ) -> Result<InstalledBundled, String> {
-    let record = load_package_at(installed, Some(crate::recovery::BUNDLED_FRONTEND_ID))?;
+    inspect_installed_payload(installed, bundled, crate::recovery::LEGACY_PAYLOAD)
+}
+
+pub(crate) fn installed_payload_is_stale(installed: &Path, bundled: &Path, identity: crate::recovery::BundledIdentity) -> bool {
+    matches!(inspect_installed_payload(installed, bundled, identity), Ok(InstalledBundled::Stale))
+}
+
+fn inspect_installed_payload(installed: &Path, bundled: &Path, identity: crate::recovery::BundledIdentity) -> Result<InstalledBundled, String> {
+    let record = load_package_at(installed, Some(identity.id))?;
     let LaunchTarget::MacosApplication(app) = &record.launch else {
         return Err("installed bundled frontend launch shape is invalid".into());
     };
-    let exe = app.join("Contents/MacOS").join(maild_brand::UI_BIN);
+    let exe = app.join("Contents/MacOS").join(identity.binary);
     let metadata = fs::symlink_metadata(&exe).map_err(|_| "已装内置前端缺少可执行文件")?;
     if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() < 32 {
         return Err("已装内置前端可执行文件无效".into());
@@ -907,7 +927,7 @@ fn inspect_installed_bundled_frontend(
             return Err("已装内置前端缺少执行权限".into());
         }
     }
-    let Ok(reference) = load_package_at(bundled, Some(crate::recovery::BUNDLED_FRONTEND_ID)) else {
+    let Ok(reference) = load_package_at(bundled, Some(identity.id)) else {
         return Ok(InstalledBundled::Intact);
     };
     if reference.info.version != record.info.version {
@@ -950,10 +970,14 @@ impl FrontendBroker {
 
 /// Check the same non-hidden entry budget as the catalog, counting a new recovery package.
 pub(crate) fn check_recovery_capacity(root: &Path) -> Result<(), String> {
+    check_bundled_capacity(root, crate::recovery::BUNDLED_FRONTEND_ID)
+}
+
+pub(crate) fn check_bundled_capacity(root: &Path, id: &str) -> Result<(), String> {
     let mut resulting = 1; // the replacement/new bundled frontend
     for entry in fs::read_dir(root).map_err(|_| "前端目录不可读取")? {
         let name = entry.map_err(|_| "前端条目不可读取")?.file_name();
-        if name.to_string_lossy().starts_with('.') || name == crate::recovery::BUNDLED_FRONTEND_ID {
+        if name.to_string_lossy().starts_with('.') || name == id {
             continue;
         }
         resulting += 1;
@@ -1275,6 +1299,23 @@ impl Plugin for FrontendPlugin {
                         }
                         Ok(_) => {}
                         Err(_) => eprintln!("[maild/frontend] 内置前端升级未完成，继续使用已安装版本"),
+                    }
+                }
+                // Studio is a second managed package, never the native repair target.
+                if let (Some(_), Some(root), Some(source)) =
+                    (&lease, &root, ctx.get::<crate::recovery::BundledFrontend>())
+                {
+                    match source.studio() {
+                        Ok(Some(studio)) => {
+                            if studio.preinstall(&root.0).is_err() {
+                                eprintln!("[maild/frontend] Studio 预装未完成，保留现有前端");
+                            }
+                            if studio.refresh(&root.0).is_err() {
+                                eprintln!("[maild/frontend] Studio 升级未完成，保留现有前端");
+                            }
+                        }
+                        Ok(None) => {}
+                        Err(_) => eprintln!("[maild/frontend] Studio 随包副本不可用"),
                     }
                 }
                 (lease, FrontendBroker::with_install_root(

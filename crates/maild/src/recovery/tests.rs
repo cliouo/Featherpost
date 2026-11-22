@@ -908,3 +908,176 @@ fn runtime_permission_checks_do_not_exempt_preinstalled_frontend() {
             .any(|f| f.id == BUNDLED_FRONTEND_ID)
     );
 }
+
+fn studio_source_fixture(root: &Path) -> (BundledFrontend, BundledFrontend) {
+    let legacy = source_fixture(root);
+    let source = legacy.source.parent().unwrap().join(STUDIO_FRONTEND_ID);
+    let old_app = legacy.source.join(UI_BUNDLE_NAME);
+    let app = source.join(STUDIO_PAYLOAD.app);
+    fs::create_dir_all(app.join("Contents/MacOS")).unwrap();
+    fs::copy(
+        old_app.join("Contents/MacOS").join(UI_BIN),
+        app.join("Contents/MacOS").join(STUDIO_PAYLOAD.binary),
+    )
+    .unwrap();
+    fs::copy(
+        legacy.source.join("recovery.sha256"),
+        source.join("recovery.sha256"),
+    )
+    .unwrap();
+    let manifest = fs::read_to_string(legacy.source.join("frontend.toml"))
+        .unwrap()
+        .replace(BUNDLED_FRONTEND_ID, STUDIO_FRONTEND_ID)
+        .replace(UI_BUNDLE_NAME, STUDIO_PAYLOAD.app)
+        .replace("0.1.0", "0.3.3");
+    fs::write(source.join("frontend.toml"), manifest).unwrap();
+    let plist = fs::read_to_string(old_app.join("Contents/Info.plist"))
+        .unwrap()
+        .replace(BUNDLED_FRONTEND_ID, STUDIO_FRONTEND_ID)
+        .replace(UI_BIN, STUDIO_PAYLOAD.binary)
+        .replace("0.1.0", "0.3.3");
+    fs::write(app.join("Contents/Info.plist"), plist).unwrap();
+    let studio = legacy.studio().unwrap().unwrap();
+    (legacy, studio)
+}
+
+#[test]
+fn studio_and_recovery_are_both_preinstalled_and_studio_removal_is_respected() {
+    let bundle = tempfile::tempdir().unwrap();
+    let (legacy, studio) = studio_source_fixture(bundle.path());
+    let root = tempfile::tempdir().unwrap();
+    assert_eq!(
+        legacy.preinstall(root.path()).unwrap(),
+        PreinstallOutcome::Installed
+    );
+    assert_eq!(
+        studio.preinstall(root.path()).unwrap(),
+        PreinstallOutcome::Installed
+    );
+    let broker = crate::frontend::FrontendBroker::with_install_root(
+        &crate::frontend::FrontendConfig {
+            default: STUDIO_FRONTEND_ID.into(),
+        },
+        Some(root.path()),
+    )
+    .unwrap();
+    assert_eq!(broker.default_frontend(), STUDIO_FRONTEND_ID);
+    assert!(broker.frontend_ids().contains(&BUNDLED_FRONTEND_ID.into()));
+    fs::remove_dir_all(root.path().join(STUDIO_FRONTEND_ID)).unwrap();
+    assert_eq!(
+        studio.preinstall(root.path()).unwrap(),
+        PreinstallOutcome::AlreadyConsidered
+    );
+    assert_eq!(studio.refresh(root.path()).unwrap(), RefreshOutcome::Absent);
+    assert!(root.path().join(BUNDLED_FRONTEND_ID).is_dir());
+}
+
+#[test]
+fn studio_same_version_resync_preserves_explicit_default_and_legacy_bytes() {
+    let bundle = tempfile::tempdir().unwrap();
+    let (legacy, studio) = studio_source_fixture(bundle.path());
+    let root = tempfile::tempdir().unwrap();
+    legacy.preinstall(root.path()).unwrap();
+    studio.preinstall(root.path()).unwrap();
+    let choice = default_state();
+    state(root.path(), &choice);
+    let legacy_bytes = fs::read(ui_exe_in(&root.path().join(BUNDLED_FRONTEND_ID))).unwrap();
+    let installed = root.path().join(STUDIO_FRONTEND_ID);
+    let exe = installed
+        .join(STUDIO_PAYLOAD.app)
+        .join("Contents/MacOS")
+        .join(STUDIO_PAYLOAD.binary);
+    // Standalone trial packages did not carry the product integrity sidecar.
+    fs::remove_file(installed.join("recovery.sha256")).unwrap();
+    let mut old = fs::read(&exe).unwrap();
+    old.push(42);
+    fs::write(&exe, old).unwrap();
+    assert!(matches!(
+        studio.refresh(root.path()).unwrap(),
+        RefreshOutcome::Resynced { .. }
+    ));
+    assert_eq!(fs::read(root.path().join(STATE)).unwrap(), choice);
+    assert_eq!(
+        fs::read(ui_exe_in(&root.path().join(BUNDLED_FRONTEND_ID))).unwrap(),
+        legacy_bytes
+    );
+    assert_eq!(
+        fs::read(exe).unwrap(),
+        fs::read(
+            studio
+                .source
+                .join(STUDIO_PAYLOAD.app)
+                .join("Contents/MacOS")
+                .join(STUDIO_PAYLOAD.binary)
+        )
+        .unwrap()
+    );
+    assert!(studio.repair(root.path()).is_err());
+    let manifest = installed.join("frontend.toml");
+    let newer = fs::read_to_string(&manifest)
+        .unwrap()
+        .replace("0.3.3", "0.3.4");
+    fs::write(&manifest, &newer).unwrap();
+    assert_eq!(studio.refresh(root.path()).unwrap(), RefreshOutcome::Kept);
+    assert_eq!(fs::read_to_string(manifest).unwrap(), newer);
+}
+
+#[cfg(unix)]
+#[test]
+fn agent_bootstrap_installs_studio_before_catalog_and_identity_reconciliation() {
+    use cordis::{Context, Plugin as _};
+    let bundle = tempfile::tempdir().unwrap();
+    let (legacy, _) = studio_source_fixture(bundle.path());
+    let root = tempfile::tempdir().unwrap();
+    let ctx = Context::new();
+    ctx.provide(Arc::new(crate::frontend::FrontendConfig {
+        default: STUDIO_FRONTEND_ID.into(),
+    }));
+    ctx.provide(Arc::new(crate::frontend::FrontendInstallRoot(
+        root.path().into(),
+    )));
+    ctx.provide(Arc::new(legacy));
+    ctx.provide(crate::plugin_identity::IdentitySeam::open(
+        root.path().join("auth.toml"),
+    ));
+    crate::frontend::FrontendPlugin.apply(&ctx).unwrap();
+    let broker = ctx.get::<crate::frontend::FrontendBroker>().unwrap();
+    assert_eq!(broker.default_frontend(), STUDIO_FRONTEND_ID);
+    assert!(broker.frontend_ids().contains(&BUNDLED_FRONTEND_ID.into()));
+    assert!(ctx
+        .get::<crate::plugin_identity::IdentitySeam>()
+        .unwrap()
+        .contains(
+            crate::plugin_identity::PluginKind::Frontend,
+            STUDIO_FRONTEND_ID
+        ));
+    assert!(
+        !root.path().join(STATE).exists(),
+        "preinstall never writes a preference"
+    );
+}
+
+#[test]
+fn studio_integrity_and_capacity_fail_before_marker_or_legacy_changes() {
+    let bundle = tempfile::tempdir().unwrap();
+    let (legacy, studio) = studio_source_fixture(bundle.path());
+    let root = tempfile::tempdir().unwrap();
+    legacy.preinstall(root.path()).unwrap();
+    for n in 0..63 {
+        fs::create_dir(root.path().join(format!("extra{n}"))).unwrap();
+    }
+    assert!(studio.preinstall(root.path()).is_err());
+    assert!(!root
+        .path()
+        .join(format!(".preinstalled-{STUDIO_FRONTEND_ID}"))
+        .exists());
+    fs::remove_dir(root.path().join("extra0")).unwrap();
+    fs::write(
+        studio.source.join("recovery.sha256"),
+        format!("{}\n", "0".repeat(64)),
+    )
+    .unwrap();
+    assert!(studio.preinstall(root.path()).is_err());
+    assert!(!root.path().join(STUDIO_FRONTEND_ID).exists());
+    assert!(root.path().join(BUNDLED_FRONTEND_ID).is_dir());
+}

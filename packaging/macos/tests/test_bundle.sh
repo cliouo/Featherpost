@@ -527,5 +527,38 @@ fi
 grep -F 'agent-bundle-id.txt differs from brand.env' "$work/rebrand-drift.stderr" >/dev/null ||
     fail 'identity manifest drift failed at the wrong gate'
 
+# Product bundles carry both managed frontends. Neither binary can impersonate the other.
+studio_bundle="$work/output/studio/$BRAND_APP_BUNDLE"
+fixture "$work/bin/featherpost-studio" 'maild-ui-embedded:dev.featherpost.studio'
+"${unset_versions[@]}" "$packaging_dir/build-bundle.sh" \
+    --launcher-bin "$work/bin/$launcher_name" --agent-bin "$work/bin/$agent_name" \
+    --studio-bin "$work/bin/featherpost-studio" --output "$studio_bundle" >/dev/null
+"${unset_versions[@]}" "$packaging_dir/verify-bundle.sh" "$studio_bundle" >/dev/null
+studio_payload="$studio_bundle/Contents/Resources/frontends/dev.featherpost.studio"
+studio_exe="$studio_payload/Featherpost Studio.app/Contents/MacOS/featherpost-studio"
+[ -f "$studio_bundle/$payload_rel/frontend.toml" ] || fail 'Studio displaced legacy recovery'
+cmp "$work/bin/featherpost-studio" "$studio_exe" || fail 'Studio executable changed during unsigned packaging'
+if "${unset_versions[@]}" "$packaging_dir/build-bundle.sh" \
+    --launcher-bin "$work/bin/$launcher_name" --agent-bin "$work/bin/$agent_name" \
+    --studio-bin "$work/bin/$ui_name" --output "$work/output/wrong-studio/$BRAND_APP_BUNDLE" \
+    >/dev/null 2>&1; then fail 'legacy binary accepted as Studio'; fi
+if "${unset_versions[@]}" "$packaging_dir/build-bundle.sh" \
+    --launcher-bin "$work/bin/$launcher_name" --agent-bin "$work/bin/$agent_name" \
+    --ui-bin "$work/bin/featherpost-studio" --output "$work/output/wrong-legacy/$BRAND_APP_BUNDLE" \
+    >/dev/null 2>&1; then fail 'Studio binary accepted as legacy'; fi
+printf 'tamper' >>"$studio_exe"
+if "${unset_versions[@]}" "$packaging_dir/verify-bundle.sh" "$studio_bundle" >/dev/null 2>&1; then
+    fail 'Studio checksum corruption accepted'
+fi
+cp -X "$work/bin/featherpost-studio" "$studio_exe"
+printf 'unexpected' >"$studio_payload/unexpected"
+if "${unset_versions[@]}" "$packaging_dir/verify-bundle.sh" "$studio_bundle" >/dev/null 2>&1; then
+    fail 'unexpected Studio payload file accepted'
+fi
+rm "$studio_payload/unexpected"
+"${unset_versions[@]}" "$packaging_dir/build-preview-dmg.sh" --app "$studio_bundle" \
+    --output "$work/output/studio-preview.dmg" >/dev/null
+hdiutil verify "$work/output/studio-preview.dmg" >/dev/null
+
 "$packaging_dir/dry-run.sh" >/dev/null
 printf 'test_bundle: PASS\n'

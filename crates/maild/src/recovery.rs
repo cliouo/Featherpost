@@ -20,6 +20,24 @@ use crate::agent_lifecycle::AgentLifecycleLock;
 use crate::store::{DatabaseLock, StoreConfig};
 
 pub const BUNDLED_FRONTEND_ID: &str = maild_brand::BUNDLED_FRONTEND_ID;
+pub(crate) const STUDIO_FRONTEND_ID: &str = "dev.featherpost.studio";
+
+#[derive(Clone, Copy)]
+pub(crate) struct BundledIdentity {
+    pub id: &'static str,
+    pub app: &'static str,
+    pub binary: &'static str,
+}
+pub(crate) const LEGACY_PAYLOAD: BundledIdentity = BundledIdentity {
+    id: BUNDLED_FRONTEND_ID,
+    app: maild_brand::UI_BUNDLE_NAME,
+    binary: maild_brand::UI_BIN,
+};
+pub(crate) const STUDIO_PAYLOAD: BundledIdentity = BundledIdentity {
+    id: STUDIO_FRONTEND_ID,
+    app: "Featherpost Studio.app",
+    binary: "featherpost-studio",
+};
 const STATE: &str = ".default.json";
 const BACKUPS: &str = ".repair-backups";
 
@@ -48,6 +66,7 @@ fn bundle_entry_points() -> [PathBuf; 2] {
 pub struct BundledFrontend {
     app: PathBuf,
     source: PathBuf,
+    identity: BundledIdentity,
 }
 
 impl Service for BundledFrontend {
@@ -85,6 +104,23 @@ impl BundledFrontend {
         Ok(Some(Self {
             app: app.into(),
             source,
+            identity: LEGACY_PAYLOAD,
+        }))
+    }
+
+    /// Optional second managed payload, derived only from this already validated app root.
+    pub(crate) fn studio(&self) -> Result<Option<Self>, String> {
+        let source = self
+            .app
+            .join("Contents/Resources/frontends")
+            .join(STUDIO_FRONTEND_ID);
+        if !files::check_optional_chain(&self.app, &source)? {
+            return Ok(None);
+        }
+        Ok(Some(Self {
+            app: self.app.clone(),
+            source,
+            identity: STUDIO_PAYLOAD,
         }))
     }
 
@@ -96,7 +132,7 @@ impl BundledFrontend {
         let staged = maild_client::stage_plugin_package_into(&self.source, root)
             .map_err(|_| "内置前端复制失败，未替换现有包")?;
         let path = root.join(".incoming").join(staged.staging());
-        let version = crate::frontend::inspect_bundled_frontend(&path)?;
+        let version = crate::frontend::inspect_bundled_payload(&path, self.identity)?;
         files::sync_tree(&path)?;
         Ok((staged, path, version))
     }
@@ -105,17 +141,17 @@ impl BundledFrontend {
     /// The marker is durable BEFORE publication, so removal is never silently undone on retry.
     pub(crate) fn preinstall(&self, root: &Path) -> Result<PreinstallOutcome, String> {
         files::check_directory(root)?;
-        if files::exists(&root.join(marker()))? {
+        if files::exists(&root.join(format!(".preinstalled-{}", self.identity.id)))? {
             return Ok(PreinstallOutcome::AlreadyConsidered);
         }
-        if files::exists(&root.join(BUNDLED_FRONTEND_ID))? {
-            files::mark_once(root, &marker())?;
+        if files::exists(&root.join(self.identity.id))? {
+            files::mark_once(root, &format!(".preinstalled-{}", self.identity.id))?;
             return Ok(PreinstallOutcome::ExistingPreserved);
         }
-        crate::frontend::check_recovery_capacity(root)?;
+        crate::frontend::check_bundled_capacity(root, self.identity.id)?;
         let (_stage, staged, _) = self.stage(root)?;
-        files::mark_once(root, &marker())?;
-        files::rename_new(&staged, &root.join(BUNDLED_FRONTEND_ID))
+        files::mark_once(root, &format!(".preinstalled-{}", self.identity.id))?;
+        files::rename_new(&staged, &root.join(self.identity.id))
             .map_err(|_| "首次预装未发布；现有条目保留，请使用显式修复")?;
         files::sync_directory(root)?;
         Ok(PreinstallOutcome::Installed)
@@ -139,15 +175,17 @@ impl BundledFrontend {
         max_protocol_version: u32,
     ) -> Result<RefreshOutcome, String> {
         files::check_directory(root)?;
-        let target = root.join(BUNDLED_FRONTEND_ID);
+        let target = root.join(self.identity.id);
         if !files::exists(&target)? {
             return Ok(RefreshOutcome::Absent);
         }
         // An unreadable installed package or a future protocol generation is left for explicit
         // repair, never guessed over or silently downgraded.
-        let Ok(installed_version) =
-            crate::frontend::inspect_installed_for_upgrade(&target, max_protocol_version)
-        else {
+        let Ok(installed_version) = crate::frontend::inspect_installed_payload_for_upgrade(
+            &target,
+            max_protocol_version,
+            self.identity,
+        ) else {
             return Ok(RefreshOutcome::Kept);
         };
         let bundled = self.bundled_version()?;
@@ -157,9 +195,10 @@ impl BundledFrontend {
             // one): the installed copy is stale, not damaged, so it follows the bundled bytes.
             (Some(old), Some(new))
                 if new == old
-                    && crate::frontend::installed_bundled_frontend_is_stale(
+                    && crate::frontend::installed_payload_is_stale(
                         &target,
                         &self.source,
+                        self.identity,
                     ) =>
             {
                 true
@@ -175,7 +214,7 @@ impl BundledFrontend {
             .map_err(|_| "无法建立升级备份目录")?
             .keep();
         files::sync_directory(&backups)?;
-        let old_package = backup.join(BUNDLED_FRONTEND_ID);
+        let old_package = backup.join(self.identity.id);
         files::rename_new(&target, &old_package).map_err(|_| "旧前端备份失败，未升级")?;
         files::sync_directory(root)?;
         files::sync_directory(&backup)?;
@@ -217,6 +256,9 @@ impl BundledFrontend {
     /// Explicit replacement, including same-version/corrupt packages. Old bytes are retained.
     /// Caller must serialize this with all package/default mutations.
     pub(crate) fn repair(&self, root: &Path) -> Result<RepairOutcome, String> {
+        if self.identity.id != BUNDLED_FRONTEND_ID {
+            return Err("显式恢复仅适用于原版前端".into());
+        }
         self.repair_with(root, |_| Ok(()))
     }
 
