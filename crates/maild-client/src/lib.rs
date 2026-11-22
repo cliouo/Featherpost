@@ -707,11 +707,31 @@ pub struct OpenFrontendResult {
     pub activation_requested: bool,
 }
 
+/// manifest `[l10n.<tag>]` 的一项（ADR-0048 决策 5）：包作者给某种语言提供的名称与描述。
+/// 缺的字段由前端回落到兜底的 `name` / `description`。
+#[derive(Clone, Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
+pub struct PackageL10nEntry {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+/// BCP 47 标签（daemon 已规范大小写）→ 该语言的名称/描述。daemon 原样透传，
+/// **不按语言偏好挑选**；由前端与自己支持的语言协商（ADR-0048 决策 5）。
+pub type PackageL10n = std::collections::BTreeMap<String, PackageL10nEntry>;
+
 /// Public metadata for a discovered out-of-process frontend.
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 pub struct FrontendInfo {
     pub id: String,
     pub name: String,
+    /// ADR-0048 决策 5：manifest 兜底描述（`schema_version = 3` 起），缺省省略。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// ADR-0048 决策 5：manifest 的 `[l10n.<tag>]` 原样透传，空时省略。
+    #[serde(default, skip_serializing_if = "PackageL10n::is_empty")]
+    pub l10n: PackageL10n,
     pub version: String,
     pub lifecycle: String,
     #[serde(default)]
@@ -740,6 +760,12 @@ pub struct FrontendsResult {
 pub struct ExternalPluginInfo {
     pub id: String,
     pub name: String,
+    /// ADR-0048 决策 5：manifest 兜底描述（`schema_version = 2` 起），缺省省略。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// ADR-0048 决策 5：manifest 的 `[l10n.<tag>]` 原样透传，空时省略。
+    #[serde(default, skip_serializing_if = "PackageL10n::is_empty")]
+    pub l10n: PackageL10n,
     pub version: String,
     pub lifecycle: String,
     #[serde(default)]
@@ -781,6 +807,13 @@ pub struct PackagePreview {
     pub kind: String,
     pub id: String,
     pub name: String,
+    /// ADR-0048 决策 5：兜底描述，缺省省略。与其余字段一样参与 `expected_preview` 比对——
+    /// 用户批准的是看到的文字。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// ADR-0048 决策 5：manifest 的 `[l10n.<tag>]` 原样透传，空时省略。
+    #[serde(default, skip_serializing_if = "PackageL10n::is_empty")]
+    pub l10n: PackageL10n,
     pub version: String,
     pub lifecycle: String,
     pub capabilities: Vec<String>,
