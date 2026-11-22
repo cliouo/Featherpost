@@ -33,6 +33,8 @@ clap = { version = "4.6.6", features = ["derive", "env"] }
 futures = "0.3"
 getrandom = "0.4.3"
 maild-client = { path = "../maild-client" }
+# ADR-0048 决策 6：内核界面文案（通知）
+maild-l10n = { path = "../maild-l10n" }
 maild-paths = { path = "../maild-paths" }
 mailparse = "0.16"
 plist = "1"

@@ -46,7 +46,6 @@ provider = "macos"
 [plugins.otp]
 [plugins.otp.config]
 pattern = "\\d{6}"
-title = "验证码"
 
 [plugins.frontend]
 [plugins.frontend.config]
@@ -79,6 +78,13 @@ listen = "@SOCKET@"
 
 const STUDIO_FRONTEND_ID: &str = "dev.featherpost.studio";
 
+/// The OTP pattern line in [`FIRST_RUN_CONFIG_TEMPLATE`].
+const OTP_PATTERN_LINE: &str = "pattern = \"\\\\d{6}\"\n";
+/// Pre-l10n templates pinned the OTP title right after the pattern. It is no longer written:
+/// an absent title follows the user's language (ADR-0048), and the daemon also treats this exact
+/// legacy value as not customised. Kept only to recognise untouched legacy files.
+const LEGACY_OTP_TITLE_LINE: &str = "title = \"验证码\"\n";
+
 fn first_run_config() -> String {
     first_run_config_for(STUDIO_FRONTEND_ID)
 }
@@ -90,6 +96,15 @@ fn first_run_config_for(frontend: &str) -> String {
         .replace("@FRONTEND@", frontend)
         .replace("@SOCKET@", maild_brand::SOCKET_FILE_NAME)
         .replace("@PRODUCT@", maild_brand::PRODUCT_NAME)
+}
+
+/// The exact text a pre-l10n launcher generated for `frontend` (with the pinned OTP title).
+fn legacy_first_run_config_for(frontend: &str) -> String {
+    first_run_config_for(frontend).replacen(
+        OTP_PATTERN_LINE,
+        &format!("{OTP_PATTERN_LINE}{LEGACY_OTP_TITLE_LINE}"),
+        1,
+    )
 }
 
 /// Only the complete installed app bundle (`maild_brand::APP_BUNDLE_NAME`) without connection overrides prepares platform config.
@@ -169,7 +184,8 @@ fn upgrade_generated_config(
         .map_err(|error| format!("读取旧版首次启动配置失败: {error}"))?;
     // Only the exact old template is eligible for implicit-default migration. Never infer that
     // from a header: a user may have edited any setting, or explicitly selected legacy.
-    let implicit_legacy = original == first_run_config_for(maild_brand::BUNDLED_FRONTEND_ID);
+    let implicit_legacy =
+        original == legacy_first_run_config_for(maild_brand::BUNDLED_FRONTEND_ID);
     let upgraded = if implicit_legacy {
         // Any saved selection (including damaged state or a link) or I/O uncertainty wins.
         match fs::symlink_metadata(paths.frontend_dir.join(".default.json")) {
@@ -375,6 +391,35 @@ mod tests {
         assert_eq!(fs::read_to_string(&paths.config_file).unwrap(), upgraded);
     }
 
+    fn otp_config_of(text: &str) -> maild::otp::OtpConfig {
+        let parsed: toml::Value = toml::from_str(text).unwrap();
+        parsed["plugins"]["otp"]["config"]
+            .clone()
+            .try_into()
+            .unwrap()
+    }
+
+    #[test]
+    fn generated_config_leaves_otp_title_to_the_user_language() {
+        let text = first_run_config();
+        assert!(!text.contains("title ="), "{text}");
+        let otp = otp_config_of(&text);
+        assert_eq!(otp.title, None);
+        assert!(otp.uses_smart_default());
+
+        // The pre-l10n template differs only by the pinned title, which the daemon also treats
+        // as not customised.
+        let legacy = legacy_first_run_config_for(maild_brand::BUNDLED_FRONTEND_ID);
+        assert!(legacy.contains("pattern = \"\\\\d{6}\"\ntitle = \"验证码\"\n\n[plugins.frontend]"));
+        assert_eq!(
+            legacy.replacen(LEGACY_OTP_TITLE_LINE, "", 1),
+            first_run_config_for(maild_brand::BUNDLED_FRONTEND_ID)
+        );
+        let legacy_otp = otp_config_of(&legacy);
+        assert_eq!(legacy_otp.title.as_deref(), Some("验证码"));
+        assert_eq!(legacy_otp.custom_title(), None);
+    }
+
     #[test]
     fn generated_config_selects_studio() {
         let directory = tempfile::tempdir().unwrap();
@@ -404,7 +449,7 @@ mod tests {
         ensure_private_config_dir(&paths.config_dir).unwrap();
         fs::write(
             &paths.config_file,
-            first_run_config_for(maild_brand::BUNDLED_FRONTEND_ID),
+            legacy_first_run_config_for(maild_brand::BUNDLED_FRONTEND_ID),
         )
         .unwrap();
         #[cfg(unix)]
@@ -436,7 +481,7 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             let paths = migration_paths(dir.path());
             ensure_private_config_dir(&paths.config_dir).unwrap();
-            let mut original = first_run_config_for(maild_brand::BUNDLED_FRONTEND_ID);
+            let mut original = legacy_first_run_config_for(maild_brand::BUNDLED_FRONTEND_ID);
             if edited {
                 original.push_str("\n# User edited this file.\n");
             }

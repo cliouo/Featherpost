@@ -356,7 +356,7 @@ fn otp_config_default_matches_serde_defaults() {
     // 手写 Default 与 serde 默认值必须一致（防双路径漂移，见 PROGRESS.md R4.5 备注）
     let d = maild::otp::OtpConfig::default();
     assert_eq!(d.pattern, r"\d{6}");
-    assert_eq!(d.title, "验证码");
+    assert_eq!(d.title, None, "缺省标题跟随界面语言（ADR-0048）");
 
     let r = maild::receive::ReceiveConfig::default();
     assert_eq!(r.port, 143);
