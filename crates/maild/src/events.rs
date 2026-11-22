@@ -10,6 +10,7 @@
 //! | `QuietHoursQuery` | bail | 账户静默时段查询（rules 按本地时区或固定偏移即时判定） |
 //! | `FrontendIntentQueued` | emit | 某前端有新的待领导航意图（ADR-0045：唤醒隐藏在菜单栏的窗口） |
 //! | `AgentStoppingEvent` | emit | 用户经本机 IPC 请求整体停止 Agent（推给已认证前端先刷盘草稿并撤下 Dock 图标） |
+//! | `LocalePreferenceChanged` | emit | 解析后的语言偏好列表变化（ADR-0048：推给所有流式连接） |
 
 use cordis::{BailEvent, Context, Disposer, EmitEvent, WaterfallEvent};
 use serde::{Deserialize, Serialize};
@@ -340,4 +341,15 @@ impl AgentLifecycleEvents for Context {
     ) -> Disposer {
         self.on_emit::<AgentStoppingEvent>(handler)
     }
+}
+
+/// `preferences/locale`：解析后的语言偏好列表（`effective`）变了（ADR-0048 决策 2）。
+///
+/// 载荷是新的 `effective` 列表（永不为空）。目前只在 `setLocalePreference` 成功且结果变化时广播；
+/// `system` 模式下的系统语言变化不主动推送，前端在聚焦或重连时 `getLocalePreference` 追上。
+/// API 层把它推给**所有**流式连接：`getLocalePreference` 本身是 `Open`，推送不多暴露任何东西。
+pub struct LocalePreferenceChanged;
+
+impl EmitEvent for LocalePreferenceChanged {
+    type Args = Vec<String>;
 }
