@@ -88,6 +88,11 @@ pub struct ViewState {
     /// ADR-0046：daemon 推来了 `agent/stopping`（菜单栏「退出 <产品名>」）。一旦置位不再回落——
     /// 壳观察到它变成 `true` 就走与关闭窗口同一条优雅退出路径，随后台一起离场。
     pub shutdown_requested: bool,
+    /// ADR-0048：daemon 解析后的有序语言偏好（`effective`）。每次连接的首个快照经
+    /// `getLocalePreference` 取得，之后随 `preferences/locale` 推送更新；跨重连保留上一次的值。
+    /// `None` = 还没取到，或 daemon 不提供这个方法（老 daemon 的 `-32601`、不认识它的
+    /// 授权表给的 `-32016`）——前端此时回落基础语言，即今天的行为。
+    pub locale: Option<Vec<String>>,
 }
 
 impl ViewState {
@@ -107,6 +112,7 @@ impl ViewState {
             identity_failure: None,
             intent_epoch: 0,
             shutdown_requested: false,
+            locale: None,
         }
     }
 }
