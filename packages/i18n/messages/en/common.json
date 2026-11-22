@@ -113,6 +113,11 @@
   "common_error_boundary_body": "Your local mail and drafts are unaffected. Use the button below to restore this view.",
   "common_error_boundary_reload": "Reload view",
   "common_error_boundary_title": "Something went wrong",
+  "common_identity_failure_not_installed": "The frontend package isn't installed or has no identity entry.",
+  "common_identity_failure_principal_mismatch": "The background service identified this connection as a different frontend.",
+  "common_identity_failure_rejected": "The background service rejected this frontend's credentials.",
+  "common_identity_failure_unavailable": "The connection to the background service dropped while binding the identity.",
+  "common_identity_failure_unknown": "Binding the frontend identity failed.",
   "common_language_native_en": "English",
   "common_language_native_zh_hans": "简体中文",
   "common_sample_excerpt_title": "Mail Excerpt (Sample)"

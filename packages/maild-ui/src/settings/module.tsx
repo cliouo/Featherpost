@@ -1,5 +1,5 @@
 import { m } from "@featherpost/i18n/messages";
-import { lifecycleLabel, permissionLabel, uiLocale, useUiLocale } from "../i18n";
+import { identityFailureText, lifecycleLabel, packageText, permissionLabel, uiLocale, useUiLocale } from "../i18n";
 import { useEffect, useState } from "react";
 import { SettingsController } from "./controller";
 import { Accounts } from "./Accounts";
@@ -189,7 +189,7 @@ export function settingsModule(
           title={m.settings_connection_principal()}
           description={
             snapshot.principal ??
-            snapshot.identity_failure ??
+            identityFailureText(snapshot) ??
             m.settings_connection_unbound()
           }
         >
@@ -212,8 +212,8 @@ export function settingsModule(
         {frontendInfo && (
           <>
             <Row
-              title={frontendInfo.name}
-              description={`${frontendInfo.id} · ${frontendInfo.version} · ${lifecycleLabel(frontendInfo.lifecycle)}`}
+              title={packageText(frontendInfo).name}
+              description={[packageText(frontendInfo).description, `${frontendInfo.id} · ${frontendInfo.version} · ${lifecycleLabel(frontendInfo.lifecycle)}`].filter(Boolean).join(" — ")}
             >
               <span className="tag">
                 {frontendInfo.is_default

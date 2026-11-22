@@ -3,7 +3,7 @@ import { invoke, isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 
 import { BridgeError, errorCode } from './errors';
-import { followDaemonLocale } from './locale';
+import { followDaemonLocale, startupLocale } from './locale';
 import type { LocaleBridge, MailBridge, OpenIntent, UiError, UiLink, UiLocale, UiLocalePreference, UiSnapshot } from './types';
 import { isUiError } from './types';
 import { BRAND } from '../brand';
@@ -83,7 +83,7 @@ export const tauriBridge: MailBridge = {
   compose: {
     senders:()=>call('ui_senders'), drafts:(offset=0)=>call('ui_drafts',{offset}), draft:id=>call('ui_draft',{id}),
     create:(account,patch)=>call('ui_new_draft',{account,patch}), save:(id,version,patch)=>call('ui_save_draft',{id,version,patch}),
-    reply:(identity,mode)=>call('ui_reply_draft',{...identity,mode}), send:(id,version)=>call('ui_send_draft',{id,version}),
+    reply:(identity,mode,locale)=>call('ui_reply_draft',{...identity,mode,locale:locale??null}), send:(id,version)=>call('ui_send_draft',{id,version}),
     resolve:(id,version)=>call('ui_resolve_send',{id,version}), discard:(id,version)=>call('ui_discard_draft',{id,version}),
     pick:()=>call('ui_pick_files'), upload:(draftId,token)=>call('ui_upload_file',{draft_id:draftId,token}),
     release:token=>call('ui_release_file',{token}), finish:(id,version)=>call('ui_finish_upload',{id,version}), cancel:id=>call('ui_cancel_upload',{id}),
@@ -123,6 +123,11 @@ export const tauriBridge: MailBridge = {
 };
 
 // 默认前端与 Studio 都从这里取桥：导入即开始跟随 daemon 的语言偏好（启动值 + `maild://locale`）。
-if (isTauri()) void followDaemonLocale(tauriLocale);
+const daemonLocale = isTauri() ? followDaemonLocale(tauriLocale) : null;
+
+/** 两个前端的 `main.tsx` 在首帧前等它：启动语言就绪或短暂超时后再渲染（ADR-0048 决策 8）。 */
+export function startupLocaleReady(): Promise<void> {
+  return startupLocale(daemonLocale);
+}
 
 export { BridgeError, errorCode } from './errors';

@@ -30,6 +30,8 @@ export interface UiSnapshot {
   accounts: UiAccount[];
   principal: string | null;
   identity_failure: string | null;
+  /** 身份绑定失败的稳定原因（ADR-0048 决策 3）；老壳没有。按 `identityFailureText` 成文。 */
+  identity_failure_code?: "not_installed" | "rejected" | "principal_mismatch" | "unavailable" | null;
   partial: boolean;
   /** ADR-0016 版本握手结论；不一致时桥只放行只读请求。 */
   compat: UiCompat;
@@ -152,6 +154,9 @@ export interface UiPage {
 export interface UiFrontendInfo {
   id: string;
   name: string;
+  /** ADR-0048 决策 5：manifest 兜底说明与 `l10n`；渲染时经 `packageText` 协商。 */
+  description?: string | null;
+  l10n?: Record<string, import('../i18n').PackageL10nEntry>;
   version: string;
   lifecycle: string;
   capabilities: string[];

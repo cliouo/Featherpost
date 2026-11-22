@@ -1,5 +1,6 @@
 import { m } from "@featherpost/i18n/messages";
 import { useUiLocale } from "@featherpost/i18n/react";
+import { packageText, providerName } from "../../../maild-ui/src/i18n";
 import { Choice } from "../../../maild-ui/src/settings/Choice";
 import { useState, type ReactNode } from "react";
 import { useStore } from "../../../maild-ui/src/host/hooks";
@@ -391,7 +392,7 @@ function Editor({ controller }: { controller: SettingsController }) {
                 )}
                 {providers.map((p) => (
                   <option key={p.id} value={p.id}>
-                    {p.name} ·{" "}
+                    {packageText(p).name} ·{" "}
                     {p.provider_registered
                       ? m.studio_account_plugin_ready()
                       : m.studio_account_plugin_not_ready()}
@@ -549,7 +550,7 @@ function Editor({ controller }: { controller: SettingsController }) {
                       )}
                       {providers.map((p) => (
                         <option key={p.id} value={p.id}>
-                          {p.name} ·{" "}
+                          {packageText(p).name} ·{" "}
                           {p.provider_registered
                             ? m.studio_account_plugin_ready()
                             : m.studio_account_plugin_not_ready()}
@@ -645,7 +646,7 @@ export function Accounts({ controller }: { controller: SettingsController }) {
             <span className="account-monogram" aria-hidden="true">{(p.display_name || p.address).slice(0,1)}</span>
             <div className="account-details">
               <strong>{p.display_name || p.address}</strong><p>{p.address}</p>
-              {p.incoming.provider && <small>{s.packages?.plugins.find(x => x.id === p.incoming.provider)?.name ?? p.incoming.provider}</small>}
+              {p.incoming.provider && <small>{providerName(s.packages?.plugins, p.incoming.provider)}</small>}
               {!p.editable && <small>{m.studio_account_readonly()}</small>}
               {needsRepair(p) && <p className="account-alert" role="status">
                 {p.runtime.state === "needs_credentials" ? m.studio_account_alert_credentials() : m.studio_account_alert_error()}

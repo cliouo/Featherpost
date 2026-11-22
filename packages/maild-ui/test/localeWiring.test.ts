@@ -5,7 +5,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { BridgeError, bridgeErrorText } from "../src/bridge/errors";
-import { followDaemonLocale } from "../src/bridge/locale";
+import { followDaemonLocale, startupLocale } from "../src/bridge/locale";
 import { BRIDGE_ERROR_REASONS } from "../src/bridge/reasons";
 import { BRAND } from "../src/brand";
 import { ComposeController } from "../src/compose/controller";
@@ -32,8 +32,10 @@ describe("界面语言跟随 daemon 偏好（ADR-0048 决策 8）", () => {
   it("启动时套用壳手里的偏好，之后跟随推送；null 回落基础语言", async () => {
     const locale = new FakeLocale();
     locale.effective = ["en-US", "zh-Hans"];
-    const stop = await followDaemonLocale(locale);
+    const follower = followDaemonLocale(locale);
+    await follower.ready;
     expect(getUiLocale()).toBe("en");
+    const stop = () => follower.stop();
     locale.push(["zh-Hant-TW", "zh-Hans-CN"]);
     expect(getUiLocale()).toBe("zh-CN");
     locale.push(["en"]);
@@ -52,8 +54,24 @@ describe("界面语言跟随 daemon 偏好（ADR-0048 决策 8）", () => {
       locale.push(["en"]);
       return { effective: ["zh-Hans"] };
     };
-    await followDaemonLocale(locale);
+    await followDaemonLocale(locale).ready;
+    await flush();
     expect(getUiLocale()).toBe("en");
+  });
+
+  it("首帧前等启动语言：已有偏好即刻就绪；后台未给出时最多等到超时", async () => {
+    const known = new FakeLocale();
+    known.effective = ["en"];
+    await startupLocale(followDaemonLocale(known), 10_000);
+    expect(getUiLocale()).toBe("en");
+
+    applyEffectiveLocales([]);
+    const pending = new FakeLocale(); // 壳还没取到偏好：current() 为 null
+    const started = Date.now();
+    await startupLocale(followDaemonLocale(pending), 30);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(25);
+    expect(getUiLocale()).toBe("zh-CN");
+    await startupLocale(null);
   });
 
   it("取不到启动值时停在基础语言，等推送", async () => {
@@ -61,7 +79,8 @@ describe("界面语言跟随 daemon 偏好（ADR-0048 决策 8）", () => {
     locale.current = async () => {
       throw new BridgeError({ code: "offline", reason: "offline", message: "x" });
     };
-    await followDaemonLocale(locale);
+    followDaemonLocale(locale);
+    await flush();
     expect(getUiLocale()).toBe("zh-CN");
     locale.push(["en-GB"]);
     expect(getUiLocale()).toBe("en");

@@ -15,6 +15,8 @@
   "mailbox_activity_attempts_one": "{count} attempt",
   "mailbox_activity_attempts_other": "{count} attempts",
   "mailbox_activity_autorefresh_paused": "auto-refresh paused while viewing history",
+  "mailbox_activity_detail_rejected": "The server rejected the operation or it ran out of retries. Check the account and the target folder.",
+  "mailbox_activity_detail_unconfirmed": "No final confirmation was received. Check the target folder first.",
   "mailbox_activity_discard": "Stop retrying",
   "mailbox_activity_discard_body": "This only stops the background service from retrying; it doesn't undo anything the server already did.",
   "mailbox_activity_discard_title": "Stop retrying this operation",

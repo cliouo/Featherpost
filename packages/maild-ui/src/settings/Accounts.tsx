@@ -15,7 +15,7 @@ import {
   type ProviderPreset,
 } from "./providers";
 import { BRAND } from "../brand";
-import { useUiLocale } from "../i18n";
+import { packageText, providerName, useUiLocale } from "../i18n";
 
 export function Field({
   label,
@@ -449,7 +449,7 @@ function Editor({ controller }: { controller: SettingsController }) {
                 )}
                 {providers.map((p) => (
                   <option key={p.id} value={p.id}>
-                    {p.name} ·{" "}
+                    {packageText(p).name} ·{" "}
                     {p.provider_registered
                       ? m.settings_provider_extension_ready()
                       : m.settings_provider_extension_not_ready()}
@@ -630,7 +630,7 @@ function Editor({ controller }: { controller: SettingsController }) {
                       )}
                       {providers.map((p) => (
                         <option key={p.id} value={p.id}>
-                          {p.name} ·{" "}
+                          {packageText(p).name} ·{" "}
                           {p.provider_registered
                             ? m.settings_provider_extension_ready()
                             : m.settings_provider_extension_not_ready()}
@@ -712,7 +712,7 @@ export function Accounts({ controller }: { controller: SettingsController }) {
               />
               {accountState(p)}
               {p.incoming.provider
-                ? ` · ${s.packages?.plugins.find((x) => x.id === p.incoming.provider)?.name ?? p.incoming.provider}`
+                ? ` · ${providerName(s.packages?.plugins, p.incoming.provider)}`
                 : ""}
             </small>
             {!p.editable && <small>{m.settings_account_readonly()}</small>}
