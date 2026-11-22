@@ -4,15 +4,20 @@ use std::time::Duration;
 use maild_client::{
     discover_endpoint, DiscoveryOptions, Endpoint, OpenIntent, RpcClient,
 };
+use maild_l10n::Locale;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{define_class, msg_send, sel, ClassType, DefinedClass, MainThreadOnly};
 use objc2_app_kit::{
-    NSApplication, NSApplicationDelegate, NSMenu, NSMenuItem, NSRunningApplication, NSStatusBar,
-    NSStatusItem, NSVariableStatusItemLength,
+    NSApplication, NSApplicationDelegate, NSMenu, NSMenuDelegate, NSMenuItem,
+    NSRunningApplication, NSStatusBar, NSStatusItem, NSVariableStatusItemLength,
 };
-use objc2_foundation::{MainThreadMarker, NSNotification, NSObject, NSObjectProtocol, NSString};
+use objc2_foundation::{
+    MainThreadMarker, NSLocale, NSNotification, NSObject, NSObjectProtocol, NSString,
+};
 use tokio::runtime::{Builder, Handle};
+
+use crate::locale::{resolve, LatestLocale};
 
 #[used]
 static MENU_ID_CONTRACT: &str = maild_brand::menu_id_contract!();
@@ -27,6 +32,12 @@ const STOP_REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
 /// After asking the Agent to stop, it reaps this process ~350ms later during teardown. If we are
 /// still alive after this grace period (e.g. the Agent was not running), exit ourselves.
 const SELF_EXIT_GRACE: Duration = Duration::from_millis(600);
+/// Upper bound for one `getLocalePreference` round trip on the RPC thread.
+const LOCALE_REQUEST_TIMEOUT: Duration = Duration::from_secs(1);
+/// How long opening the menu waits for that answer on the main thread. A local socket normally
+/// answers in a few milliseconds; past this the menu opens in the last known language and a late
+/// answer applies on the next opening.
+const LOCALE_MENU_WAIT: Duration = Duration::from_millis(250);
 
 struct MenuDelegateIvars {
     runtime: Handle,
@@ -34,6 +45,10 @@ struct MenuDelegateIvars {
     status_item: OnceCell<Retained<NSStatusItem>>,
     menu: OnceCell<Retained<NSMenu>>,
     quitting: Cell<bool>,
+    /// Latest negotiated language (written by the RPC thread, read on the main thread).
+    locale: LatestLocale,
+    /// Language the current menu item titles were built in.
+    shown: Cell<Option<Locale>>,
 }
 
 define_class!(
@@ -48,6 +63,19 @@ define_class!(
         #[unsafe(method(applicationDidFinishLaunching:))]
         fn did_finish_launching(&self, _notification: &NSNotification) {
             self.install_menu();
+        }
+    }
+
+    unsafe impl NSMenuDelegate for MenuDelegate {
+        /// AppKit calls this right before the menu is displayed: re-read the language preference
+        /// (ADR-0048 decision 6) and retitle the items if it changed since the last opening.
+        #[unsafe(method(menuNeedsUpdate:))]
+        fn menu_needs_update(&self, menu: &NSMenu) {
+            let locale = self.refresh_locale(LOCALE_MENU_WAIT);
+            if self.ivars().shown.get() != Some(locale) {
+                menu.removeAllItems();
+                self.populate(menu, locale);
+            }
         }
     }
 
@@ -102,6 +130,9 @@ impl MenuDelegate {
             status_item: OnceCell::new(),
             menu: OnceCell::new(),
             quitting: Cell::new(false),
+            // Until the daemon answers, the OS preferred languages decide.
+            locale: LatestLocale::new(resolve(None, system_languages)),
+            shown: Cell::new(None),
         });
         // SAFETY: NSObject's init signature is correct and all ivars are initialized.
         Ok(unsafe { msg_send![super(this), init] })
@@ -119,22 +150,60 @@ impl MenuDelegate {
             NSMenu::alloc(mtm),
             &NSString::from_str(maild_brand::PRODUCT_NAME),
         );
-        self.add_item(&menu, "打开收件箱", sel!(openInbox:));
-        self.add_item(&menu, "立即同步邮件", sel!(syncMail:));
-        self.add_item(&menu, "写邮件…", sel!(openCompose:));
-        self.add_item(&menu, "设置…", sel!(openSettings:));
-        self.add_item(&menu, "后台与通知…", sel!(openBackground:));
-        menu.addItem(&NSMenuItem::separatorItem(mtm));
-        self.add_item(&menu, "修复与后台管理…", sel!(openBuiltinInbox:));
-        menu.addItem(&NSMenuItem::separatorItem(mtm));
-        self.add_item(
-            &menu,
-            &format!("退出 {}", maild_brand::PRODUCT_NAME),
-            sel!(quitApp:),
-        );
+        self.populate(&menu, self.ivars().locale.get());
+        // The menu holds its delegate weakly; this delegate lives as long as the application.
+        menu.setDelegate(Some(ProtocolObject::from_ref(self)));
         status_item.setMenu(Some(&menu));
         let _ = self.ivars().menu.set(menu);
         let _ = self.ivars().status_item.set(status_item);
+        // Ask the daemon now so the first opening usually already has its answer.
+        let _ = self.request_locale();
+    }
+
+    /// Fill `menu` with every item titled in `locale`.
+    fn populate(&self, menu: &NSMenu, locale: Locale) {
+        let mtm = self.mtm();
+        let m = &locale.messages().menu;
+        self.add_item(menu, m.open_inbox, sel!(openInbox:));
+        self.add_item(menu, m.sync_now, sel!(syncMail:));
+        self.add_item(menu, m.compose, sel!(openCompose:));
+        self.add_item(menu, m.settings, sel!(openSettings:));
+        self.add_item(menu, m.background_and_notifications, sel!(openBackground:));
+        menu.addItem(&NSMenuItem::separatorItem(mtm));
+        self.add_item(menu, m.repair_and_background, sel!(openBuiltinInbox:));
+        menu.addItem(&NSMenuItem::separatorItem(mtm));
+        self.add_item(menu, &(m.quit)(maild_brand::PRODUCT_NAME), sel!(quitApp:));
+        self.ivars().shown.set(Some(locale));
+    }
+
+    /// Re-negotiate the menu language and wait up to `wait` for the answer; past that, return
+    /// the last known language (the late answer is still recorded for the next opening).
+    fn refresh_locale(&self, wait: Duration) -> Locale {
+        match self.request_locale() {
+            Some(answer) => answer
+                .recv_timeout(wait)
+                .unwrap_or_else(|_| self.ivars().locale.get()),
+            None => self.ivars().locale.get(),
+        }
+    }
+
+    /// Start one language refresh: the daemon's `effective` list when it answers, otherwise the
+    /// OS preferred languages. The result is recorded in `locale` and also sent on the returned
+    /// channel. `None` when no RPC could be started (the OS languages were applied directly).
+    fn request_locale(&self) -> Option<std::sync::mpsc::Receiver<Locale>> {
+        let latest = self.ivars().locale.clone();
+        let Some(endpoint) = self.ivars().endpoint.clone() else {
+            latest.set(resolve(None, system_languages));
+            return None;
+        };
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        self.ivars().runtime.spawn(async move {
+            let effective = daemon_effective(endpoint).await;
+            let locale = resolve(effective.as_deref(), system_languages);
+            latest.set(locale);
+            let _ = sender.try_send(locale);
+        });
+        Some(receiver)
     }
 
     fn add_item(&self, menu: &NSMenu, title: &str, action: objc2::runtime::Sel) {
@@ -221,6 +290,25 @@ impl MenuDelegate {
             }
         });
     }
+}
+
+/// The daemon's `effective` language list, or `None` when it is unreachable, too slow, or an
+/// older Agent without `getLocalePreference`.
+async fn daemon_effective(endpoint: Endpoint) -> Option<Vec<String>> {
+    let client = RpcClient::new(endpoint).ok()?;
+    let answer = tokio::time::timeout(LOCALE_REQUEST_TIMEOUT, client.locale_preference()).await;
+    Some(answer.ok()?.ok()?.effective)
+}
+
+/// This process's OS preferred languages (`+[NSLocale preferredLanguages]`, the same source the
+/// daemon reads in `system` mode). Used only when the daemon cannot answer.
+fn system_languages() -> Vec<String> {
+    objc2::rc::autoreleasepool(|_| {
+        let languages = NSLocale::preferredLanguages();
+        (0..languages.count())
+            .map(|index| languages.objectAtIndex(index).to_string())
+            .collect()
+    })
 }
 
 /// Ask the Agent for a managed graceful stop. `true` only when it acknowledged in time.
