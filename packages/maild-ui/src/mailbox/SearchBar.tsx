@@ -1,3 +1,4 @@
+import { folderLabel } from "../i18n";
 import { useEffect, useState } from "react";
 import { Icon } from "../app/Icon";
 import { useStore } from "../host/hooks";
@@ -191,7 +192,7 @@ export function SearchBar({ controller }: { controller: MailboxController }) {
               <option value="">全部文件夹</option>
               {controller.foldersOf(account).map((f) => (
                 <option key={f.name} value={f.name}>
-                  {f.display_name}
+                  {folderLabel(f)}
                   {f.present ? "" : "（本机历史）"}
                 </option>
               ))}

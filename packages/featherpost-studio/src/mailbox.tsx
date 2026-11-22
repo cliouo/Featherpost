@@ -3,7 +3,7 @@ import type { Bundle } from "../../maild-ui/src/host/types";
 import { MailboxController } from "../../maild-ui/src/mailbox/controller";
 import { DocumentController } from "../../maild-ui/src/mailbox/document";
 import { ActivityController } from "../../maild-ui/src/mailbox/activityController";
-import { Activity } from "../../maild-ui/src/mailbox/Activity";
+import { Activity } from "./Activity";
 import { ReadingPrivacySection } from "../../maild-ui/src/mailbox/ReadingPrivacy";
 import { followMailIntent } from "../../maild-ui/src/mailbox/navigation";
 import type { ComposeController } from "../../maild-ui/src/compose/controller";

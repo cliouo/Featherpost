@@ -189,8 +189,8 @@ function Editor({ controller }: { controller: SettingsController }) {
               value={ep.security ?? "implicit"}
               onChange={(v) => endpoint(side, { security: v.target.value })}
             >
-              <option value="implicit">TLS</option>
-              <option value="starttls">STARTTLS</option>
+              <option value="implicit">直接加密（TLS）</option>
+              <option value="starttls">升级加密（STARTTLS）</option>
             </select>
           </Field>
         </div>
@@ -463,7 +463,7 @@ function Editor({ controller }: { controller: SettingsController }) {
                       })
                     }
                   >
-                    <option value="smtp">SMTP</option>
+                    <option value="smtp">标准发信（SMTP）</option>
                     <option value="plugin" disabled={!providers.length}>
                       邮箱服务扩展
                     </option>

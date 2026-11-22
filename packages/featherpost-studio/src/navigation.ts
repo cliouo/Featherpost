@@ -1,3 +1,4 @@
+import { folderLabel, UI_LOCALE } from "../../maild-ui/src/i18n";
 import type { UiFolder } from "../../maild-ui/src/bridge/types";
 import type { MailboxController } from "../../maild-ui/src/mailbox/controller";
 import { queryOf } from "../../maild-ui/src/mailbox/controller";
@@ -42,7 +43,7 @@ export function folderTree(folders: UiFolder[]): FolderNode[] {
       .sort(
         (a, b) =>
           (order[a.folder.role] ?? 4) - (order[b.folder.role] ?? 4) ||
-          a.folder.display_name.localeCompare(b.folder.display_name),
+          folderLabel(a.folder).localeCompare(folderLabel(b.folder), UI_LOCALE),
       );
   return prune(roots);
 }
@@ -87,7 +88,7 @@ export function scopeContext(
       ? controller.foldersOf(query.account).find((f) => f.name === query.folder)
       : undefined;
   const name =
-    folder?.display_name ||
+    (folder && folderLabel(folder)) ||
     query.folder ||
     (group
       ? `${group.name} · 收件箱`

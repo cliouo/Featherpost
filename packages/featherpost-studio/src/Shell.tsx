@@ -1,3 +1,4 @@
+import { folderLabel, UI_LOCALE } from "../../maild-ui/src/i18n";
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import type { Host } from "../../maild-ui/src/host/host";
 import { useExternal, useStore } from "../../maild-ui/src/host/hooks";
@@ -168,11 +169,11 @@ export function Studio({
             {(searchContext.account || searchContext.accounts) && (
               <option value="current">
                 {searchContext.accounts
-                  ? `${searchContext.group ?? "所选分组"}的所有邮件`
+                  ? `${searchContext.group ?? "所选分组"}的全部邮件`
                   : searchContext.label}
               </option>
             )}
-            <option value="all">所有邮件</option>
+            <option value="all">全部邮件</option>
           </select>
           {searchText ? (
             <button
@@ -331,20 +332,21 @@ function FolderBranches({
     );
   const matches = (n: FolderNode): boolean =>
     !filter ||
-    `${n.folder.name} ${n.folder.display_name}`
-      .toLocaleLowerCase()
+    `${n.folder.name} ${n.folder.display_name} ${folderLabel(n.folder)}`
+      .toLocaleLowerCase(UI_LOCALE)
       .includes(filter) ||
     n.children.some(matches);
   return (
     <div className="folder-branches">
       {nodes.filter(matches).map(({ folder, children }) => {
         const expanded = !!filter || !collapsed.has(folder.name);
-        const label =
+        const rawLabel =
           depth &&
           folder.display_name === folder.name &&
           /[/.]/.test(folder.name)
             ? folder.name.split(/[/.]/).pop()
             : folder.display_name || folder.name;
+        const label = folderLabel({ ...folder, display_name: rawLabel ?? folder.name });
         const count = folder.role === "drafts" ? folder.total : folder.unseen;
         return (
           <div key={folder.name}>

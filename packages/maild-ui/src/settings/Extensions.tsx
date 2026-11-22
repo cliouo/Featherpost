@@ -1,36 +1,17 @@
+import { lifecycleLabel, permissionLabel } from "../i18n";
 import { useState } from "react";
 import { useStore } from "../host/hooks";
 import type { SettingsController } from "./controller";
 import type { PackageKind, PackagePreview } from "./types";
 import { BRAND } from "../brand";
-export const permissions: Record<string, string> = {
-  messages_read: "读取邮件",
-  messages_send: "发送邮件",
-  drafts_read: "读取草稿",
-  drafts_write: "编辑草稿",
-  mailbox_write: "修改邮件与同步队列",
-  accounts_manage: "管理账户与凭据",
-  addresses_manage: "管理发件身份",
-  plugins_manage: "安装和管理其他扩展",
-  settings_read: "读取设置",
-  settings_write: "修改设置",
-  notifications_read: "读取通知授权",
-  frontend_open: "激活前端",
-  transport_provider: "提供邮件收发服务",
-  events_stream: "订阅事件",
-  inbox: "收件箱（读取邮件）",
-  message: "阅读邮件（读取邮件）",
-  compose: "写信（发送邮件）",
-  settings: "设置（读写设置）",
-  background: "后台入口",
-};
+export { permissionLabels as permissions } from "../i18n";
 export function PermissionList({ values }: { values: string[] }) {
   return (
     <ul className="permission-list">
       {values.length ? (
         values.map((v) => (
           <li key={v}>
-            <strong>{permissions[v] ?? v}</strong>
+            <strong>{permissionLabel(v)}</strong>
             <code>{v}</code>
           </li>
         ))
@@ -46,11 +27,7 @@ function Preview({ p }: { p: PackagePreview }) {
       <h3>{p.name}</h3>
       <p className="group-note">
         {p.id} · {p.version} · {p.kind === "frontend" ? "前端" : "服务扩展"} ·{" "}
-        {p.lifecycle === "supervised"
-          ? "由后台托管运行"
-          : p.lifecycle === "on_demand"
-            ? "按需启动"
-            : "独立运行"}
+        {lifecycleLabel(p.lifecycle)}
       </p>
       <h4>将获得的权限</h4>
       <PermissionList
@@ -140,8 +117,8 @@ export function Extensions({
                   </p>
                 </div>
                 {catalog.default === p.id && <span className="tag">默认</span>}
-                {p.id === BRAND.bundledFrontendId && (
-                  <span className="tag">当前窗口</span>
+                {p.builtin && (
+                  <span className="tag">内置前端</span>
                 )}
               </div>
               <details>
@@ -287,8 +264,7 @@ export function Extensions({
           <h3>当前窗口的界面模块</h3>
           {children}
           <p className="group-note">
-            内置模块经统一贡献注册表装配。外部包的界面面板与独立窗口将在 E02/E03
-            接入。
+            这里列出当前窗口的界面模块。邮箱服务与其他前端在上方单独管理。
           </p>
         </>
       )}
@@ -307,6 +283,6 @@ function pluginState(state: string) {
         backoff: "等待重试",
         starting: "启动中",
       } as Record<string, string>
-    )[state] ?? state
+    )[state] ?? `未知状态（${state}）`
   );
 }

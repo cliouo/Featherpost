@@ -1,3 +1,4 @@
+import { folderLabel } from "../i18n";
 import type {
   FolderIdentity,
   MailBridge,
@@ -390,7 +391,7 @@ export class MailboxController {
       kind: "folder",
       account: folder.account,
       folder: folder.name,
-      title: folder.display_name,
+      title: folderLabel(folder),
     });
   }
   private changeScope(scope: Scope) {
@@ -526,7 +527,7 @@ export class MailboxController {
         kind: "folder",
         account,
         folder: message.folder,
-        title: source?.display_name ?? message.folder,
+        title: folderLabel(source, message.folder),
       });
       boundedSet(this.details, messageKey(message), message, 24);
       this.openRow(message);

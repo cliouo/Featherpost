@@ -13,6 +13,7 @@ import "./settings/forms.css";
 import "../../maild-ui/src/compose/compose.css";
 import "./studio.css";
 import "./navigation.css";
+import "./activity.css";
 import "./settings/settings.css";
 
 const host = new Host(tauriBridge);

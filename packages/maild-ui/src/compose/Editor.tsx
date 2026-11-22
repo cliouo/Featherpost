@@ -281,7 +281,7 @@ export function Editor({
                 onClick={() => setExtras(!extras)}
                 aria-expanded={extras}
               >
-                Cc / Bcc
+                抄送 / 密送
               </button>
             </div>
             {field("to", "收件人", "邮箱地址，多个地址用逗号分隔")}

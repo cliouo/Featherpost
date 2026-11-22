@@ -1,3 +1,4 @@
+import { folderLabel } from "../i18n";
 import { Thread } from "./Thread";
 import { Editor } from "../compose/Editor";
 import { sourceKey, type ComposeController } from "../compose/controller";
@@ -182,10 +183,7 @@ export function Reader({ host, controller, documents, composer }: ReaderProps) {
                 </span>
                 <span aria-hidden="true">·</span>
                 <span>
-                  {controller
-                    .foldersOf(row.account)
-                    .find((f) => f.name === row.folder)?.display_name ??
-                    row.folder}
+                  {folderLabel(controller.foldersOf(row.account).find((f) => f.name === row.folder), row.folder)}
                 </span>
               </div>
               <h1>{row.subject || "（无主题）"}</h1>

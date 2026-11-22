@@ -11,6 +11,8 @@ pub mod compose_files;
 pub mod documents;
 pub mod html;
 pub mod instance_lock;
+#[cfg(all(target_os = "macos", feature = "studio"))]
+mod macos_locale;
 #[cfg(target_os = "macos")]
 mod macos_window;
 pub mod mailbox;
@@ -62,7 +64,10 @@ pub fn run(bridge: Arc<Bridge>) -> Result<(), tauri::Error> {
     let for_exit = bridge.clone();
     let documents_for_window = documents.clone();
     let base_for_window = base.clone();
-    let app = tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(all(target_os = "macos", feature = "studio"))]
+    let builder = builder.menu(macos_locale::menu);
+    let app = builder
         .manage(AppState {
             bridge,
             documents,

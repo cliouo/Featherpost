@@ -5,11 +5,13 @@
   <key>CFBundleIdentifier</key><string>dev.featherpost.studio</string>
   <key>CFBundleName</key><string>Featherpost Studio</string>
   <key>CFBundleDisplayName</key><string>Featherpost Studio</string>
+  <key>CFBundleDevelopmentRegion</key><string>zh-Hans</string>
+  <key>CFBundleLocalizations</key><array><string>zh-Hans</string></array>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
   <!-- Both version fields are synchronized from the Studio config by build-studio.sh. -->
-  <key>CFBundleShortVersionString</key><string>0.3.1</string>
-  <key>CFBundleVersion</key><string>0.3.1</string>
+  <key>CFBundleShortVersionString</key><string>0.3.2</string>
+  <key>CFBundleVersion</key><string>0.3.2</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>NSHighResolutionCapable</key><true/>
 </dict></plist>

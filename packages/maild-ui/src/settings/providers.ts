@@ -351,7 +351,7 @@ export function stageLabel(value: string) {
       {
         dns: "服务器名称",
         connect: "连接",
-        tls: "TLS",
+        tls: "加密连接",
         auth: "认证",
         mailbox: "文件夹",
         capability: "服务能力",
