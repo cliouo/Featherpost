@@ -3443,6 +3443,7 @@ dependencies = [
  "libc",
  "maild-brand",
  "maild-client",
+ "maild-l10n",
  "maild-paths",
  "mailparse",
  "native-tls",

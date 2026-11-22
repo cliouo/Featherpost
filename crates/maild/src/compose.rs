@@ -43,29 +43,32 @@ pub fn rfc5322_date(unix_secs: u64) -> String {
     )
 }
 
-const ZH_WEEKDAYS: [&str; 7] = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
-
-/// 回复/转发引用行使用的人读日期：在 `unix_secs` 合理且本地时间可拆解时，输出
-/// `2026年11月18日 周三 19:35（UTC+08:00）`；否则回退 [`rfc5322_date`]。
-pub fn attribution_date(unix_secs: u64) -> String {
+/// 回复/转发引用行使用的人读日期：在 `unix_secs` 合理且本地时间可拆解时，按 `quote`
+/// 的语言成文（中文如 `2026年11月18日 周三 19:35（UTC+08:00）`）；否则回退 [`rfc5322_date`]。
+///
+/// `quote` 来自 `maild-l10n` 的协商结果（ADR-0048 决策 7）。
+pub fn attribution_date(quote: &maild_l10n::Quote, unix_secs: u64) -> String {
     if unix_secs >= crate::mime::EARLIEST_PLAUSIBLE_DATE_SECS {
         if let Some(parts) = crate::localtime::local_parts(unix_secs) {
-            return format_attribution_parts(&parts);
+            return format_attribution_parts(quote, &parts);
         }
     }
     rfc5322_date(unix_secs)
 }
 
-pub fn format_attribution_parts(parts: &crate::localtime::LocalDateTime) -> String {
-    let sign = if parts.utc_offset_minutes >= 0 { '+' } else { '-' };
-    let abs = parts.utc_offset_minutes.unsigned_abs();
-    let offset_hours = abs / 60;
-    let offset_minutes = abs % 60;
-    let weekday = ZH_WEEKDAYS[usize::from(parts.weekday).min(6)];
-    format!(
-        "{}年{}月{}日 {weekday} {:02}:{:02}（UTC{sign}{offset_hours:02}:{offset_minutes:02}）",
-        parts.year, parts.month, parts.day, parts.hour, parts.minute,
-    )
+pub fn format_attribution_parts(
+    quote: &maild_l10n::Quote,
+    parts: &crate::localtime::LocalDateTime,
+) -> String {
+    (quote.attribution_date)(&maild_l10n::AttributionDate {
+        year: parts.year,
+        month: parts.month,
+        day: parts.day,
+        weekday: parts.weekday,
+        hour: parts.hour,
+        minute: parts.minute,
+        utc_offset_minutes: parts.utc_offset_minutes,
+    })
 }
 
 /// Howard Hinnant 的 civil-from-days：把 1970-01-01 起的天数换成 (年, 月, 日)。
@@ -454,17 +457,20 @@ pub fn inherited_references(references: &str, in_reply_to: &str, message_id: &st
     kept.join(" ")
 }
 
-/// 引用块的文案目前只有中文——maild 还没有 i18n 框架（ADR-0028 决策 7 的诚实边界）。
-pub fn quote_reply(sender: &str, date: &str, body: &str) -> String {
+/// 回复引用块。引用行的语言由 `quote` 决定（ADR-0048 决策 7：`prepareReply` 的 `locale`
+/// 或 `effective` 协商）；`> ` 前缀与前后空行与语言无关。
+pub fn quote_reply(quote: &maild_l10n::Quote, sender: &str, date: &str, body: &str) -> String {
     let quoted: String = body
         .lines()
         .map(|line| if line.is_empty() { ">".to_string() } else { format!("> {line}") })
         .collect::<Vec<_>>()
         .join("\n");
-    format!("\n\n在 {date}，{sender} 写道：\n{quoted}")
+    format!("\n\n{}\n{quoted}", (quote.reply_attribution)(date, sender))
 }
 
+/// 转发头 + 原文正文。转发头的语言由 `quote` 决定，同 [`quote_reply`]。
 pub fn quote_forward(
+    quote: &maild_l10n::Quote,
     sender: &str,
     date: &str,
     subject: &str,
@@ -472,8 +478,8 @@ pub fn quote_forward(
     body: &str,
 ) -> String {
     format!(
-        "\n\n---------- 转发的邮件 ----------\n\
-         发件人: {sender}\n日期: {date}\n主题: {subject}\n收件人: {recipient}\n\n{body}"
+        "\n\n{}\n\n{body}",
+        (quote.forward_header)(sender, date, subject, recipient)
     )
 }
 
@@ -555,9 +561,10 @@ mod tests {
     #[test]
     fn attribution_date_formats_local_offsets_and_falls_back_for_synthetic_epochs() {
         use crate::localtime::LocalDateTime;
+        let zh = &maild_l10n::ZH_HANS.quote;
 
         assert_eq!(
-            format_attribution_parts(&LocalDateTime {
+            format_attribution_parts(zh, &LocalDateTime {
                 year: 2026,
                 month: 11,
                 day: 18,
@@ -570,7 +577,7 @@ mod tests {
             "2026年11月18日 周三 19:35（UTC+08:00）"
         );
         assert_eq!(
-            format_attribution_parts(&LocalDateTime {
+            format_attribution_parts(zh, &LocalDateTime {
                 year: 2026,
                 month: 11,
                 day: 18,
@@ -583,7 +590,7 @@ mod tests {
             "2026年11月18日 周日 07:05（UTC-06:00）"
         );
         assert_eq!(
-            format_attribution_parts(&LocalDateTime {
+            format_attribution_parts(zh, &LocalDateTime {
                 year: 2026,
                 month: 3,
                 day: 1,
@@ -596,7 +603,7 @@ mod tests {
             "2026年3月1日 周六 00:00（UTC+05:30）"
         );
         assert_eq!(
-            format_attribution_parts(&LocalDateTime {
+            format_attribution_parts(zh, &LocalDateTime {
                 year: 2026,
                 month: 1,
                 day: 2,
@@ -609,8 +616,52 @@ mod tests {
             "2026年1月2日 周五 12:30（UTC+00:00）"
         );
         // Synthetic timestamps < 1971 fall back to RFC 5322 UTC.
-        assert_eq!(attribution_date(0), "Thu, 1 Jan 1970 00:00:00 +0000");
-        assert_eq!(attribution_date(1234), rfc5322_date(1234));
+        assert_eq!(attribution_date(zh, 0), "Thu, 1 Jan 1970 00:00:00 +0000");
+        assert_eq!(attribution_date(zh, 1234), rfc5322_date(1234));
+        // 回退的 RFC 5322 日期不是文案，与语言无关。
+        let en = &maild_l10n::EN.quote;
+        assert_eq!(attribution_date(en, 1234), rfc5322_date(1234));
+        assert_eq!(
+            format_attribution_parts(en, &LocalDateTime {
+                year: 2026,
+                month: 11,
+                day: 18,
+                weekday: 3,
+                hour: 19,
+                minute: 35,
+                second: 0,
+                utc_offset_minutes: 480,
+            }),
+            "Wed, Nov 18, 2026 at 19:35 (UTC+08:00)"
+        );
+    }
+
+    /// ADR-0048 决策 7：中文引用块与引入 `maild-l10n` 之前逐字节一致；英文走同一拼接骨架。
+    #[test]
+    fn quote_blocks_follow_the_negotiated_catalog() {
+        let zh = &maild_l10n::ZH_HANS.quote;
+        let en = &maild_l10n::EN.quote;
+        let date = "2026年11月18日 周三 19:35（UTC+08:00）";
+        assert_eq!(
+            quote_reply(zh, "Alice <a@x.test>", date, "第一行\n\n第二行"),
+            "\n\n在 2026年11月18日 周三 19:35（UTC+08:00），Alice <a@x.test> 写道：\n\
+             > 第一行\n>\n> 第二行"
+        );
+        assert_eq!(
+            quote_forward(zh, "Alice <a@x.test>", date, "周会", "me@x.test", "正文"),
+            "\n\n---------- 转发的邮件 ----------\n\
+             发件人: Alice <a@x.test>\n日期: 2026年11月18日 周三 19:35（UTC+08:00）\n\
+             主题: 周会\n收件人: me@x.test\n\n正文"
+        );
+        assert_eq!(
+            quote_reply(en, "Alice <a@x.test>", "D", "hi"),
+            "\n\nOn D, Alice <a@x.test> wrote:\n> hi"
+        );
+        assert_eq!(
+            quote_forward(en, "Alice <a@x.test>", "D", "Weekly", "me@x.test", "body"),
+            "\n\n---------- Forwarded message ----------\n\
+             From: Alice <a@x.test>\nDate: D\nSubject: Weekly\nTo: me@x.test\n\nbody"
+        );
     }
 
     #[test]
