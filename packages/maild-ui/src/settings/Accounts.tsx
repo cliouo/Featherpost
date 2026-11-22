@@ -1,3 +1,4 @@
+import { m } from "@featherpost/i18n/messages";
 import { Choice } from "./Choice";
 import { useState, type ReactNode } from "react";
 import { useStore } from "../host/hooks";
@@ -14,6 +15,7 @@ import {
   type ProviderPreset,
 } from "./providers";
 import { BRAND } from "../brand";
+import { useUiLocale } from "../i18n";
 
 export function Field({
   label,
@@ -35,24 +37,32 @@ export function Field({
 export function needsRepair(p: AccountProfile) {
   return p.enabled && (p.runtime.state === "needs_credentials" || p.runtime.state === "error");
 }
+const ACCOUNT_STATE: Readonly<Record<string, () => string>> = {
+  online: m.settings_account_state_online,
+  connecting: m.settings_account_state_connecting,
+  reconnecting: m.settings_account_state_reconnecting,
+  disabled: m.settings_account_state_disabled,
+  needs_credentials: m.settings_account_state_needs_credentials,
+  error: m.settings_account_state_error,
+};
 export function accountState(p: AccountProfile) {
-  return (
-    (
-      {
-        online: "已连接",
-        connecting: "连接中",
-        reconnecting: "正在重连",
-        disabled: "已暂停",
-        needs_credentials: "需要更新认证信息",
-        error: "连接失败",
-      } as Record<string, string>
-    )[p.runtime.state] ?? "状态未知"
-  );
+  const label = Object.prototype.hasOwnProperty.call(
+    ACCOUNT_STATE,
+    p.runtime.state,
+  )
+    ? ACCOUNT_STATE[p.runtime.state]
+    : undefined;
+  return label ? label() : m.settings_account_state_unknown();
 }
 function ProviderPills({ controller }: { controller: SettingsController }) {
+  useUiLocale();
   const s = useStore(controller.store);
   return (
-    <div className="provider-pills" role="group" aria-label="常用邮箱">
+    <div
+      className="provider-pills"
+      role="group"
+      aria-label={m.settings_wizard_providers_label()}
+    >
       {QUICK_PROVIDERS.map((id) => {
         const preset = providerById(id);
         const active = s.wizard.provider === id;
@@ -64,7 +74,7 @@ function ProviderPills({ controller }: { controller: SettingsController }) {
             aria-pressed={active}
             onClick={() => controller.chooseProvider(id)}
           >
-            {preset?.short ?? "自定义 IMAP"}
+            {preset?.short ?? m.settings_provider_custom()}
           </button>
         );
       })}
@@ -80,17 +90,26 @@ function ProbeLine({
   result: ProbeStage;
   preset: ProviderPreset | null;
 }) {
-  const label = side === "incoming" ? "收信" : "发信";
+  useUiLocale();
+  const label =
+    side === "incoming"
+      ? m.settings_probe_side_incoming()
+      : m.settings_probe_side_outgoing();
   return (
     <div className={`probe-line${result.ok ? "" : " failed"}`}>
       <span className={`tag${result.ok ? "" : " warn"}`}>
-        {label}：{result.ok ? "探测通过" : `未通过 · ${stageLabel(result.stage)}`}
+        {result.ok
+          ? m.settings_probe_passed({ side: label })
+          : m.settings_probe_failed({
+              side: label,
+              stage: stageLabel(result.stage),
+            })}
       </span>
       {!result.ok && (
         <p className="probe-advice">{probeAdvice(result.stage, side, preset)}</p>
       )}
       {!result.ok && result.detail && (
-        <code className="probe-detail" aria-label={`${label}诊断详情`}>
+        <code className="probe-detail" aria-label={m.settings_probe_detail_label({ side: label })}>
           {result.detail}
         </code>
       )}
@@ -98,6 +117,7 @@ function ProbeLine({
   );
 }
 function Editor({ controller }: { controller: SettingsController }) {
+  useUiLocale();
   const s = useStore(controller.store),
     e = s.editor!,
     w = s.wizard;
@@ -122,7 +142,10 @@ function Editor({ controller }: { controller: SettingsController }) {
   const collapsible = !plugin && !!preset;
   const open = !collapsible || w.expanded;
   const summary = `${draft.incoming.server || "?"}:${draft.incoming.port ?? "?"}`;
-  const secretLabel = preset?.secretLabel ?? "密码或应用专用密码";
+  const recognized = m
+    .settings_wizard_recognized({ provider: "\u0000" })
+    .split("\u0000");
+  const secretLabel = preset?.secretLabel ?? m.settings_secret_label_generic();
   function SecretInput({
     role,
     label,
@@ -148,10 +171,14 @@ function Editor({ controller }: { controller: SettingsController }) {
             type="button"
             className="text-button"
             aria-pressed={reveal}
-            aria-label={reveal ? `隐藏${label}` : `显示${label}`}
+            aria-label={
+              reveal
+                ? m.settings_secret_hide_label({ label })
+                : m.settings_secret_show_label({ label })
+            }
             onClick={() => setReveal(!reveal)}
           >
-            {reveal ? "隐藏" : "显示"}
+            {reveal ? m.settings_secret_hide() : m.settings_secret_show()}
           </button>
         </span>
       </Field>
@@ -161,7 +188,13 @@ function Editor({ controller }: { controller: SettingsController }) {
     const ep = draft[side]!;
     return (
       <div className="settings-fields">
-        <Field label={side === "incoming" ? "IMAP 服务器" : "SMTP 服务器"}>
+        <Field
+          label={
+            side === "incoming"
+              ? m.settings_server_imap_host()
+              : m.settings_server_smtp_host()
+          }
+        >
           <input
             value={ep.server ?? ""}
             required
@@ -172,7 +205,7 @@ function Editor({ controller }: { controller: SettingsController }) {
           />
         </Field>
         <div className="settings-field-pair">
-          <Field label="端口">
+          <Field label={m.settings_server_port()}>
             <input
               type="number"
               min={1}
@@ -183,19 +216,29 @@ function Editor({ controller }: { controller: SettingsController }) {
             />
           </Field>
           <Field
-            label="连接安全"
-            hint="切换时，标准端口会随之调整。"
+            label={m.settings_server_security()}
+            hint={m.settings_server_security_hint()}
           >
             <Choice disabled={s.busy || !s.online}
               value={ep.security ?? "implicit"}
               onValueChange={(value) => endpoint(side, { security: value })}
             >
-              <option value="implicit">直接加密（TLS）</option>
-              <option value="starttls">升级加密（STARTTLS）</option>
+              <option value="implicit">
+                {m.settings_server_security_implicit()}
+              </option>
+              <option value="starttls">
+                {m.settings_server_security_starttls()}
+              </option>
             </Choice>
           </Field>
         </div>
-        <Field label={side === "incoming" ? "收信用户名" : "发信用户名"}>
+        <Field
+          label={
+            side === "incoming"
+              ? m.settings_server_incoming_username()
+              : m.settings_server_outgoing_username()
+          }
+        >
           <input
             value={ep.username ?? ""}
             required
@@ -208,7 +251,7 @@ function Editor({ controller }: { controller: SettingsController }) {
         </Field>
         {side === "incoming" ? (
           <>
-            <Field label="收信文件夹">
+            <Field label={m.settings_server_mailbox()}>
               <input
                 value={ep.mailbox ?? "INBOX"}
                 required
@@ -222,27 +265,33 @@ function Editor({ controller }: { controller: SettingsController }) {
                 checked={ep.idle ?? true}
                 onChange={(v) => endpoint(side, { idle: v.target.checked })}
               />
-              使用 IMAP IDLE 接收新邮件
+              {m.settings_server_idle()}
             </label>
           </>
         ) : (
           <>
-            <Field label="发信认证">
+            <Field label={m.settings_outgoing_credential()}>
               <Choice disabled={s.busy || !s.online}
                 value={ep.credential ?? "incoming"}
                 onValueChange={(value) => endpoint(side, { credential: value })}
               >
                 <option value="incoming" disabled={plugin}>
-                  与收信共用{preset ? CREDENTIAL_LABEL[preset.credential] : "密码"}
+                  {m.settings_outgoing_credential_shared({
+                    credential: preset
+                      ? CREDENTIAL_LABEL[preset.credential]
+                      : m.settings_credential_generic(),
+                  })}
                 </option>
-                <option value="separate">使用独立密码</option>
+                <option value="separate">
+                  {m.settings_outgoing_credential_separate()}
+                </option>
               </Choice>
             </Field>
             {ep.credential === "separate" &&
               SecretInput({
                 role: "outgoing",
-                label: "发信密码",
-                hint: "已有密码不回填，留空表示不修改。",
+                label: m.settings_outgoing_secret(),
+                hint: m.settings_outgoing_secret_hint(),
               })}
           </>
         )}
@@ -261,9 +310,11 @@ function Editor({ controller }: { controller: SettingsController }) {
       <div className="settings-editor-heading">
         <div>
           <div className="section-label">
-            {e.id ? "管理账户" : "连接现有邮箱"}
+            {e.id
+              ? m.settings_account_editor_manage()
+              : m.settings_account_editor_connect()}
           </div>
-          <h2>{e.id ? draft.display_name : "添加邮箱账户"}</h2>
+          <h2>{e.id ? draft.display_name : m.settings_account_add()}</h2>
         </div>
         <button
           type="button"
@@ -271,17 +322,17 @@ function Editor({ controller }: { controller: SettingsController }) {
           disabled={s.busy}
           onClick={end}
         >
-          返回账户
+          {m.settings_account_editor_back()}
         </button>
       </div>
       <p className="page-intro">
         {e.id
-          ? "修改连接信息后可重新探测；已保存的密码不会回填。"
-          : "输入邮箱地址，常见服务商会自动配置；粘贴授权码，探测通过后即可连接。"}
+          ? m.settings_account_editor_intro_edit()
+          : m.settings_account_editor_intro_new()}
       </p>
       <fieldset disabled={s.busy || !s.online}>
         {!e.id && (
-          <Field label="接入方式">
+          <Field label={m.settings_account_kind()}>
             <Choice disabled={s.busy || !s.online}
               value={plugin ? "plugin" : "imap"}
               onValueChange={(value) =>
@@ -308,14 +359,14 @@ function Editor({ controller }: { controller: SettingsController }) {
             >
               <option value="imap">IMAP / SMTP</option>
               <option value="plugin" disabled={!providers.length}>
-                已安装的邮箱服务扩展
+                {m.settings_account_kind_plugin()}
               </option>
             </Choice>
           </Field>
         )}
         {!e.id && !plugin && <ProviderPills controller={controller} />}
         <div className="settings-field-pair">
-          <Field label="邮箱地址">
+          <Field label={m.settings_account_address()}>
             <input
               type="email"
               value={draft.address}
@@ -328,7 +379,7 @@ function Editor({ controller }: { controller: SettingsController }) {
               onChange={(v) => controller.setAddress(v.target.value)}
             />
           </Field>
-          <Field label="显示名称">
+          <Field label={m.settings_account_display_name()}>
             <input
               value={draft.display_name}
               required
@@ -342,13 +393,15 @@ function Editor({ controller }: { controller: SettingsController }) {
             {preset ? (
               <span>
                 <span className="status-dot" aria-hidden="true" />
-                已识别为 <strong>{preset.name}</strong>，服务器参数已自动填好。
+                {recognized[0]}
+                <strong>{preset.name}</strong>
+                {recognized[1]}
               </span>
             ) : domain ? (
               <>
                 <span>
                   {w.discovered ??
-                    `${domain} 不在内置服务商列表中。`}
+                    m.settings_wizard_unknown_domain({ domain })}
                 </span>
                 {!w.discovered && (
                   <button
@@ -357,12 +410,14 @@ function Editor({ controller }: { controller: SettingsController }) {
                     disabled={w.discovering}
                     onClick={() => void controller.discover()}
                   >
-                    {w.discovering ? "正在检测…" : "自动检测服务器"}
+                    {w.discovering
+                      ? m.settings_wizard_detecting()
+                      : m.settings_wizard_detect()}
                   </button>
                 )}
               </>
             ) : (
-              <span>输入地址后自动识别 QQ、网易、Gmail、iCloud 等常见邮箱。</span>
+              <span>{m.settings_wizard_hint()}</span>
             )}
           </div>
         )}
@@ -373,7 +428,7 @@ function Editor({ controller }: { controller: SettingsController }) {
         )}
         {plugin ? (
           <>
-            <Field label="邮箱服务扩展">
+            <Field label={m.settings_account_provider_extension()}>
               <Choice disabled={s.busy || !s.online}
                 value={draft.incoming.provider ?? ""}
                 onValueChange={(value) =>
@@ -385,18 +440,25 @@ function Editor({ controller }: { controller: SettingsController }) {
               >
                 {!providers.some((p) => p.id === draft.incoming.provider) && (
                   <option value={draft.incoming.provider ?? ""}>
-                    {draft.incoming.provider || "尚无可用扩展"}（不可用）
+                    {m.settings_provider_extension_unavailable({
+                      name:
+                        draft.incoming.provider ||
+                        m.settings_provider_extension_none(),
+                    })}
                   </option>
                 )}
                 {providers.map((p) => (
                   <option key={p.id} value={p.id}>
-                    {p.name} · {p.provider_registered ? "可探测" : "尚未就绪"}
+                    {p.name} ·{" "}
+                    {p.provider_registered
+                      ? m.settings_provider_extension_ready()
+                      : m.settings_provider_extension_not_ready()}
                   </option>
                 ))}
               </Choice>
             </Field>
             <p className="group-note">
-              填写扩展中已经存在的邮箱地址。探测只读取远程状态，不会创建邮箱或保存绑定。
+              {m.settings_account_plugin_note()}
             </p>
             {providers.find((p) => p.id === draft.incoming.provider)
               ?.has_ui && (
@@ -407,7 +469,7 @@ function Editor({ controller }: { controller: SettingsController }) {
                   void controller.openProvider(draft.incoming.provider!)
                 }
               >
-                打开服务扩展管理
+                {m.settings_account_open_provider()}
               </button>
             )}
           </>
@@ -417,10 +479,13 @@ function Editor({ controller }: { controller: SettingsController }) {
               role: "incoming",
               label: secretLabel,
               hint: saved
-                ? "已保存的密码不会回填。留空表示保存时不修改；重新探测需要输入。"
+                ? m.settings_secret_hint_saved()
                 : preset
-                  ? `${preset.name} 需要${CREDENTIAL_LABEL[preset.credential]}，不是网页登录密码。`
-                  : "多数服务商要求使用应用专用密码或授权码。",
+                  ? m.settings_secret_hint_provider({
+                      provider: preset.name,
+                      credential: CREDENTIAL_LABEL[preset.credential],
+                    })
+                  : m.settings_secret_hint_generic(),
             })}
             {w.secretNotice && (
               <p className="secret-notice" role="status">
@@ -429,7 +494,11 @@ function Editor({ controller }: { controller: SettingsController }) {
             )}
             {preset && (
               <div className="credential-guide">
-                <strong>如何获取{CREDENTIAL_LABEL[preset.credential]}</strong>
+                <strong>
+                  {m.settings_credential_guide_title({
+                    credential: CREDENTIAL_LABEL[preset.credential],
+                  })}
+                </strong>
                 <ol>
                   {preset.steps.map((step) => (
                     <li key={step}>{step}</li>
@@ -441,7 +510,7 @@ function Editor({ controller }: { controller: SettingsController }) {
                     className="text-button"
                     onClick={() => void controller.openHelp(preset.helpUrl!)}
                   >
-                    打开 {preset.short} 官方设置页
+                    {m.settings_credential_guide_open({ provider: preset.short })}
                   </button>
                 )}
               </div>
@@ -456,18 +525,20 @@ function Editor({ controller }: { controller: SettingsController }) {
             onClick={() => controller.toggleServers()}
           >
             <span aria-hidden="true">{open ? "▾" : "▸"}</span>
-            服务器连接参数（{w.manual ? "已手动调整" : "已自动匹配"} {summary}）
+            {w.manual
+              ? m.settings_servers_disclosure_manual({ summary })
+              : m.settings_servers_disclosure_auto({ summary })}
           </button>
         )}
         {open && (
           <div className={collapsible ? "server-panel" : undefined}>
             {!plugin && (
               <>
-                <h3>收信</h3>
+                <h3>{m.settings_servers_incoming()}</h3>
                 {Server({ side: "incoming" })}
               </>
             )}
-            <Field label="轮询间隔（秒）">
+            <Field label={m.settings_server_poll_secs()}>
               <input
                 type="number"
                 min={1}
@@ -498,11 +569,11 @@ function Editor({ controller }: { controller: SettingsController }) {
                   })
                 }
               />
-              启用发信
+              {m.settings_outgoing_enable()}
             </label>
             {draft.outgoing && (
               <>
-                <Field label="发信方式">
+                <Field label={m.settings_outgoing_kind()}>
                   <Choice disabled={s.busy || !s.online}
                     value={draft.outgoing.kind}
                     onValueChange={(value) =>
@@ -527,19 +598,19 @@ function Editor({ controller }: { controller: SettingsController }) {
                       })
                     }
                   >
-                    <option value="smtp">标准发信（SMTP）</option>
+                    <option value="smtp">{m.settings_outgoing_kind_smtp()}</option>
                     <option value="plugin" disabled={!providers.length}>
-                      邮箱服务扩展
+                      {m.settings_outgoing_kind_plugin()}
                     </option>
                   </Choice>
                 </Field>
                 {draft.outgoing.kind === "smtp" ? (
                   <>
-                    <h3>发信</h3>
+                    <h3>{m.settings_servers_outgoing()}</h3>
                     {Server({ side: "outgoing" })}
                   </>
                 ) : (
-                  <Field label="发信服务扩展">
+                  <Field label={m.settings_outgoing_provider_extension()}>
                     <Choice disabled={s.busy || !s.online}
                       value={draft.outgoing.provider ?? ""}
                       onValueChange={(value) =>
@@ -550,13 +621,19 @@ function Editor({ controller }: { controller: SettingsController }) {
                         (p) => p.id === draft.outgoing?.provider,
                       ) && (
                         <option value={draft.outgoing.provider ?? ""}>
-                          {draft.outgoing.provider || "尚无可用扩展"}（不可用）
+                          {m.settings_provider_extension_unavailable({
+                            name:
+                              draft.outgoing.provider ||
+                              m.settings_provider_extension_none(),
+                          })}
                         </option>
                       )}
                       {providers.map((p) => (
                         <option key={p.id} value={p.id}>
                           {p.name} ·{" "}
-                          {p.provider_registered ? "可探测" : "尚未就绪"}
+                          {p.provider_registered
+                            ? m.settings_provider_extension_ready()
+                            : m.settings_provider_extension_not_ready()}
                         </option>
                       ))}
                     </Choice>
@@ -580,7 +657,7 @@ function Editor({ controller }: { controller: SettingsController }) {
             className="secondary"
             onClick={() => void controller.probe()}
           >
-            探测连接
+            {m.settings_probe_action()}
           </button>
           <button
             type="submit"
@@ -591,31 +668,36 @@ function Editor({ controller }: { controller: SettingsController }) {
                 (!!draft.outgoing && !s.probe?.outgoing?.ok))
             }
           >
-            {s.busy ? "处理中…" : e.id ? "保存更改" : "保存并连接"}
+            {s.busy
+              ? m.settings_busy()
+              : e.id
+                ? m.settings_account_save_changes()
+                : m.settings_account_save_connect()}
           </button>
         </div>
         <p className="group-note">
-          凭据只保存在系统钥匙串；关闭窗口后，后台以极低内存静默收信。
+          {m.settings_account_keychain_note()}
         </p>
       </fieldset>
       {e.id && (
         <p className="group-note">
-          账户 ID：{e.id} · 版本 {e.revision} ·{" "}
+          {m.settings_account_meta({ id: e.id, revision: e.revision ?? "" })} ·{" "}
           {saved?.credentials.incoming === "saved"
-            ? "收信凭据已保存"
-            : "凭据状态以账户列表为准"}
+            ? m.settings_account_credentials_saved()
+            : m.settings_account_credentials_see_list()}
         </p>
       )}
     </form>
   );
 }
 export function Accounts({ controller }: { controller: SettingsController }) {
+  useUiLocale();
   const s = useStore(controller.store);
   if (s.editor) return <Editor controller={controller} />;
   return (
     <>
-      <h2>账户</h2>
-      <p className="page-intro">所有邮箱，各自井然有序。</p>
+      <h2>{m.settings_accounts_title()}</h2>
+      <p className="page-intro">{m.settings_accounts_intro()}</p>
       {s.profiles?.map((p) => (
         <article className="account-row" key={p.id}>
           <span className="account-monogram" aria-hidden="true">
@@ -633,12 +715,12 @@ export function Accounts({ controller }: { controller: SettingsController }) {
                 ? ` · ${s.packages?.plugins.find((x) => x.id === p.incoming.provider)?.name ?? p.incoming.provider}`
                 : ""}
             </small>
-            {!p.editable && <small>配置文件账户，只读</small>}
+            {!p.editable && <small>{m.settings_account_readonly()}</small>}
             {needsRepair(p) && (
               <p className="account-alert" role="status">
                 {p.runtime.state === "needs_credentials"
-                  ? "服务器不再接受已保存的认证信息。重新生成授权码或应用专用密码后，在「更新凭据」中粘贴。"
-                  : "最近一次连接失败，请检查服务器参数或网络后重新探测。"}
+                  ? m.settings_account_alert_credentials()
+                  : m.settings_account_alert_error()}
                 {p.runtime.detail && <code>{p.runtime.detail}</code>}
               </p>
             )}
@@ -653,13 +735,17 @@ export function Accounts({ controller }: { controller: SettingsController }) {
               >
                 {needsRepair(p)
                   ? p.runtime.state === "needs_credentials"
-                    ? "更新凭据"
-                    : "修复连接"
-                  : "管理"}
+                    ? m.settings_account_update_credentials()
+                    : m.settings_account_repair()
+                  : m.settings_account_manage()}
               </button>
               <details className="account-more">
-                <summary aria-label={`${p.display_name} 的更多操作`}>
-                  更多
+                <summary
+                  aria-label={m.settings_account_more_label({
+                    name: p.display_name,
+                  })}
+                >
+                  {m.settings_account_more()}
                 </summary>
                 <div>
                   <button
@@ -667,7 +753,9 @@ export function Accounts({ controller }: { controller: SettingsController }) {
                     disabled={!s.online || s.busy}
                     onClick={() => controller.confirmAccount(p, false)}
                   >
-                    {p.enabled ? "暂停同步" : "启用"}
+                    {p.enabled
+                      ? m.settings_account_action_pause()
+                      : m.settings_account_menu_enable()}
                   </button>
                   <button
                     type="button"
@@ -675,7 +763,7 @@ export function Accounts({ controller }: { controller: SettingsController }) {
                     disabled={!s.online || s.busy}
                     onClick={() => controller.confirmAccount(p, true)}
                   >
-                    移除账户
+                    {m.settings_account_action_remove()}
                   </button>
                 </div>
               </details>
@@ -685,8 +773,10 @@ export function Accounts({ controller }: { controller: SettingsController }) {
       ))}
       {s.profiles?.length === 0 && (
         <div className="settings-empty">
-          <h3>从你的第一个邮箱开始</h3>
-          <p>连接现有邮箱，无需注册 {BRAND.productName} 账户。选一个服务商，向导会自动填好服务器。</p>
+          <h3>{m.settings_accounts_empty_title()}</h3>
+          <p>
+            {m.settings_accounts_empty_body({ product: BRAND.productName })}
+          </p>
           <div className="provider-pills">
             {QUICK_PROVIDERS.map((id) => (
               <button
@@ -696,7 +786,7 @@ export function Accounts({ controller }: { controller: SettingsController }) {
                 disabled={!s.online || s.busy}
                 onClick={() => controller.beginAccount(undefined, id)}
               >
-                {providerById(id)?.short ?? "自定义 IMAP"}
+                {providerById(id)?.short ?? m.settings_provider_custom()}
               </button>
             ))}
           </div>
@@ -709,11 +799,11 @@ export function Accounts({ controller }: { controller: SettingsController }) {
           disabled={!s.online || s.busy || s.loading || !s.profiles}
           onClick={() => controller.beginAccount()}
         >
-          添加邮箱账户
+          {m.settings_account_add()}
         </button>
       </div>
       <p className="group-note">
-        暂停同步会保留本地邮件。移除账户前，会单独说明本地数据、凭据和服务器邮件的处理范围。
+        {m.settings_accounts_note()}
       </p>
     </>
   );
