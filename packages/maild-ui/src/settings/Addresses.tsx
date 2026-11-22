@@ -1,18 +1,34 @@
+import { m } from "@featherpost/i18n/messages";
 import { Choice } from "./Choice";
 import { useStore } from "../host/hooks";
+import { useUiLocale } from "../i18n";
 import { expiryLabel } from "../mailbox/format";
 import { Field } from "./Accounts";
 import type { SettingsController } from "./controller";
+
+const ADDRESS_STATE: Readonly<Record<string, () => string>> = {
+  active: m.settings_address_state_active,
+  disabled: m.settings_address_state_disabled,
+  expired: m.settings_address_state_expired,
+};
+function addressState(state: string): string {
+  const label = Object.prototype.hasOwnProperty.call(ADDRESS_STATE, state)
+    ? ADDRESS_STATE[state]
+    : undefined;
+  return label ? label() : m.settings_address_state_unknown();
+}
+
 export function Addresses({ controller }: { controller: SettingsController }) {
+  useUiLocale();
   const s = useStore(controller.store),
     f = s.addressForm,
     p = s.profiles?.find((p) => p.id === s.addressAccount),
     page = s.addresses;
   return (
     <>
-      <h2>地址与别名</h2>
-      <p className="page-intro">管理这个邮箱可使用的本地发件身份。</p>
-      <Field label="邮箱账户">
+      <h2>{m.settings_addresses_title()}</h2>
+      <p className="page-intro">{m.settings_addresses_intro()}</p>
+      <Field label={m.settings_addresses_account()}>
         <Choice
           disabled={s.busy || s.loading || !s.online}
           value={s.addressAccount}
@@ -23,7 +39,7 @@ export function Addresses({ controller }: { controller: SettingsController }) {
           }}
         >
           <option value="" disabled>
-            选择账户
+            {m.settings_addresses_choose_account()}
           </option>
           {s.profiles?.map((p) => (
             <option key={p.id} value={p.id}>
@@ -36,9 +52,9 @@ export function Addresses({ controller }: { controller: SettingsController }) {
         <div className="setting-row">
           <div className="setting-copy">
             <strong>{p.address}</strong>
-            <p>账户主地址</p>
+            <p>{m.settings_address_primary_note()}</p>
           </div>
-          <span className="tag">主地址</span>
+          <span className="tag">{m.settings_address_primary()}</span>
         </div>
       )}
       {page?.addresses.map((a) => {
@@ -48,19 +64,15 @@ export function Addresses({ controller }: { controller: SettingsController }) {
           <div className="setting-copy">
             <strong>{a.address}</strong>
             <p>
-              {a.label || "无备注"} ·{" "}
-              {a.kind === "disposable" ? "一次性身份" : "别名"}
+              {a.label || m.settings_address_no_label()} ·{" "}
+              {a.kind === "disposable"
+                ? m.settings_address_kind_disposable()
+                : m.settings_address_kind_alias()}
               {expiry ? ` · ${expiry}` : ""}
             </p>
           </div>
           <span className={`tag${a.state === "active" ? "" : " warn"}`}>
-            {(
-              {
-                active: "已启用",
-                disabled: "已停用",
-                expired: "已过期",
-              } as Record<string, string>
-            )[a.state] ?? "未知状态"}
+            {addressState(a.state)}
           </span>
           <div className="settings-actions">
             <button
@@ -74,7 +86,9 @@ export function Addresses({ controller }: { controller: SettingsController }) {
               }
               onClick={() => controller.confirmAddress(a, false)}
             >
-              {a.state === "active" ? "停用" : "启用"}
+              {a.state === "active"
+                ? m.settings_address_action_disable()
+                : m.settings_address_action_enable()}
             </button>
             <button
               type="button"
@@ -82,7 +96,7 @@ export function Addresses({ controller }: { controller: SettingsController }) {
               disabled={!s.online || s.busy}
               onClick={() => controller.confirmAddress(a, true)}
             >
-              移除
+              {m.settings_address_action_remove()}
             </button>
           </div>
         </div>
@@ -100,7 +114,7 @@ export function Addresses({ controller }: { controller: SettingsController }) {
               )
             }
           >
-            上一页
+            {m.settings_addresses_previous()}
           </button>
           <span>
             {s.addressOffset + 1}–{s.addressOffset + page.addresses.length} /{" "}
@@ -121,7 +135,7 @@ export function Addresses({ controller }: { controller: SettingsController }) {
               )
             }
           >
-            下一页
+            {m.settings_addresses_next()}
           </button>
         </div>
       )}
@@ -133,9 +147,9 @@ export function Addresses({ controller }: { controller: SettingsController }) {
           }}
         >
           <fieldset disabled={!s.online || s.busy}>
-            <h3>登记发件身份</h3>
+            <h3>{m.settings_address_form_title()}</h3>
             <div className="settings-field-pair">
-              <Field label="类型">
+              <Field label={m.settings_address_form_kind()}>
                 <Choice disabled={s.busy || !s.online}
                   value={f.kind}
                   onValueChange={(value) =>
@@ -147,15 +161,19 @@ export function Addresses({ controller }: { controller: SettingsController }) {
                     })
                   }
                 >
-                  <option value="alias">别名</option>
-                  <option value="disposable">一次性身份</option>
+                  <option value="alias">
+                    {m.settings_address_kind_alias()}
+                  </option>
+                  <option value="disposable">
+                    {m.settings_address_kind_disposable()}
+                  </option>
                 </Choice>
               </Field>
               <Field
-                label="邮箱地址"
+                label={m.settings_address_form_address()}
                 hint={
                   f.kind === "disposable"
-                    ? "可留空，由后台生成同域地址；需服务商支持接收。"
+                    ? m.settings_address_form_address_hint()
                     : undefined
                 }
               >
@@ -172,7 +190,7 @@ export function Addresses({ controller }: { controller: SettingsController }) {
                 />
               </Field>
             </div>
-            <Field label="备注">
+            <Field label={m.settings_address_form_label()}>
               <input
                 value={f.label}
                 maxLength={160}
@@ -185,8 +203,8 @@ export function Addresses({ controller }: { controller: SettingsController }) {
             </Field>
             {f.kind === "disposable" && (
               <Field
-                label="有效期（天）"
-                hint="留空表示永久；过期只停用本地身份。"
+                label={m.settings_address_form_days()}
+                hint={m.settings_address_form_days_hint()}
               >
                 <input
                   type="number"
@@ -202,18 +220,18 @@ export function Addresses({ controller }: { controller: SettingsController }) {
               </Field>
             )}
             <p className="group-note">
-              登记不会创建远程别名。请先确认服务商允许接收和使用该地址发送邮件。
+              {m.settings_address_form_note()}
             </p>
             <div className="settings-actions">
               <button className="primary" type="submit">
-                确认服务商已支持，登记
+                {m.settings_address_form_submit()}
               </button>
               <button
                 className="text-button"
                 type="button"
                 onClick={() => controller.store.patch({ addressForm: null })}
               >
-                取消
+                {m.settings_address_form_cancel()}
               </button>
             </div>
           </fieldset>
@@ -242,13 +260,13 @@ export function Addresses({ controller }: { controller: SettingsController }) {
               })
             }
           >
-            登记地址
+            {m.settings_address_register()}
           </button>
         </div>
       )}
       {p?.outgoing?.kind !== "smtp" && (
         <p className="group-note">
-          此账户当前仅支持主地址，不能把本地别名作为可发地址。
+          {m.settings_addresses_primary_only_note()}
         </p>
       )}
     </>

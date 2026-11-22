@@ -1,4 +1,7 @@
+import { m } from "@featherpost/i18n/messages";
+
 import { useStore } from "../host/hooks";
+import { useUiLocale } from "../i18n";
 import { Field } from "./Accounts";
 import type { SettingsController } from "./controller";
 import { BRAND } from "../brand";
@@ -25,6 +28,7 @@ export function Notifications({
 }: {
   controller: SettingsController;
 }) {
+  useUiLocale();
   const s = useStore(controller.store),
     n = s.notification,
     r = s.rules;
@@ -51,15 +55,15 @@ export function Notifications({
   const notifyNewMail = r?.notify_new_mail ?? true;
   return (
     <>
-      <h2>通知与规则</h2>
-      <p className="page-intro">决定何时提醒，以及通知中显示多少内容。</p>
+      <h2>{m.settings_notifications_title()}</h2>
+      <p className="page-intro">{m.settings_notifications_intro()}</p>
       <div className="setting-row">
         <div className="setting-copy">
-          <strong>系统通知</strong>
+          <strong>{m.settings_notifications_system()}</strong>
           <p>
             {n
               ? notificationLabel(n.availability, n.authorization)
-              : "正在读取授权状态"}
+              : m.settings_notifications_loading()}
           </p>
         </div>
         <button
@@ -75,12 +79,12 @@ export function Notifications({
           }
           onClick={() => void controller.requestNotifications()}
         >
-          请求授权
+          {m.settings_notifications_request()}
         </button>
       </div>
       {n?.authorization === "denied" && (
         <p className="group-note">
-          在 macOS「系统设置 → 通知 → {BRAND.productName}」中允许通知，然后刷新此页。系统已拒绝时可能不会再次弹窗。
+          {m.settings_notifications_denied_note({ product: BRAND.productName })}
         </p>
       )}
       {r && (
@@ -93,11 +97,11 @@ export function Notifications({
           <fieldset disabled={!s.online || s.busy}>
             <div className="setting-row">
               <div className="setting-copy">
-                <strong>收件箱新邮件系统通知</strong>
+                <strong>{m.settings_notifications_new_mail()}</strong>
                 <p>
                   {supportsNewMail
-                    ? "新邮件进入收件箱时弹出系统通知；验证码仍按下方敏感内容规则显示。"
-                    : "当前后台版本尚未提供此开关，升级后台后可用。"}
+                    ? m.settings_notifications_new_mail_note()
+                    : m.settings_notifications_new_mail_unsupported()}
                 </p>
               </div>
               <button
@@ -105,22 +109,30 @@ export function Notifications({
                 className="toggle"
                 role="switch"
                 aria-checked={notifyNewMail}
-                aria-label="收件箱新邮件系统通知"
+                aria-label={m.settings_notifications_new_mail()}
                 disabled={!supportsNewMail}
                 onClick={() => edit({ notify_new_mail: !notifyNewMail })}
               >
                 <span className="toggle-track" />
               </button>
             </div>
-            <h3>按账户静音通知</h3>
+            <h3>{m.settings_notifications_mute_title()}</h3>
             <p className="group-note">
               {supportsMute
-                ? "勾选的账户照常收信，只是不再弹出通知。"
-                : "当前后台版本尚未提供按账户静音，升级后台后可用。"}
+                ? m.settings_notifications_mute_note()
+                : m.settings_notifications_mute_unsupported()}
             </p>
-            <div className="muted-accounts" role="group" aria-label="按账户静音通知">
-              {s.profiles === null && <small>账户名单暂时无法读取。</small>}
-              {s.profiles?.length === 0 && <small>还没有账户。</small>}
+            <div
+              className="muted-accounts"
+              role="group"
+              aria-label={m.settings_notifications_mute_title()}
+            >
+              {s.profiles === null && (
+                <small>{m.settings_notifications_mute_profiles_unavailable()}</small>
+              )}
+              {s.profiles?.length === 0 && (
+                <small>{m.settings_notifications_mute_no_accounts()}</small>
+              )}
               {s.profiles?.map((p) => (
                 <label key={p.id} className="settings-check">
                   <input
@@ -135,30 +147,32 @@ export function Notifications({
                       })
                     }
                   />
-                  静音 {p.display_name || p.address}
+                  {m.settings_notifications_mute_account({
+                    name: p.display_name || p.address,
+                  })}
                   <small>{p.address}</small>
                 </label>
               ))}
             </div>
             <div className="setting-row">
               <div className="setting-copy">
-                <strong>显示敏感内容</strong>
-                <p>允许通知显示验证码等敏感内容。</p>
+                <strong>{m.settings_notifications_sensitive()}</strong>
+                <p>{m.settings_notifications_sensitive_note()}</p>
               </div>
               <button
                 type="button"
                 className="toggle"
                 role="switch"
                 aria-checked={r.show_sensitive}
-                aria-label="显示敏感内容"
+                aria-label={m.settings_notifications_sensitive()}
                 onClick={() => edit({ show_sensitive: !r.show_sensitive })}
               >
                 <span className="toggle-track" />
               </button>
             </div>
             <Field
-              label="静默关键词"
-              hint="每行一个。命中的通知不提醒，不影响邮件接收。"
+              label={m.settings_notifications_keywords()}
+              hint={m.settings_notifications_keywords_hint()}
             >
               <textarea
                 rows={4}
@@ -169,24 +183,24 @@ export function Notifications({
                 }
               />
             </Field>
-            <h3>静默时段</h3>
+            <h3>{m.settings_quiet_hours_title()}</h3>
             <p className="group-note">
               {followSystemTz
-                ? "按当前系统本地时区计算，自动跟随夏令时与出行。"
-                : "按下面的固定 UTC 偏移计算；不会自动随夏令时切换。"}
+                ? m.settings_quiet_hours_follow_note()
+                : m.settings_quiet_hours_fixed_note()}
             </p>
             {supportsFollowSystemTz && (
               <div className="setting-row">
                 <div className="setting-copy">
-                  <strong>跟随系统时区</strong>
-                  <p>自动适配当前系统时区、夏令时切换与跨时区出行。</p>
+                  <strong>{m.settings_quiet_hours_follow()}</strong>
+                  <p>{m.settings_quiet_hours_follow_hint()}</p>
                 </div>
                 <button
                   type="button"
                   className="toggle"
                   role="switch"
                   aria-checked={followSystemTz}
-                  aria-label="跟随系统时区"
+                  aria-label={m.settings_quiet_hours_follow()}
                   onClick={() =>
                     edit({ follow_system_timezone: !followSystemTz })
                   }
@@ -198,10 +212,12 @@ export function Notifications({
             {showTzMismatch && (
               <div className="provider-caveat" role="status">
                 <span>
-                  当前配置的固定偏移为{" "}
-                  {formatUtcOffset(r.timezone_offset_minutes)}（
-                  {r.timezone_offset_minutes} 分钟），与当前系统时区{" "}
-                  {formatUtcOffset(systemOffset)}（{systemOffset} 分钟）不同。
+                  {m.settings_quiet_hours_tz_mismatch({
+                    offset: formatUtcOffset(r.timezone_offset_minutes),
+                    minutes: r.timezone_offset_minutes,
+                    systemOffset: formatUtcOffset(systemOffset),
+                    systemMinutes: systemOffset,
+                  })}
                 </span>{" "}
                 {supportsFollowSystemTz ? (
                   <button
@@ -209,7 +225,7 @@ export function Notifications({
                     className="text-button"
                     onClick={() => edit({ follow_system_timezone: true })}
                   >
-                    改为跟随系统时区
+                    {m.settings_quiet_hours_switch_follow()}
                   </button>
                 ) : (
                   <button
@@ -219,14 +235,14 @@ export function Notifications({
                       edit({ timezone_offset_minutes: systemOffset })
                     }
                   >
-                    {`填入当前系统偏移（${systemOffset} 分钟）`}
+                    {m.settings_quiet_hours_fill_offset({ minutes: systemOffset })}
                   </button>
                 )}
               </div>
             )}
             {r.quiet_hours.map((q, i) => (
               <div key={i} className="quiet-hours">
-                <Field label={`第 ${i + 1} 段开始`}>
+                <Field label={m.settings_quiet_hours_start({ index: i + 1 })}>
                   <input
                     type="time"
                     required
@@ -240,7 +256,7 @@ export function Notifications({
                     }
                   />
                 </Field>
-                <Field label={`第 ${i + 1} 段结束`}>
+                <Field label={m.settings_quiet_hours_end({ index: i + 1 })}>
                   <input
                     type="time"
                     required
@@ -257,14 +273,14 @@ export function Notifications({
                 <button
                   type="button"
                   className="text-button"
-                  aria-label={`移除第 ${i + 1} 段静默时段`}
+                  aria-label={m.settings_quiet_hours_remove_label({ index: i + 1 })}
                   onClick={() =>
                     edit({
                       quiet_hours: r.quiet_hours.filter((_, j) => j !== i),
                     })
                   }
                 >
-                  移除
+                  {m.settings_quiet_hours_remove()}
                 </button>
               </div>
             ))}
@@ -287,12 +303,12 @@ export function Notifications({
                 });
               }}
             >
-              添加时段
+              {m.settings_quiet_hours_add()}
             </button>
             {!followSystemTz && (
               <Field
-                label="UTC 偏移（分钟）"
-                hint="例如 UTC+8 为 480，UTC−5 为 −300。"
+                label={m.settings_quiet_hours_offset()}
+                hint={m.settings_quiet_hours_offset_hint()}
               >
                 <input
                   type="number"
@@ -313,7 +329,7 @@ export function Notifications({
                 className="primary"
                 disabled={!controller.dirty}
               >
-                应用规则
+                {m.settings_rules_apply()}
               </button>
               <button
                 type="button"
@@ -321,7 +337,7 @@ export function Notifications({
                 disabled={!controller.dirty}
                 onClick={() => controller.discard()}
               >
-                还原输入
+                {m.settings_rules_revert()}
               </button>
             </div>
           </fieldset>
@@ -329,30 +345,33 @@ export function Notifications({
       )}
       <p className="group-note" role="status">
         {s.rulesPersisted === true
-          ? "规则已持久保存，重启后台后继续生效。"
+          ? m.settings_rules_persisted()
           : s.rulesPersisted === false
-            ? "规则仅在当前后台运行期间生效；重启后恢复配置文件中的规则。"
-            : "后台尚未说明规则是否持久保存；保存回执会明确说明。"}
+            ? m.settings_rules_session_only()
+            : m.settings_rules_persistence_unknown()}
       </p>
     </>
   );
 }
+const AUTHORIZATION_LABEL: Readonly<Record<string, () => string>> = {
+  checking: m.settings_notifications_auth_checking,
+  not_determined: m.settings_notifications_auth_not_determined,
+  denied: m.settings_notifications_auth_denied,
+  authorized: m.settings_notifications_auth_authorized,
+  provisional: m.settings_notifications_auth_provisional,
+  ephemeral: m.settings_notifications_auth_provisional,
+  not_applicable: m.settings_notifications_auth_not_applicable,
+};
 function notificationLabel(availability: string, authorization: string) {
   if (availability !== "available")
     return availability === "identity_mismatch"
-      ? "当前开发身份不能申请通知，请使用受支持的安装包。"
-      : "当前平台或后台未提供系统通知。";
-  return (
-    (
-      {
-        checking: "正在检查",
-        not_determined: "尚未授权",
-        denied: "系统已拒绝",
-        authorized: "已允许",
-        provisional: "临时允许",
-        ephemeral: "临时允许",
-        not_applicable: "不适用",
-      } as Record<string, string>
-    )[authorization] ?? "授权状态未知"
-  );
+      ? m.settings_notifications_identity_mismatch()
+      : m.settings_notifications_unavailable();
+  const label = Object.prototype.hasOwnProperty.call(
+    AUTHORIZATION_LABEL,
+    authorization,
+  )
+    ? AUTHORIZATION_LABEL[authorization]
+    : undefined;
+  return label ? label() : m.settings_notifications_auth_unknown();
 }

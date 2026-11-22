@@ -1,6 +1,7 @@
 import { Host } from "../src/host/host";
 import { composeModule } from "../src/compose/module";
 import { FakeBridge } from "./fakeBridge";
+import { applyEffectiveLocales } from "@featherpost/i18n";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ComposeController, sourceKey } from "../src/compose/controller";
 import { FakeCompose } from "./fakeCompose";
@@ -380,4 +381,28 @@ it("ordinary SMTP permits a Bcc-only envelope", async () => {
   c.change("subject", "private copy");
   await c.send();
   expect(bridge.sends).toBe(1);
+});
+
+it("validation errors and command titles follow the UI language", async () => {
+  const { controller: c } = await setup();
+  applyEffectiveLocales(["en"]);
+  try {
+    c.change("to", "unfinished@");
+    await c.send();
+    expect(c.store.getSnapshot().errors.to).toBe("Enter full email addresses, separated by commas.");
+    vi.stubGlobal("window", {
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    });
+    const host = new Host(new FakeBridge());
+    const bundle = composeModule(host, c);
+    host.registerBuiltin(bundle);
+    expect(host.registry.findCommand("maild.compose.reply-all")?.title).toBe("Reply All");
+    applyEffectiveLocales([]);
+    expect(host.registry.findCommand("maild.compose.reply-all")?.title).toBe("全部回复");
+    bundle.dispose?.();
+  } finally {
+    applyEffectiveLocales([]);
+    vi.unstubAllGlobals();
+  }
 });

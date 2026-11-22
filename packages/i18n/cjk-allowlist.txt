@@ -1,16 +1,3 @@
 # i18n:lint 中文字面量白名单（迁移期基线，ADR-0048 决策 8）。
 # 每行一个仓库相对路径。只许删减：迁移完一个文件就删掉它这一行；新文件不得加入。
 # 文件里已无中文字面量却仍在单上，i18n:lint 同样报错。
-packages/maild-ui/src/compose/Editor.tsx
-packages/maild-ui/src/compose/controller.ts
-packages/maild-ui/src/compose/module.tsx
-packages/maild-ui/src/host/host.ts
-packages/maild-ui/src/host/registry.ts
-packages/maild-ui/src/sample/module.tsx
-packages/maild-ui/src/settings/Accounts.tsx
-packages/maild-ui/src/settings/Addresses.tsx
-packages/maild-ui/src/settings/Extensions.tsx
-packages/maild-ui/src/settings/Notifications.tsx
-packages/maild-ui/src/settings/controller.ts
-packages/maild-ui/src/settings/module.tsx
-packages/maild-ui/src/settings/providers.ts
