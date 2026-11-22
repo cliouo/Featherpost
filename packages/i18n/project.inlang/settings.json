@@ -1,0 +1,18 @@
+{
+  "$schema": "https://inlang.com/schema/project-settings",
+  "baseLocale": "zh-CN",
+  "locales": ["zh-CN", "en"],
+  "modules": [
+    "./node_modules/@inlang/plugin-message-format/dist/index.js"
+  ],
+  "plugin.inlang.messageFormat": {
+    "pathPattern": [
+      "./messages/{locale}/common.json",
+      "./messages/{locale}/mailbox.json",
+      "./messages/{locale}/compose.json",
+      "./messages/{locale}/settings.json",
+      "./messages/{locale}/extensions.json",
+      "./messages/{locale}/studio.json"
+    ]
+  }
+}
