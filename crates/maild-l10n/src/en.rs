@@ -107,6 +107,7 @@ pub const EN: Messages = Messages {
         error_open_mail_window_failed: "Couldn't open the mail window.",
         error_in_place_unsupported: "Opening the mail window in place isn't supported on this platform.",
     },
+    ctl: crate::ctl::EN,
 };
 
 const WEEKDAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
