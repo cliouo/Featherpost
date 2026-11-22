@@ -1,3 +1,4 @@
+import { lifecycleLabel, permissionLabel } from "../i18n";
 import { useEffect, useState } from "react";
 import { SettingsController } from "./controller";
 import { Accounts } from "./Accounts";
@@ -14,18 +15,6 @@ import { BRAND } from "../brand";
 
 export const SETTINGS_VIEW = "maild.settings.page";
 
-const PERMISSION_LABELS: Record<string, string> = {
-  messages_read: "读取邮件与账户状态",
-  messages_send: "发送邮件",
-  settings_read: "读取应用设置",
-  settings_write: "修改应用设置",
-  frontend_open: "接收导航意图、读取前端清单",
-  mailbox_write: "已读 / 星标 / 归档 / 删除与离线队列裁决",
-  accounts_manage: "账户中心",
-  addresses_manage: "别名与一次性地址",
-  plugins_manage: "安装、升级、回滚、启停受管包",
-  notifications_read: "读取系统通知授权状态",
-};
 
 function Row({
   title,
@@ -152,7 +141,7 @@ export function settingsModule(
           <>
             <Row
               title={frontendInfo.name}
-              description={`${frontendInfo.id} · ${frontendInfo.version} · ${frontendInfo.lifecycle}`}
+              description={`${frontendInfo.id} · ${frontendInfo.version} · ${lifecycleLabel(frontendInfo.lifecycle)}`}
             >
               <span className="tag">
                 {frontendInfo.is_default
@@ -170,7 +159,7 @@ export function settingsModule(
               .map((word) => (
                 <Row
                   key={word}
-                  title={PERMISSION_LABELS[word] ?? word}
+                  title={permissionLabel(word)}
                   description={word}
                 />
               ))}

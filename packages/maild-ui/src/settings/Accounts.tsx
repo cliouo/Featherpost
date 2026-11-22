@@ -1,3 +1,4 @@
+import { Choice } from "./Choice";
 import { useState, type ReactNode } from "react";
 import { useStore } from "../host/hooks";
 import type { AccountProfile, Endpoint, ProbeStage } from "./types";
@@ -185,13 +186,13 @@ function Editor({ controller }: { controller: SettingsController }) {
             label="连接安全"
             hint="切换时，标准端口会随之调整。"
           >
-            <select
+            <Choice disabled={s.busy || !s.online}
               value={ep.security ?? "implicit"}
-              onChange={(v) => endpoint(side, { security: v.target.value })}
+              onValueChange={(value) => endpoint(side, { security: value })}
             >
-              <option value="implicit">TLS</option>
-              <option value="starttls">STARTTLS</option>
-            </select>
+              <option value="implicit">直接加密（TLS）</option>
+              <option value="starttls">升级加密（STARTTLS）</option>
+            </Choice>
           </Field>
         </div>
         <Field label={side === "incoming" ? "收信用户名" : "发信用户名"}>
@@ -227,15 +228,15 @@ function Editor({ controller }: { controller: SettingsController }) {
         ) : (
           <>
             <Field label="发信认证">
-              <select
+              <Choice disabled={s.busy || !s.online}
                 value={ep.credential ?? "incoming"}
-                onChange={(v) => endpoint(side, { credential: v.target.value })}
+                onValueChange={(value) => endpoint(side, { credential: value })}
               >
                 <option value="incoming" disabled={plugin}>
                   与收信共用{preset ? CREDENTIAL_LABEL[preset.credential] : "密码"}
                 </option>
                 <option value="separate">使用独立密码</option>
-              </select>
+              </Choice>
             </Field>
             {ep.credential === "separate" &&
               SecretInput({
@@ -281,15 +282,15 @@ function Editor({ controller }: { controller: SettingsController }) {
       <fieldset disabled={s.busy || !s.online}>
         {!e.id && (
           <Field label="接入方式">
-            <select
+            <Choice disabled={s.busy || !s.online}
               value={plugin ? "plugin" : "imap"}
-              onChange={(v) =>
+              onValueChange={(value) =>
                 controller.editAccount({
                   ...e,
                   draft: {
                     ...draft,
                     incoming:
-                      v.target.value === "plugin"
+                      value === "plugin"
                         ? {
                             kind: "plugin",
                             provider: providers[0]?.id ?? "",
@@ -297,7 +298,7 @@ function Editor({ controller }: { controller: SettingsController }) {
                           }
                         : newDraft().incoming,
                     outgoing:
-                      v.target.value === "plugin"
+                      value === "plugin"
                         ? { kind: "plugin", provider: providers[0]?.id ?? "" }
                         : newDraft().outgoing,
                   },
@@ -309,7 +310,7 @@ function Editor({ controller }: { controller: SettingsController }) {
               <option value="plugin" disabled={!providers.length}>
                 已安装的邮箱服务扩展
               </option>
-            </select>
+            </Choice>
           </Field>
         )}
         {!e.id && !plugin && <ProviderPills controller={controller} />}
@@ -373,11 +374,11 @@ function Editor({ controller }: { controller: SettingsController }) {
         {plugin ? (
           <>
             <Field label="邮箱服务扩展">
-              <select
+              <Choice disabled={s.busy || !s.online}
                 value={draft.incoming.provider ?? ""}
-                onChange={(v) =>
+                onValueChange={(value) =>
                   edit({
-                    incoming: { ...draft.incoming, provider: v.target.value },
+                    incoming: { ...draft.incoming, provider: value },
                     outgoing: draft.outgoing,
                   })
                 }
@@ -392,7 +393,7 @@ function Editor({ controller }: { controller: SettingsController }) {
                     {p.name} · {p.provider_registered ? "可探测" : "尚未就绪"}
                   </option>
                 ))}
-              </select>
+              </Choice>
             </Field>
             <p className="group-note">
               填写扩展中已经存在的邮箱地址。探测只读取远程状态，不会创建邮箱或保存绑定。
@@ -502,12 +503,12 @@ function Editor({ controller }: { controller: SettingsController }) {
             {draft.outgoing && (
               <>
                 <Field label="发信方式">
-                  <select
+                  <Choice disabled={s.busy || !s.online}
                     value={draft.outgoing.kind}
-                    onChange={(v) =>
+                    onValueChange={(value) =>
                       edit({
                         outgoing:
-                          v.target.value === "smtp"
+                          value === "smtp"
                             ? {
                                 ...newDraft().outgoing!,
                                 ...(preset
@@ -526,11 +527,11 @@ function Editor({ controller }: { controller: SettingsController }) {
                       })
                     }
                   >
-                    <option value="smtp">SMTP</option>
+                    <option value="smtp">标准发信（SMTP）</option>
                     <option value="plugin" disabled={!providers.length}>
                       邮箱服务扩展
                     </option>
-                  </select>
+                  </Choice>
                 </Field>
                 {draft.outgoing.kind === "smtp" ? (
                   <>
@@ -539,10 +540,10 @@ function Editor({ controller }: { controller: SettingsController }) {
                   </>
                 ) : (
                   <Field label="发信服务扩展">
-                    <select
+                    <Choice disabled={s.busy || !s.online}
                       value={draft.outgoing.provider ?? ""}
-                      onChange={(v) =>
-                        endpoint("outgoing", { provider: v.target.value })
+                      onValueChange={(value) =>
+                        endpoint("outgoing", { provider: value })
                       }
                     >
                       {!providers.some(
@@ -558,7 +559,7 @@ function Editor({ controller }: { controller: SettingsController }) {
                           {p.provider_registered ? "可探测" : "尚未就绪"}
                         </option>
                       ))}
-                    </select>
+                    </Choice>
                   </Field>
                 )}
               </>

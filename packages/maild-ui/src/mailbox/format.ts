@@ -1,4 +1,5 @@
-export const UI_LOCALE = 'zh-CN';
+import { UI_LOCALE } from '../i18n';
+export { UI_LOCALE } from '../i18n';
 
 /** JavaScript `Date` 可精确表示的正向 Unix 秒上限（`8.64e15` 毫秒）。 */
 export const MAX_SAFE_UNIX_SECS = 8_640_000_000_000;

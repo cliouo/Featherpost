@@ -1,3 +1,4 @@
+import { folderLabel } from "../i18n";
 import type {
   FolderIdentity,
   MailBridge,
@@ -111,18 +112,22 @@ function boundedSet<K, V>(cache: Map<K, V>, key: K, value: V, limit: number) {
   while (cache.size > limit) cache.delete(cache.keys().next().value as K);
 }
 export function queryOf(scope: Scope): MailboxQuery {
+  if (scope.kind === "unread") return { ...queryOf(scope.base), seen: false };
   if (scope.kind === "search") return { ...scope.query, search: true };
   if (scope.kind === "folder")
     return { account: scope.account, folder: scope.folder };
-  return scope.name === "inbox"
+  const filters = scope.name === "inbox"
     ? { role: "inbox" }
     : scope.name === "unread"
       ? { seen: false }
       : scope.name === "starred"
         ? { flagged: true }
         : {};
+  return { ...filters, ...(scope.group ? { accounts: scope.group.accounts } : {}) };
 }
 export function scopeTitle(scope: Scope) {
+  if (scope.kind === "unread") return scopeTitle(scope.base);
+  if (scope.kind === "smart" && scope.group) return `${scope.group.name} · 收件箱`;
   return scope.kind === "folder"
     ? scope.title
     : scope.kind === "search"
@@ -302,7 +307,8 @@ export class MailboxController {
         if (folders.some((f) => f.account !== account))
           throw new Error("scope mismatch");
         this.folders.set(account, folders);
-        const current = this.state.scope;
+        const current = this.state.scope.kind === "unread"
+          ? this.state.scope.base : this.state.scope;
         this.patch(
           current.kind === "folder" && current.account === account
             ? {
@@ -365,13 +371,27 @@ export class MailboxController {
     this.previousSearch = null;
     this.changeScope({ kind: "smart", name });
   }
+  selectGroup(id: string, name: string, accounts: string[], unread = false) {
+    this.previousSearch = null;
+    const base = { kind: "smart" as const, name: "inbox" as const, group: { id, name, accounts } };
+    this.changeScope(unread ? { kind: "unread", base } : base);
+  }
+  /** List filters use listMessageSummaries, never the full-text search protocol. */
+  setUnreadFilter(unread: boolean) {
+    const current = this.state.scope;
+    if (current.kind === "search") return;
+    const base = current.kind === "unread" ? current.base : current;
+    this.previousSearch = null;
+    this.changeScope(unread ? { kind: "unread", base }
+      : base.kind === "smart" && base.name === "unread" ? { kind: "smart", name: "all" } : base);
+  }
   selectFolder(folder: UiFolder) {
     this.previousSearch = null;
     this.changeScope({
       kind: "folder",
       account: folder.account,
       folder: folder.name,
-      title: folder.display_name,
+      title: folderLabel(folder),
     });
   }
   private changeScope(scope: Scope) {
@@ -380,15 +400,16 @@ export class MailboxController {
     this.remoteRequests.invalidate();
     this.clearSelection();
     const cached = this.rows.get(scopeKey(scope));
-    const account = scope.kind === "folder" ? scope.account : "";
+    const source = scope.kind === "unread" ? scope.base : scope;
+    const account = source.kind === "folder" ? source.account : "";
     const folders = this.foldersOf(account);
     this.patch({
       scope,
       account,
       folders,
       folder:
-        scope.kind === "folder"
-          ? (folders.find((f) => f.name === scope.folder) ?? null)
+        source.kind === "folder"
+          ? (folders.find((f) => f.name === source.folder) ?? null)
           : null,
       rows: cached?.rows ?? [],
       total: cached?.total ?? 0,
@@ -506,7 +527,7 @@ export class MailboxController {
         kind: "folder",
         account,
         folder: message.folder,
-        title: source?.display_name ?? message.folder,
+        title: folderLabel(source, message.folder),
       });
       boundedSet(this.details, messageKey(message), message, 24);
       this.openRow(message);
@@ -613,6 +634,7 @@ export class MailboxController {
         page.messages.some(
           (r) =>
             (q.account && r.account !== q.account) ||
+            (q.accounts && !q.accounts.includes(r.account)) ||
             (q.folder && r.folder !== q.folder),
         )
       )
@@ -654,13 +676,7 @@ export class MailboxController {
    */
   syncNow = async () => {
     if (this.state.snapshot.phase !== "online" || this.stopped || this.state.syncing) return;
-    const scope = this.state.scope;
-    const account =
-      scope.kind === "folder"
-        ? scope.account
-        : scope.kind === "search"
-          ? scope.query.account
-          : undefined;
+    const account = queryOf(this.state.scope).account;
     this.patch({ syncing: true, syncError: null });
     let syncError: string | null = null;
     try {
@@ -686,7 +702,7 @@ export class MailboxController {
     if (scope.query.account)
       return [{ account: scope.query.account, folder: scope.query.folder ?? inbox(scope.query.account) }];
     return this.state.snapshot.accounts
-      .filter((a) => a.state === "online")
+      .filter((a) => a.state === "online" && (!scope.query.accounts || scope.query.accounts.includes(a.account)))
       .map((a) => ({ account: a.account, folder: inbox(a.account) }));
   }
   get canSearchServer() {

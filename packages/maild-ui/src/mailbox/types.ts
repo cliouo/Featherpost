@@ -5,6 +5,8 @@ import type {
   UiPage,
 } from "../bridge/types";
 export interface MailboxQuery {
+  /** Client-side scope. Studio expands it into ordinary single-account queries before IPC. */
+  accounts?: string[];
   search?: boolean;
   account?: string;
   folder?: string;
@@ -95,9 +97,12 @@ export interface MailboxBridge {
   fetchServerMessage?(account: string, folder: string, uid: string): Promise<UiMessage | null>;
 }
 export type SmartFolder = "inbox" | "all" | "unread" | "starred";
+export type ListScope =
+  | { kind: "smart"; name: SmartFolder; group?: { id: string; name: string; accounts: string[] } }
+  | { kind: "folder"; account: string; folder: string; title: string };
 export type Scope =
-  | { kind: "smart"; name: SmartFolder }
-  | { kind: "folder"; account: string; folder: string; title: string }
+  | ListScope
+  | { kind: "unread"; base: ListScope }
   | { kind: "search"; query: MailboxQuery };
 export type MailAction =
   | { action: "mark"; flag: "seen" | "flagged"; value: boolean }

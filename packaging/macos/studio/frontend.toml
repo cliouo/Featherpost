@@ -1,0 +1,20 @@
+schema_version = 2
+protocol_version = 1
+id = "dev.featherpost.studio"
+name = "Featherpost Studio"
+version = "0.3.3"
+lifecycle = "on_demand"
+capabilities = ["inbox", "message", "compose", "settings", "background"]
+permissions = [
+  "drafts_read",
+  "drafts_write",
+  "mailbox_write",
+  "accounts_manage",
+  "addresses_manage",
+  "plugins_manage",
+  "notifications_read",
+]
+
+[launch]
+kind = "macos_application"
+path = "Featherpost Studio.app"

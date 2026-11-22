@@ -1,3 +1,4 @@
+import { folderLabel, UI_LOCALE } from "../i18n";
 import { useEffect, useState } from "react";
 
 import type { UiAccount, UiFolder } from "../bridge/types";
@@ -23,7 +24,7 @@ function sortFolders(folders: UiFolder[]): UiFolder[] {
       const ra = ROLE_ORDER.indexOf(a.role);
       const rb = ROLE_ORDER.indexOf(b.role);
       if (ra !== rb) return (ra === -1 ? 99 : ra) - (rb === -1 ? 99 : rb);
-      return a.display_name.localeCompare(b.display_name, "zh-CN");
+      return folderLabel(a).localeCompare(folderLabel(b), UI_LOCALE);
     });
 }
 
@@ -201,8 +202,8 @@ export function FolderNav({
                 return (
                   <button
                     key={folder.name}
-                    aria-label={`${controller.label(folder.account)} · ${folder.display_name}`}
-                    title={folder.display_name}
+                    aria-label={`${controller.label(folder.account)} · ${folderLabel(folder)}`}
+                    title={folderLabel(folder)}
                     type="button"
                     className={`nav-item${active ? " active" : ""}`}
                     aria-current={active ? "page" : undefined}
@@ -212,7 +213,7 @@ export function FolderNav({
                     }}
                   >
                     <Icon name={ROLE_ICON[folder.role] ?? "folder"} />
-                    <span className="nav-text">{folder.display_name}</span>
+                    <span className="nav-text">{folderLabel(folder)}</span>
                     {folder.unseen > 0 && (
                       <span className="counter count-badge">
                         {folder.unseen}

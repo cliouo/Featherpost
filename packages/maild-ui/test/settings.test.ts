@@ -15,6 +15,33 @@ const setup = () => {
   return { bridge, c };
 };
 describe("08-C management workflows", () => {
+  it("shows the saved account revision even when a list read still has the old profile", async () => {
+    const { bridge, c } = setup();
+    await c.load();
+    const saved = {
+      ...account(),
+      revision: 3,
+      display_name: "Renamed mailbox",
+    };
+    bridge.saveAccount = async () => saved;
+    c.beginAccount(account());
+    c.editAccount({
+      ...c.store.getSnapshot().editor!,
+      draft: {
+        ...c.store.getSnapshot().editor!.draft,
+        display_name: saved.display_name,
+      },
+    });
+    await c.saveAccount();
+    expect(
+      c.store.getSnapshot().profiles?.find((p) => p.id === saved.id),
+    ).toEqual(saved);
+    c.beginAccount(c.store.getSnapshot().profiles![0]);
+    expect(c.store.getSnapshot().editor?.revision).toBe(saved.revision);
+    expect(c.store.getSnapshot().editor?.draft.display_name).toBe(
+      saved.display_name,
+    );
+  });
   it("preserves literal spaces in notification keywords", async () => {
     const { bridge, c } = setup();
     c.activate("maild.settings.notifications");
@@ -460,7 +487,10 @@ describe("08-C management workflows", () => {
     });
     await c.load();
     expect(c.store.getSnapshot().rules?.follow_system_timezone).toBe(true);
-    c.setRules({ ...c.store.getSnapshot().rules!, follow_system_timezone: false });
+    c.setRules({
+      ...c.store.getSnapshot().rules!,
+      follow_system_timezone: false,
+    });
     await c.saveRules();
     expect(bridge.savedRules.at(-1)?.follow_system_timezone).toBe(false);
   });

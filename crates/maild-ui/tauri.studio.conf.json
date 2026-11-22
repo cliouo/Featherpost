@@ -1,0 +1,11 @@
+{
+  "productName": "Featherpost Studio",
+  "identifier": "dev.featherpost.studio",
+  "version": "0.3.3",
+  "build": {
+    "devUrl": "http://127.0.0.1:1421",
+    "frontendDist": "../../packages/featherpost-studio/dist",
+    "beforeDevCommand": "pnpm --dir ../../packages/featherpost-studio dev",
+    "beforeBuildCommand": "pnpm --dir ../../packages/featherpost-studio build"
+  }
+}

@@ -1,3 +1,4 @@
+import { folderLabel } from "../i18n";
 import { useState } from "react";
 import { useStore } from "../host/hooks";
 import { Dialog } from "./Dialog";
@@ -148,7 +149,7 @@ export function Actions({
                   <p key={JSON.stringify([r.account, r.folder])}>
                     {controller.label(r.account)} / {r.folder}：
                     {trash && trash.name !== r.folder
-                      ? `移至 ${trash.display_name}。`
+                      ? `移至 ${folderLabel(trash)}。`
                       : "标记为已删除，由服务器按邮件协议处理；本应用不提供撤销。"}
                   </p>
                 );
@@ -168,7 +169,7 @@ export function Actions({
                 <option value="">请选择</option>
                 {targets.map((f) => (
                   <option key={f.name} value={f.name}>
-                    {f.display_name}
+                    {folderLabel(f)}
                   </option>
                 ))}
               </select>

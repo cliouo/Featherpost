@@ -326,7 +326,9 @@ export class SettingsController {
         }
       : {
           ...blankWizard(),
-          provider: preset?.id ?? (providerId === CUSTOM_PROVIDER ? CUSTOM_PROVIDER : null),
+          provider:
+            preset?.id ??
+            (providerId === CUSTOM_PROVIDER ? CUSTOM_PROVIDER : null),
           expanded: providerId === CUSTOM_PROVIDER,
         };
     this.store.patch({
@@ -358,7 +360,9 @@ export class SettingsController {
     void this.load();
   }
   private setWizard(patch: Partial<AccountWizard>) {
-    this.store.patch({ wizard: { ...this.store.getSnapshot().wizard, ...patch } });
+    this.store.patch({
+      wizard: { ...this.store.getSnapshot().wizard, ...patch },
+    });
   }
   /** 当前识别到的服务商预设（自定义或未识别时为 null）。 */
   get preset() {
@@ -373,7 +377,10 @@ export class SettingsController {
     if (!preset && id !== CUSTOM_PROVIDER) return;
     const domain = domainOf(e.draft.address);
     const servers = preset
-      ? serversFor(preset, preset.domains.includes(domain ?? "") ? domain : null)
+      ? serversFor(
+          preset,
+          preset.domains.includes(domain ?? "") ? domain : null,
+        )
       : null;
     this.editAccount({
       ...e,
@@ -413,10 +420,17 @@ export class SettingsController {
         const match = matchProvider(address);
         const preset = match ?? providerById(wizard.provider);
         if (match && match.id !== wizard.provider)
-          wizard = { ...wizard, provider: match.id, expanded: false, discovered: null };
-        if (preset) draft = applyServers(draft, serversFor(preset, domainOf(address)));
+          wizard = {
+            ...wizard,
+            provider: match.id,
+            expanded: false,
+            discovered: null,
+          };
+        if (preset)
+          draft = applyServers(draft, serversFor(preset, domainOf(address)));
       }
-    } else if (!e.id && !wizard.nameTouched) draft.display_name = address.trim();
+    } else if (!e.id && !wizard.nameTouched)
+      draft.display_name = address.trim();
     this.editAccount({ ...e, draft });
     if (wizard !== s.wizard) this.store.patch({ wizard });
   }
@@ -442,14 +456,18 @@ export class SettingsController {
         patch.security,
       );
     this.editAccount({ ...e, draft: { ...e.draft, [side]: next } });
-    if (SERVER_KEYS.some((key) => key in patch)) this.setWizard({ manual: true });
+    if (SERVER_KEYS.some((key) => key in patch))
+      this.setWizard({ manual: true });
   }
   /** 密码 / 授权码：对应用密码类服务商自动去掉分组空格并温和提示。 */
   setSecret(role: "incoming" | "outgoing", raw: string) {
     const e = this.store.getSnapshot().editor;
     if (!e) return;
     const preset = this.preset;
-    const { value, changed } = cleanSecret(raw, preset?.stripSecretSpaces ?? false);
+    const { value, changed } = cleanSecret(
+      raw,
+      preset?.stripSecretSpaces ?? false,
+    );
     this.editAccount({ ...e, secrets: { ...e.secrets, [role]: value } });
     if (changed && preset)
       this.setWizard({
@@ -464,7 +482,13 @@ export class SettingsController {
   async discover() {
     const s = this.store.getSnapshot(),
       e = s.editor;
-    if (!e || s.busy || s.wizard.discovering || e.draft.incoming.kind !== "imap") return;
+    if (
+      !e ||
+      s.busy ||
+      s.wizard.discovering ||
+      e.draft.incoming.kind !== "imap"
+    )
+      return;
     const address = e.draft.address.trim();
     const domain = domainOf(address);
     if (!domain) {
@@ -486,7 +510,11 @@ export class SettingsController {
         found = null;
       }
     const now = this.store.getSnapshot().editor;
-    if (generation !== this.generation || !now || now.draft.address.trim() !== address) {
+    if (
+      generation !== this.generation ||
+      !now ||
+      now.draft.address.trim() !== address
+    ) {
       this.setWizard({ discovering: false });
       return;
     }
@@ -503,7 +531,10 @@ export class SettingsController {
           }
         : fallback;
     const servers = found
-      ? { incoming: pick(found.incoming, guess.incoming), outgoing: pick(found.outgoing, guess.outgoing) }
+      ? {
+          incoming: pick(found.incoming, guess.incoming),
+          outgoing: pick(found.outgoing, guess.outgoing),
+        }
       : guess;
     this.editAccount({ ...now, draft: applyServers(now.draft, servers) });
     this.setWizard({
@@ -622,7 +653,13 @@ export class SettingsController {
     const ok = await this.write(
       () => this.bridge.saveAccount(copy(this.cleaned(e))),
       (p) => {
+        // The mutation response is authoritative; a concurrent list read may still
+        // contain the previous revision while the daemon refreshes its projection.
+        const profiles = this.store.getSnapshot().profiles ?? [];
         this.store.patch({
+          profiles: profiles.some((profile) => profile.id === p.id)
+            ? profiles.map((profile) => (profile.id === p.id ? p : profile))
+            : [...profiles, p],
           editor: null,
           probe: null,
           notice: `${p.display_name || p.address} 已保存。连接状态以账户列表为准。`,
@@ -635,7 +672,6 @@ export class SettingsController {
       if (now === e)
         this.store.patch({ editor: { ...e, secrets: {} }, probe: null });
     }
-    if (ok) await this.loadKeepingNotice();
   }
   confirmAccount(p: AccountProfile, remove: boolean) {
     this.ask(

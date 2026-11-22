@@ -20,6 +20,7 @@ default = []
 # 交付形态：把 packages/maild-ui/dist 编进二进制。tauri 的 codegen 只在这个形态检查前端产物
 # 是否存在，所以 `cargo test --workspace` 的默认形态永远不需要 Node（ADR-0031 决策 2）。
 embedded = ["tauri/custom-protocol"]
+studio = []
 
 [dependencies]
 maild-brand = { path = "../maild-brand" }

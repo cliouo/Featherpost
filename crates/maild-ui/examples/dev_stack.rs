@@ -476,11 +476,12 @@ password = "dev"
     // 装前端包：直接放进受管目录（等价于 `<cli_ctl> plugin install --frontend crates/maild-ui/package`）。
     let package = paths.frontend_dir.join(FRONTEND_ID);
     secure_dir(&package);
-    std::fs::copy(
+    let manifest = std::fs::read_to_string(
         Path::new(env!("CARGO_MANIFEST_DIR")).join("package/frontend.toml"),
-        package.join("frontend.toml"),
     )
-    .unwrap();
+    .unwrap()
+    .replace(maild_brand::BUNDLED_FRONTEND_ID, FRONTEND_ID);
+    std::fs::write(package.join("frontend.toml"), manifest).unwrap();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;

@@ -4,6 +4,9 @@
   "license": "MIT OR Apache-2.0",
   "description": "Featherpost workspace root: the default frontend webview lives in packages/maild-ui",
   "scripts": {
+    "studio:dev": "pnpm --dir packages/featherpost-studio dev",
+    "studio:build": "pnpm --dir packages/featherpost-studio build",
+    "studio:macos": "bash packaging/macos/build-studio.sh",
     "ui:dev": "pnpm --dir packages/maild-ui dev",
     "ui:build": "pnpm --dir packages/maild-ui build",
     "ui:test": "pnpm --dir packages/maild-ui test",

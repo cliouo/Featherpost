@@ -1,0 +1,55 @@
+import * as Select from "@radix-ui/react-select";
+import { Children, Fragment, isValidElement, useEffect, useState, type ReactNode } from "react";
+import type { ChoiceProps } from "../../maild-ui/src/settings/Choice";
+
+interface Option { value: string; label: ReactNode; text: string; disabled: boolean }
+function textOf(node: ReactNode): string {
+  return Children.toArray(node).map((child) => isValidElement<{ children?: ReactNode }>(child)
+    ? textOf(child.props.children) : String(child)).join("");
+}
+function optionsOf(children: ReactNode): Option[] {
+  return Children.toArray(children).flatMap((child): Option[] => {
+    if (!isValidElement<{ children?: ReactNode; value?: string; disabled?: boolean }>(child)) return [];
+    if (child.type === Fragment) return optionsOf(child.props.children);
+    if (child.type !== "option") return [];
+    const text = textOf(child.props.children);
+    return [{ value: child.props.value ?? text, label: child.props.children, text, disabled: !!child.props.disabled }];
+  });
+}
+
+/** Radix owns focus, typeahead, keyboard selection, dismissal and popup collision handling. */
+export function StudioSelect({ value, onValueChange, children, disabled, className, ...label }: ChoiceProps) {
+  const items = optionsOf(children);
+  const selected = items.findIndex((item) => item.value === value);
+  const [open, setOpen] = useState(false);
+  useEffect(() => { if (disabled) setOpen(false); }, [disabled]);
+  return (
+    <Select.Root value={selected < 0 ? "" : `option-${selected}`} open={open && !disabled}
+      onOpenChange={(next) => setOpen(!disabled && next)} disabled={disabled}
+      onValueChange={(key) => {
+        const item = items.find((_, index) => key === `option-${index}`);
+        if (!disabled && item && !item.disabled) onValueChange(item.value);
+      }}>
+      <Select.Trigger {...label} className={`studio-picker ${className ?? ""}`}>
+        <Select.Value placeholder="请选择">{items[selected]?.label ?? "请选择"}</Select.Value>
+        <Select.Icon className="studio-picker-chevron">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="m4 6 4 4 4-4" /></svg>
+        </Select.Icon>
+      </Select.Trigger>
+      <Select.Portal>
+        <Select.Content className="studio-picker-menu" position="popper" sideOffset={6} collisionPadding={12}>
+          <Select.ScrollUpButton className="studio-picker-scroll" aria-label="向上滚动">⌃</Select.ScrollUpButton>
+          <Select.Viewport className="studio-picker-options">
+            {items.map((item, index) => (
+              <Select.Item className="studio-picker-option" key={item.value} value={`option-${index}`} disabled={item.disabled} textValue={item.text}>
+                <Select.ItemText>{item.label}</Select.ItemText>
+                <Select.ItemIndicator className="studio-picker-check" aria-hidden="true">✓</Select.ItemIndicator>
+              </Select.Item>
+            ))}
+          </Select.Viewport>
+          <Select.ScrollDownButton className="studio-picker-scroll" aria-label="向下滚动">⌄</Select.ScrollDownButton>
+        </Select.Content>
+      </Select.Portal>
+    </Select.Root>
+  );
+}

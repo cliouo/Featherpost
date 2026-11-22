@@ -63,13 +63,33 @@ fn write_config(paths: &AppPaths) {
 
 /// 把仓库里的 `package/frontend.toml` 原样装进受管目录——测试跑的就是要发布的那份声明。
 fn install_frontend_package(paths: &AppPaths) {
+    // Studio is installed beside the legacy package, not in place of it.
+    if FRONTEND_ID != maild_brand::BUNDLED_FRONTEND_ID {
+        let bundled = paths.frontend_dir.join(maild_brand::BUNDLED_FRONTEND_ID);
+        std::fs::create_dir_all(&bundled).unwrap();
+        std::fs::copy(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("package/frontend.toml"),
+            bundled.join("frontend.toml"),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&bundled, std::fs::Permissions::from_mode(0o700)).unwrap();
+            std::fs::set_permissions(bundled.join("frontend.toml"), std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+    }
     let package = paths.frontend_dir.join(FRONTEND_ID);
     std::fs::create_dir_all(&package).unwrap();
     let manifest = std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("package/frontend.toml"),
     )
     .unwrap();
-    std::fs::write(package.join("frontend.toml"), manifest).unwrap();
+    std::fs::write(
+        package.join("frontend.toml"),
+        manifest.replace(maild_brand::BUNDLED_FRONTEND_ID, FRONTEND_ID),
+    )
+    .unwrap();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
@@ -561,8 +581,8 @@ async fn the_shell_binds_as_its_frontend_and_projects_the_mailbox() {
     assert_eq!(info.id, FRONTEND_ID);
     // 测试配置仍写旧的 `default = "builtin-egui"`：读取时迁移为内置 Tauri 前端（ADR-0039），
     // 端到端钉住升级用户不必改 TOML 就会打开新界面。
-    assert!(info.is_default);
-    assert_eq!(info.default_frontend, FRONTEND_ID);
+    assert_eq!(info.is_default, FRONTEND_ID == maild_brand::BUNDLED_FRONTEND_ID);
+    assert_eq!(info.default_frontend, maild_brand::BUNDLED_FRONTEND_ID);
     for word in [
         "mailbox_write",
         "accounts_manage",

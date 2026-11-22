@@ -11,6 +11,8 @@ pub mod compose_files;
 pub mod documents;
 pub mod html;
 pub mod instance_lock;
+#[cfg(all(target_os = "macos", feature = "studio"))]
+mod macos_locale;
 #[cfg(target_os = "macos")]
 mod macos_window;
 pub mod mailbox;
@@ -62,7 +64,10 @@ pub fn run(bridge: Arc<Bridge>) -> Result<(), tauri::Error> {
     let for_exit = bridge.clone();
     let documents_for_window = documents.clone();
     let base_for_window = base.clone();
-    let app = tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(all(target_os = "macos", feature = "studio"))]
+    let builder = builder.menu(macos_locale::menu);
+    let app = builder
         .manage(AppState {
             bridge,
             documents,
@@ -78,6 +83,10 @@ pub fn run(bridge: Arc<Bridge>) -> Result<(), tauri::Error> {
         .register_asynchronous_uri_scheme_protocol(SCHEME, |context, request, responder| {
             let app = context.app_handle().clone();
             let path = request.uri().path().to_string();
+            let dark = request
+                .uri()
+                .query()
+                .is_some_and(|q| q.split('&').any(|pair| pair == "appearance=dark"));
             // 诊断：只记路由形状与令牌前 8 位，不记 URL 全文。
             eprintln!(
                 "[maild-ui] 协议请求 {} {}",
@@ -88,7 +97,7 @@ pub fn run(bridge: Arc<Bridge>) -> Result<(), tauri::Error> {
                 let state = app.state::<AppState>();
                 let response = match route(&path) {
                     Route::Doc(token) => match state.documents.get(&token) {
-                        Some(document) => document_response(&document),
+                        Some(document) => document_response(&document, dark),
                         None => not_found(),
                     },
                     Route::Part(token, part_index) => {
