@@ -163,7 +163,40 @@ export interface UiFrontendInfo {
 export type UiErrorCode = 'offline' | 'denied' | 'not_found' | 'invalid' | 'failed' | 'conflict' | 'limit' | 'locked' | 'incompatible';
 export interface UiError {
   code: UiErrorCode;
+  /**
+   * ADR-0048 决策 3：Rust 侧的稳定原因码，按它取当前界面语言的文案（`bridge/reasons.ts`）。
+   * webview 自己构造的错误没有它，`message` 已是当前语言。
+   */
+  reason?: string;
+  /** Rust 侧是中文兜底原文；webview 侧构造时是已成文的提示。 */
   message: string;
+}
+
+/** ADR-0048：daemon 解析后的有序语言偏好；`null` = 尚未取到或后台不提供，回落基础语言。 */
+export interface UiLocale {
+  effective: string[] | null;
+}
+
+export interface UiLocalePreference {
+  mode: 'system' | 'explicit';
+  languages: string[];
+  effective: string[];
+  /** 偏好文件停摆：读到的是缺省偏好，写会被拒绝。 */
+  persisted: boolean;
+}
+
+export type UiLocaleUpdate = { mode: 'system' } | { mode: 'explicit'; languages: string[] };
+
+/** 语言偏好（ADR-0048）。读写都经桥；协商在 `@featherpost/i18n`。 */
+export interface LocaleBridge {
+  /** 壳手里当前的偏好列表，不发请求。 */
+  current(): Promise<UiLocale>;
+  /** `maild://locale`：偏好列表变了。 */
+  subscribe(handler: (locale: UiLocale) => void): Promise<() => void>;
+  /** 设置页显示的模式与显式列表（发请求；老后台抛 `locale_unsupported`）。 */
+  preference(): Promise<UiLocalePreference>;
+  /** 需要 `settings_write`。 */
+  setPreference(update: UiLocaleUpdate): Promise<UiLocalePreference>;
 }
 
 export type OpenIntent =
@@ -204,6 +237,8 @@ export interface MailBridge {
   setReadingPolicy(patch: UiReadingPolicyPatch): Promise<UiReadingPolicy>;
   /** 可选：经宿主打开固定的 https 帮助页（`ui_open_external_url`）；不用于邮件正文链接。 */
   openExternalUrl?(url: string): Promise<void>;
+  /** 可选：语言偏好（ADR-0048）。没有它时界面停在基础语言，设置页不显示语言选择。 */
+  locale?: LocaleBridge;
 }
 
 export function isUiError(value: unknown): value is UiError {

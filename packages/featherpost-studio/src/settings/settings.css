@@ -257,6 +257,9 @@ body[data-studio-settings] .studio > .studio-workspace {
 .system .studio-mini-reader b { background: #babac7; }
 .system .studio-mini-reader i { background: #4c4c5a; }
 .density-label { margin-top: 30px; padding-top: 26px; border-top: 1px solid var(--studio-soft-border); }
+.language-label { margin-top: 30px; padding-top: 26px; border-top: 1px solid var(--studio-soft-border); }
+.studio-language { max-width: 280px; }
+.studio-language .studio-appearance-note { border-top: 0; margin-top: 10px; padding-top: 0; }
 .studio-density-options { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .studio-density-option { display: grid; grid-template-columns: 130px minmax(0,1fr); gap: 10px; padding: 16px 18px 12px; border: 1px solid var(--studio-border); border-radius: 8px; cursor: pointer; min-width: 0; }
 .studio-density-option.selected { border-color: var(--studio-mark); box-shadow: 0 0 0 3px var(--studio-tint); }

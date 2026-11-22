@@ -17,6 +17,7 @@ import type { Host } from "../../../maild-ui/src/host/host";
 import { useExternal, useStore } from "../../../maild-ui/src/host/hooks";
 import type { Bundle, ViewProps } from "../../../maild-ui/src/host/types";
 import { Appearance } from "./Appearance";
+import { LanguageController } from "../../../maild-ui/src/settings/language";
 import { Icon } from "../../../maild-ui/src/app/Icon";
 import { BRAND } from "../../../maild-ui/src/brand";
 
@@ -29,33 +30,6 @@ function plural(count: number, one: () => string, other: () => string) {
   return new Intl.PluralRules(uiLocale()).select(count) === "one"
     ? one()
     : other();
-}
-
-/**
- * Studio 自带分区与模块的名字。注册表在登记时复制贡献描述符，`title` 定格为登记时的语言；
- * 设置页渲染时按 ID 重新取消息，切换界面语言立即生效。第三方贡献沿用它登记的 `title`。
- */
-const sectionTitles: Record<string, () => string> = {
-  "maild.settings.accounts": m.studio_settings_section_accounts,
-  "maild.settings.notifications": m.studio_settings_section_notifications,
-  "maild.settings.addresses": m.studio_settings_section_addresses,
-  "maild.settings.appearance": m.studio_settings_section_appearance,
-  "maild.settings.connection": m.studio_settings_section_connection,
-  "maild.settings.extensions": m.studio_settings_section_extensions,
-  "maild.mailbox.reading-privacy": m.studio_settings_section_reading_privacy,
-};
-const moduleTitles: Record<string, () => string> = {
-  "maild.settings": m.studio_settings_title,
-  "maild.mailbox": m.studio_module_mailbox,
-};
-function localTitle(
-  table: Record<string, () => string>,
-  id: string,
-  registered: string,
-): string {
-  return Object.prototype.hasOwnProperty.call(table, id)
-    ? table[id]()
-    : registered;
 }
 
 /** 各设置分区的说明；存消息函数，渲染时按当前语言取值。 */
@@ -92,6 +66,10 @@ export function settingsModule(
   host: Host,
   controller = new SettingsController(host.bridge.settings),
 ): Bundle {
+  // ADR-0048：语言选择与默认前端共用一个控制器；偏好归 daemon。
+  const language = new LanguageController(host.bridge.locale);
+  language.start();
+
   function Connection(_props: ViewProps) {
     useUiLocale();
     const { snapshot, frontendInfo, frontendInfoError } = useStore(host.state);
@@ -215,7 +193,7 @@ export function settingsModule(
           return (
             <Row
               key={module.moduleId}
-              title={localTitle(moduleTitles, module.moduleId, module.title)}
+              title={module.title}
               description={`${module.moduleId}${
                 enabled
                   ? ` · ${plural(
@@ -240,7 +218,7 @@ export function settingsModule(
                   role="switch"
                   aria-checked={enabled}
                   aria-label={m.studio_extensions_enable({
-                    module: localTitle(moduleTitles, module.moduleId, module.title),
+                    module: module.title,
                   })}
                   className="toggle"
                   onClick={() =>
@@ -319,7 +297,7 @@ export function settingsModule(
                   <button key={section.id} type="button" className={section.id === active?.id ? "active" : ""}
                     disabled={state.closeLocked} aria-current={section.id === active?.id ? "page" : undefined}
                     onClick={() => navigate(section.id)}>
-                    <span>{localTitle(sectionTitles, section.id, section.title)}</span>
+                    <span>{section.title}</span>
                     {section.id === "maild.settings.accounts" && state.profiles !== null && <small>{state.profiles.length}</small>}
                   </button>
                 ))}
@@ -334,7 +312,7 @@ export function settingsModule(
             <div className="page-column">
               <div className="studio-settings-heading">
                 <div>
-                  <div className="studio-settings-title"><h2>{active ? localTitle(sectionTitles, active.id, active.title) : m.studio_settings_title()}</h2>
+                  <div className="studio-settings-title"><h2>{active ? active.title : m.studio_settings_title()}</h2>
                     {accounts && state.profiles !== null && <span>{plural(state.profiles.length, () => m.studio_mailbox_count_one({ count: state.profiles!.length }), () => m.studio_mailbox_count_other({ count: state.profiles!.length }))}</span>}
                   </div>
                   {active && Object.prototype.hasOwnProperty.call(descriptions, active.id) && <p>{descriptions[active.id]()}</p>}
@@ -403,16 +381,19 @@ export function settingsModule(
     if (intent.route === "settings") host.openView(SETTINGS_VIEW);
   });
 
-  // 注册表登记时复制描述符，标题在此时按当前界面语言取值、之后不再变化；
-  // Studio 自己渲染的分区与模块名另按 ID 查消息（见上方 localTitle），随语言切换。
+  // 标题写成 getter：注册表保留访问器（copyContribution），切换界面语言后按当前语言重新成文。
   return {
     moduleId: "maild.settings",
     apiVersion: 1,
-    title: m.studio_settings_title(),
+    get title() {
+      return m.studio_settings_title();
+    },
     views: [
       {
         id: SETTINGS_VIEW,
-        title: m.studio_settings_title(),
+        get title() {
+          return m.studio_settings_title();
+        },
         icon: "settings",
         role: "settings",
         order: 1000,
@@ -422,37 +403,49 @@ export function settingsModule(
     settings: [
       {
         id: "maild.settings.accounts",
-        title: m.studio_settings_section_accounts(),
+        get title() {
+          return m.studio_settings_section_accounts();
+        },
         order: 0,
         render: () => <Accounts controller={controller} />,
       },
       {
         id: "maild.settings.notifications",
-        title: m.studio_settings_section_notifications(),
+        get title() {
+          return m.studio_settings_section_notifications();
+        },
         order: 50,
         render: () => <Notifications controller={controller} />,
       },
       {
         id: "maild.settings.addresses",
-        title: m.studio_settings_section_addresses(),
+        get title() {
+          return m.studio_settings_section_addresses();
+        },
         order: 60,
         render: () => <Addresses controller={controller} />,
       },
       {
         id: "maild.settings.appearance",
-        title: m.studio_settings_section_appearance(),
+        get title() {
+          return m.studio_settings_section_appearance();
+        },
         order: 10,
-        render: () => <Appearance host={host} />,
+        render: () => <Appearance host={host} language={language} />,
       },
       {
         id: "maild.settings.connection",
-        title: m.studio_settings_section_connection(),
+        get title() {
+          return m.studio_settings_section_connection();
+        },
         order: 90,
         render: Connection,
       },
       {
         id: "maild.settings.extensions",
-        title: m.studio_settings_section_extensions(),
+        get title() {
+          return m.studio_settings_section_extensions();
+        },
         order: 70,
         render: () => (
           <ManagedExtensions controller={controller}>
@@ -465,6 +458,7 @@ export function settingsModule(
       stopIntent();
       stopGuard();
       stopState();
+      language.dispose();
       controller.dispose();
     },
   };
