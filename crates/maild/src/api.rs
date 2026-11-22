@@ -35,11 +35,12 @@ use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::accounts::Accounts;
 use crate::events::{
-    AccountState, AccountStateInfo, AgentLifecycleEvents, FrontendIntentQueued, MailFiltered,
-    MailMessage,
+    AccountState, AccountStateInfo, AgentLifecycleEvents, FrontendIntentQueued,
+    LocalePreferenceChanged, MailFiltered, MailMessage,
 };
 use crate::frontend::is_builtin_frontend;
 use crate::loader::plugin_config;
+use crate::locale_preference::{LocalePreference, LocalePreferenceRequest, SetError};
 use crate::notify::{NotificationAvailability, Notifier};
 use crate::plugin_identity::{
     IdentitySeam, PluginKind, Principal, RotateError, SharedPrincipal, VerifyError,
@@ -584,6 +585,11 @@ enum MethodPolicy {
 fn method_policy(method: &str) -> MethodPolicy {
     match method {
         "authenticate" | "whoami" | "getAgentInfo" => MethodPolicy::Open,
+        // ADR-0048 决策 2：语言偏好不敏感，后台插件也可能要按用户语言渲染自己的文字，
+        // 与 `getAgentInfo` 同级；改偏好与 setSettings / setReadingPolicy 同属应用级开关域，
+        // 不新增授权词。
+        "getLocalePreference" => MethodPolicy::Open,
+        "setLocalePreference" => MethodPolicy::Capability("settings_write"),
         "listAccounts" | "listFolders" | "listMessageSummaries" | "listMessages"
         | "getMessage" | "searchMessages" | "getThread" | "getSearchIndexStatus" => {
             // 换一个检索维度不构成新的权限面：读到的是 `listMessages` 已经能读的同一批
@@ -822,6 +828,8 @@ pub async fn dispatch_with_session(
         "readAttachment" => read_attachment(ctx, &request.params).await,
         "getReadingPolicy" => get_reading_policy(ctx).await,
         "setReadingPolicy" => set_reading_policy(ctx, &request.params).await,
+        "getLocalePreference" => get_locale_preference(ctx, &request.params).await,
+        "setLocalePreference" => set_locale_preference(ctx, &request.params).await,
         "searchMessages" => search_messages(ctx, &request.params).await,
         "getThread" => get_thread(ctx, &request.params).await,
         "getSearchIndexStatus" => search_index_status(ctx, &request.params).await,
@@ -1896,6 +1904,54 @@ async fn set_reading_policy(ctx: &Context, params: &Value) -> HandlerResult {
         PatchError::Io(reason) => internal(format!("阅读策略写入失败: {reason}")),
     })?;
     Ok(reading_policy_response(&policy, next))
+}
+
+fn locale_preference_unavailable() -> JsonRpcError {
+    JsonRpcError {
+        code: SERVICE_UNAVAILABLE,
+        message: "语言偏好服务未装配（daemon 未以配置文件方式启动）".into(),
+        data: None,
+    }
+}
+
+fn locale_view_response(view: crate::locale_preference::LocaleView) -> HandlerResult {
+    serde_json::to_value(view).map_err(|_| internal("语言偏好序列化失败".into()))
+}
+
+/// `getLocalePreference`：用户的有序语言偏好与解析结果（ADR-0048 决策 2）。`system` 模式下每次
+/// 都重读系统首选语言。
+async fn get_locale_preference(ctx: &Context, params: &Value) -> HandlerResult {
+    require_empty_params(params)?;
+    let preference = ctx
+        .get::<LocalePreference>()
+        .ok_or_else(locale_preference_unavailable)?;
+    locale_view_response(preference.view())
+}
+
+/// `setLocalePreference`：整包替换；任一项非法 `-32602` 不落盘，文件停摆 `-32001` 且不覆盖。
+/// 成功且 `effective` 变化时广播 [`LocalePreferenceChanged`]（→ `preferences/locale` 推送）。
+async fn set_locale_preference(ctx: &Context, params: &Value) -> HandlerResult {
+    let request: LocalePreferenceRequest = serde_json::from_value(params.clone())
+        .map_err(|error| invalid_params(&format!("语言偏好参数无效: {error}")))?;
+    crate::locale_preference::validate_request(&request)
+        .map_err(|reason| invalid_params(&format!("语言偏好参数无效: {reason}")))?;
+    let preference = ctx
+        .get::<LocalePreference>()
+        .ok_or_else(locale_preference_unavailable)?;
+    let before = preference.effective();
+    let view = preference.set(&request).map_err(|error| match error {
+        SetError::Invalid(reason) => invalid_params(&format!("语言偏好参数无效: {reason}")),
+        SetError::Unavailable(reason) => JsonRpcError {
+            code: SERVICE_UNAVAILABLE,
+            message: format!("语言偏好文件停摆，拒绝覆盖: {reason}"),
+            data: None,
+        },
+        SetError::Io(reason) => internal(format!("语言偏好写入失败: {reason}")),
+    })?;
+    if view.effective != before {
+        ctx.emit::<LocalePreferenceChanged>(view.effective.clone());
+    }
+    locale_view_response(view)
 }
 
 // —— 草稿（ADR-0034）——
@@ -4269,6 +4325,11 @@ fn agent_stopping_listener(
     }))
 }
 
+/// ADR-0048：`preferences/locale` 推给所有流式连接（`getLocalePreference` 是 `Open`）。
+fn locale_notification(effective: Vec<String>) -> String {
+    notification("preferences/locale", json!({ "effective": effective }))
+}
+
 fn frontend_intent_notification(principal: &Principal, target: &str) -> Option<String> {
     match principal {
         Principal::Frontend(id) if id == target => {
@@ -4416,6 +4477,13 @@ async fn serve_with_shutdown<R, W, F>(
             }
         }))
     };
+    // ADR-0048：语言偏好变化 → 所有流式连接（不按主体过滤，偏好本身对任何主体开放）。
+    let locale_listener = {
+        let tx = tx.clone();
+        ListenerGuard::new(ctx.on_emit::<LocalePreferenceChanged>(move |effective| {
+            let _ = tx.try_send(locale_notification(effective));
+        }))
+    };
     // 用户请求整体停机 → 已认证前端在排空窗口内刷盘草稿、撤下 Dock 图标后自行退出。
     let stopping_listener = agent_stopping_listener(&ctx, tx.clone(), session.shared_principal());
 
@@ -4494,6 +4562,7 @@ async fn serve_with_shutdown<R, W, F>(
     drop(account_listener);
     drop(intent_listener);
     drop(stopping_listener);
+    drop(locale_listener);
     // ADR-0021：连接关闭 → 按属主注销 provider 端点并让其未决调用立即失败。
     if let Some((plugin_id, endpoint)) = session.take_registered() {
         let removed = ctx
@@ -5220,6 +5289,9 @@ mod tests {
             ("authenticate", Open),
             ("whoami", Open),
             ("getAgentInfo", Open),
+            // ADR-0048 决策 2：读偏好任何主体可用；写偏好与 setSettings 同域，不新增授权词。
+            ("getLocalePreference", Open),
+            ("setLocalePreference", Capability("settings_write")),
             ("listAccounts", Capability("messages_read")),
             ("listFolders", Capability("messages_read")),
             // ADR-0030 决策 4：信箱写回有自己的词，既不是 messages_read 也不是 messages_send。
@@ -6947,6 +7019,213 @@ mod tests {
                 .unwrap();
             assert_eq!(error.code, SERVICE_UNAVAILABLE, "{method}");
         }
+    }
+
+    fn locale_ctx(dir: &std::path::Path) -> Context {
+        let ctx = Context::new();
+        ctx.provide::<LocalePreference>(Arc::new(LocalePreference::open_with_system(
+            dir.join(crate::locale_preference::PREFERENCE_FILE),
+            || vec!["en-US".into(), "zh-Hans-CN".into()],
+        )));
+        ctx
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn locale_preference_is_validated_as_a_whole_and_reports_persistence() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(crate::locale_preference::PREFERENCE_FILE);
+        let ctx = locale_ctx(dir.path());
+        let result = dispatch(&ctx, &request("getLocalePreference", json!({}), json!(1)))
+            .await
+            .result
+            .expect("成功");
+        assert_eq!(
+            result,
+            json!({
+                "preference": { "mode": "system", "languages": [] },
+                "effective": ["en-US", "zh-Hans-CN"],
+                "persisted": true
+            })
+        );
+        assert!(!path.exists(), "只读从不落盘");
+        let error = dispatch(&ctx, &request("getLocalePreference", json!({ "x": 1 }), json!(1)))
+            .await
+            .error
+            .unwrap();
+        assert_eq!(error.code, INVALID_PARAMS);
+
+        let nine = json!(["en", "fr", "de", "ja", "ko", "es", "it", "pt", "ru"]);
+        for params in [
+            json!({}),
+            json!({ "mode": "auto" }),
+            json!({ "mode": "explicit" }),
+            json!({ "mode": "explicit", "languages": [] }),
+            json!({ "mode": "explicit", "languages": ["en", "not a tag"] }),
+            json!({ "mode": "explicit", "languages": ["en_US"] }),
+            json!({ "mode": "explicit", "languages": ["en-abcdefgh-abcdefgh-abcdefgh-abcdef"] }),
+            json!({ "mode": "explicit", "languages": nine }),
+            json!({ "mode": "explicit", "languages": "en" }),
+            json!({ "mode": "explicit", "languages": [1] }),
+            json!({ "mode": "system", "languages": ["en"] }),
+            json!({ "mode": "system", "languages": [] }),
+            json!({ "mode": "system", "extra": true }),
+            json!({ "mode": "explicit", "languages": ["en"], "lang": "en" }),
+            Value::Null,
+        ] {
+            let error = dispatch(&ctx, &request("setLocalePreference", params.clone(), json!(2)))
+                .await
+                .error
+                .unwrap_or_else(|| panic!("{params} 应被拒绝"));
+            assert_eq!(error.code, INVALID_PARAMS, "{params}");
+        }
+        assert!(!path.exists(), "整包拒绝不落盘");
+
+        let result = dispatch(
+            &ctx,
+            &request("setLocalePreference", json!({ "mode": "explicit", "languages": ["EN", "zh-hans", "en"] }), json!(3)),
+        )
+        .await
+        .result
+        .expect("成功");
+        assert_eq!(
+            result,
+            json!({
+                "preference": { "mode": "explicit", "languages": ["en", "zh-Hans"] },
+                "effective": ["en", "zh-Hans"],
+                "persisted": true
+            })
+        );
+        assert!(path.exists());
+        assert_eq!(
+            dispatch(&ctx, &request("getLocalePreference", json!({}), json!(4)))
+                .await
+                .result
+                .unwrap(),
+            result,
+            "成功应答与 get 同形"
+        );
+
+        // 服务未装配：合法参数 -32001；非法参数仍先 -32602。
+        let bare = Context::new();
+        for (method, params) in [
+            ("getLocalePreference", json!({})),
+            ("setLocalePreference", json!({ "mode": "system" })),
+        ] {
+            let error = dispatch(&bare, &request(method, params, json!(5))).await.error.unwrap();
+            assert_eq!(error.code, SERVICE_UNAVAILABLE, "{method}");
+        }
+        let error = dispatch(&bare, &request("setLocalePreference", json!({ "mode": "bad" }), json!(6)))
+            .await
+            .error
+            .unwrap();
+        assert_eq!(error.code, INVALID_PARAMS);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn stalled_locale_preference_reads_default_and_refuses_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(crate::locale_preference::PREFERENCE_FILE);
+        std::fs::write(&path, "format_version = 9\nmode = \"system\"\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let ctx = locale_ctx(dir.path());
+        let result = dispatch(&ctx, &request("getLocalePreference", json!({}), json!(1)))
+            .await
+            .result
+            .unwrap();
+        assert_eq!(result["preference"]["mode"], "system");
+        assert_eq!(result["effective"], json!(["en-US", "zh-Hans-CN"]));
+        assert_eq!(result["persisted"], false);
+        let error = dispatch(
+            &ctx,
+            &request("setLocalePreference", json!({ "mode": "explicit", "languages": ["en"] }), json!(2)),
+        )
+        .await
+        .error
+        .unwrap();
+        assert_eq!(error.code, SERVICE_UNAVAILABLE);
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "format_version = 9\nmode = \"system\"\n",
+            "停摆文件不得被覆盖"
+        );
+    }
+
+    /// `setLocalePreference` 成功后，所有流式连接（含发起者与未认证会话）都收到 `preferences/locale`；
+    /// `effective` 没变的写入不再推送。
+    #[tokio::test(flavor = "current_thread")]
+    async fn locale_preference_push_reaches_every_streaming_connection() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = locale_ctx(dir.path());
+
+        let (watcher, server) = tokio::io::duplex(64 * 1024);
+        let (read, write) = tokio::io::split(server);
+        let watcher_task = tokio::spawn(serve(ctx.clone(), BufReader::new(read), write));
+        let (setter, server) = tokio::io::duplex(64 * 1024);
+        let (read, write) = tokio::io::split(server);
+        let setter_task = tokio::spawn(serve(ctx.clone(), BufReader::new(read), write));
+        tokio::task::yield_now().await;
+
+        let (setter_read, mut setter_write) = tokio::io::split(setter);
+        let mut setter_lines = BufReader::new(setter_read).lines();
+        let mut watcher_lines = BufReader::new(watcher).lines();
+        async fn next<R: AsyncBufRead + Unpin>(lines: &mut tokio::io::Lines<R>) -> Value {
+            let line = tokio::time::timeout(Duration::from_secs(1), lines.next_line())
+                .await
+                .expect("帧应到达")
+                .unwrap()
+                .unwrap();
+            serde_json::from_str(&line).unwrap()
+        }
+
+        let set = |id: u64, params: Value| {
+            format!(
+                "{}\n",
+                json!({ "jsonrpc": "2.0", "id": id, "method": "setLocalePreference", "params": params })
+            )
+        };
+        setter_write
+            .write_all(set(1, json!({ "mode": "explicit", "languages": ["fr", "en"] })).as_bytes())
+            .await
+            .unwrap();
+
+        let expected = json!({
+            "jsonrpc": "2.0",
+            "method": "preferences/locale",
+            "params": { "effective": ["fr", "en"] }
+        });
+        assert_eq!(next(&mut watcher_lines).await, expected);
+        let mut setter_frames = [next(&mut setter_lines).await, next(&mut setter_lines).await];
+        setter_frames.sort_by_key(|frame| frame.get("id").is_some());
+        assert_eq!(setter_frames[0], expected);
+        assert_eq!(setter_frames[1]["id"], 1);
+        assert_eq!(setter_frames[1]["result"]["effective"], json!(["fr", "en"]));
+
+        // 同一结果再写一次：应答照常，不推送；随后切回 system 再推一次。
+        setter_write
+            .write_all(set(2, json!({ "mode": "explicit", "languages": ["FR", "en"] })).as_bytes())
+            .await
+            .unwrap();
+        let reply = next(&mut setter_lines).await;
+        assert_eq!(reply["id"], 2, "effective 未变不推送: {reply}");
+        setter_write
+            .write_all(set(3, json!({ "mode": "system" })).as_bytes())
+            .await
+            .unwrap();
+        assert_eq!(
+            next(&mut watcher_lines).await["params"],
+            json!({ "effective": ["en-US", "zh-Hans-CN"] }),
+            "watcher 的下一帧就是切回 system 的推送"
+        );
+
+        drop(setter_write);
+        drop(setter_lines);
+        drop(watcher_lines);
+        let _ = tokio::time::timeout(Duration::from_secs(1), setter_task).await;
+        let _ = tokio::time::timeout(Duration::from_secs(1), watcher_task).await;
     }
 
     #[tokio::test(flavor = "current_thread")]

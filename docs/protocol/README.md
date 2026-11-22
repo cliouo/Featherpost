@@ -50,6 +50,8 @@
 | `readAttachment` | `{account, folder, uid, part_index, offset?, length?}` | `{attachment, offset, length, data, eof}` | `store` |
 | `getReadingPolicy` | `{}` | `{policy, persisted}` | 无（配置文件方式启动） |
 | `setReadingPolicy` | `{remote_content?, trust?, untrust?}` | `{policy, persisted}` | 无（配置文件方式启动） |
+| `getLocalePreference` | `{}` | `{preference, effective, persisted}` | 无（配置文件方式启动） |
+| `setLocalePreference` | `{mode, languages?}` | `{preference, effective, persisted}` | 无（配置文件方式启动） |
 | `searchMessages` | `{query?, account?, folder?, from?, since?, until?, hasAttachments?, limit?, offset?, scope?}` | `{messages, total, scope, truncated?}` | `store`（`scope=server` 另需该账户在线） |
 | `getThread` | `{account, uid?, threadId?, folder?, limit?, offset?}` | `{threadId, messages, total}` | `store` |
 | `getSearchIndexStatus` | `{}` | `{pending, done}` | `store` |
@@ -450,6 +452,39 @@ addr-spec，小写后先比地址、再比**精确**域名（`news.example.com` 
   返回 `-32001` 且**绝不覆盖**磁盘上那份。
 - 只读从不创建文件；`maild backup` **不覆盖**这个文件（它是隐私偏好，不是邮箱数据；恢复一份旧邮件
   备份不该静默恢复旧的信任名单）。
+
+### `getLocalePreference` / `setLocalePreference`
+
+用户的语言偏好（ADR-0048 决策 1/2）。与阅读策略一样是 **daemon 拥有的持久状态**
+（`locale_preference.toml`，与活动配置同目录，纪律同 `reading_policy.toml`），内核界面、默认前端与
+第三方前端读到同一份。协议下发**有序偏好列表**而不是「定好的一种语言」：各前端拿 `effective`
+与自己支持的语言协商，内核不替它挑。
+
+```json
+{
+  "preference": { "mode": "system", "languages": [] },
+  "effective": ["zh-Hans-CN", "en-US"],
+  "persisted": true
+}
+```
+
+- 授权：`getLocalePreference` 任何主体可用（与 `getAgentInfo` 同级，后台插件也可能要按用户语言
+  渲染自己的文字）；`setLocalePreference` 要 `settings_write`，不新增授权词。
+- `mode` 缺省 `system`（文件不存在时）；`system` 时 `languages` 恒为空数组。
+- `effective` 是解析后的有序列表，**永不为空**：`explicit` 时等于 `languages`；`system` 时是 Agent 读到的
+  系统首选语言（macOS：`+[NSLocale preferredLanguages]`，即 `CFLocaleCopyPreferredLanguages`；其他平台按
+  `LC_ALL` → `LC_MESSAGES` → `LANG`），规范化、去重后截到 8 项；读取失败或为空时为 `["zh-Hans"]`。
+  `system` 模式下每次调用都重读系统值。
+- `setLocalePreference` 是**整包替换**：`mode = "system"` 时不得带 `languages`（`[]` 也不行）；
+  `mode = "explicit"` 时 `languages` 必填，1..=8 个 BCP 47 标签（RFC 5646 形状，不查注册表），
+  每个不超过 35 字节，规范化大小写（`zh-hans-cn` → `zh-Hans-CN`）后去重存储。任一项非法、超长、
+  超过 8 项或带未知键，整包 `-32602` 不落盘。成功应答与 `getLocalePreference` 同形；`effective`
+  因此变化时向所有流式连接推送 `preferences/locale`（见「服务端通知」）。
+- `getLocalePreference` 的参数必须为空对象。
+- `persisted = false` 表示偏好文件损坏或来自未来版本：读到的是**缺省偏好**（`system`），
+  `setLocalePreference` 返回 `-32001` 且**绝不覆盖**磁盘上那份。
+- 只读从不创建文件，首次写入才创建；`maild backup` **不覆盖**这个文件（它是偏好，不是邮箱数据）。
+- 老 daemon 对 `getLocalePreference` 返回 `-32601`：前端回落自己的基础语言。
 
 ### `searchMessages` / `getThread` / `getSearchIndexStatus`
 
@@ -888,7 +923,7 @@ M4-01 新增会话级主体：未认证连接恒为 `user`（历史行为不变�
   `has_identity` 布尔观测字段（旧 daemon 缺省 false），绝不返回凭证或哈希。
 - **方法级授权（ADR-0018）**：插件主体按 manifest `capabilities` 授权，默认拒绝；
   未声明的调用返回 `-32016`（连接不断开），拒绝计数经 `denied_calls` 观测字段
-  可见。`authenticate`/`whoami`/`getAgentInfo` 任何主体可用。前端 route 经
+  可见。`authenticate`/`whoami`/`getAgentInfo`/`getLocalePreference` 任何主体可用。前端 route 经
   固定翻译映射：`inbox|message → messages_read`、`compose → messages_send`、
   `settings → settings_read + settings_write`、`background → 无`。服务端推送同受
   管控：无 `messages_read` 的主体不收邮件/账户事件通知。完整策略表见
@@ -997,6 +1032,7 @@ stdio、Unix socket 与 named pipe 连接可收到无 `id` 的服务端通知。
 | `account/state` | 账户状态对象 |
 | `frontend/intent` | `{"frontend":"<id>"}`——只投给主体**恰好**是 `frontend:<id>` 的已认证长连接（ADR-0045） |
 | `agent/stopping` | `{}`——只投给主体为 `frontend:*` 的已认证长连接；守护进程接受 `stopManagedAgent` 后、停机前发出（ADR-0046） |
+| `preferences/locale` | `{"effective":[...]}`——投给**所有**流式连接；`setLocalePreference` 成功且 `effective` 变化时发出（ADR-0048） |
 
 ```json
 {"jsonrpc":"2.0","method":"message/received","params":{"account":"personal","uid":"42","sender":"sender@example.com","recipient":"alias@example.test","subject":"hello","body":"plain text body","received_at":1710000000}}
@@ -1021,6 +1057,13 @@ route、账户或 UID；前端收到后自行 `claimFrontendIntent` 排空队列
 user、插件与未认证连接收不到。参数恒为空对象，客户端不应校验其内容。前端收到后应刷盘草稿、撤下窗口并随后台一起退出
 （`maild-app` 置位 `ViewState.shutdown_requested`，置位后不回落、不进快照同步缓冲）。点击窗口红叉、`⌘Q` 或 Dock
 右键「退出」均仅关闭窗口并彻底清空 Dock 图标，不调用 `stopManagedAgent`，后台与菜单栏继续运行。
+
+`preferences/locale` 是语言偏好变化信号（ADR-0048）：`setLocalePreference` 成功且解析后的列表变化时，
+守护进程向所有流式连接（不论主体，`getLocalePreference` 本身对任何主体开放）推送
+`{"jsonrpc":"2.0","method":"preferences/locale","params":{"effective":["en","zh-Hans"]}}`。前端收到后
+用新列表重新协商语言并重新渲染。`system` 模式下系统语言变化**目前不主动推送**；推送也是尽力而为，
+前端应在窗口聚焦或重连时调用 `getLocalePreference` 追上。共享 client 用
+`Notification::locale_preference_changed()` 解码这条通知（`into_server_notification` 将其归为 `Unknown`）。
 
 HTTP 不承载通知。
 

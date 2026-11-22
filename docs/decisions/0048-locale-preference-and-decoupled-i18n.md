@@ -101,6 +101,21 @@ languages = ["en", "zh-Hans"]
 > 系统语言变化的分布式通知（`AppleLanguagePreferencesChangedNotification`）是否可靠送达。不可靠则退化为
 > 每次 `getLocalePreference` 重读系统值。
 
+> **L1 实施记录（偏差）**：
+>
+> - 系统语言变化**未订阅**分布式通知，直接取上面的退化路径：`system` 模式下每次 `getLocalePreference`
+>   （以及 `setLocalePreference` 的应答）都重读系统值；`preferences/locale` 只在 `setLocalePreference`
+>   成功且 `effective` 变化时推送。理由：Agent 的 daemon 跑在独立线程的 tokio 运行时里，主线程才有
+>   AppKit run loop，订阅需要跨线程把信号送回事件总线，且送达可靠性无法在 hermetic 测试里核验；
+>   前端「聚焦或重连时重读」已能追上。后续若要主动推送，在 Agent 主线程订阅后调用同一个
+>   `LocalePreferenceChanged` 事件即可，协议不变。
+> - macOS 读的是 `+[NSLocale preferredLanguages]`，与 `CFLocaleCopyPreferredLanguages` 同源（toll-free
+>   bridged），复用 crate 已有的 objc2-foundation 绑定。按 app 语言设置是否影响 Agent 自身的读取**未核验**
+>   （仍是开放问题）。其他平台按 `LC_ALL` → `LC_MESSAGES` → `LANG` 取第一个非空值。
+> - 系统值同样经 BCP 47 规范化、跳过非法项、去重，并截到 8 项，使应答与推送帧有界。
+> - 共享 client 没有给 `ServerNotification` 加新变体（既有消费者 `maild-app` 对它穷尽匹配），改为
+>   `Notification::locale_preference_changed()`；该通知经 `ServerNotification::Unknown` 送达。
+
 ### 3. 协议本身语言中立
 
 - daemon 返回结构化数据与稳定 code，前端负责成文。既有做法照旧：文件夹给 `role`，由前端翻译；

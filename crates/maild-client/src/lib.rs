@@ -200,6 +200,33 @@ impl Notification {
             _ => Ok(ServerNotification::Unknown(self)),
         }
     }
+
+    /// ADR-0048：`preferences/locale` 的类型化解码。不是这条通知时返回 `None`。
+    ///
+    /// 有意不作为 [`ServerNotification`] 的新变体：既有消费者（`maild-app`）对该枚举做穷尽匹配，
+    /// 新变体会让它们编译失败；在它们迁移之前，这条通知经 [`ServerNotification::Unknown`] 送达，
+    /// 消费者对其调用本方法即可。
+    pub fn locale_preference_changed(
+        &self,
+    ) -> Option<Result<LocalePreferenceChanged, ClientError>> {
+        (self.method == LOCALE_PREFERENCE_NOTIFICATION).then(|| {
+            serde_json::from_value::<LocalePreferenceChanged>(self.params.clone())
+                .map_err(|error| {
+                    ClientError::rpc(format!(
+                        "{LOCALE_PREFERENCE_NOTIFICATION} 通知参数无效: {error}"
+                    ))
+                })
+        })
+    }
+}
+
+/// ADR-0048：语言偏好变化通知的 method 名。
+pub const LOCALE_PREFERENCE_NOTIFICATION: &str = "preferences/locale";
+
+/// `preferences/locale` 的参数：新的解析后有序语言列表（永不为空）。未知字段忽略，便于 additive 扩展。
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+pub struct LocalePreferenceChanged {
+    pub effective: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
@@ -1113,6 +1140,57 @@ pub struct ReadingPolicyResult {
     pub policy: ReadingPolicySnapshot,
     #[serde(default)]
     pub persisted: bool,
+}
+
+/// 语言偏好（ADR-0048 决策 1）。`mode` 取 `system` / `explicit`；`system` 时 `languages` 为空。
+#[derive(Clone, Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
+pub struct LocalePreference {
+    #[serde(default)]
+    pub mode: String,
+    #[serde(default)]
+    pub languages: Vec<String>,
+}
+
+/// `getLocalePreference` / `setLocalePreference` 应答（ADR-0048 决策 2）。`effective` 是解析后的
+/// 有序列表，前端用它与自己支持的语言协商；`persisted = false` 表示偏好文件停摆：读到的是缺省
+/// 偏好，写会被拒绝。
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
+pub struct LocalePreferenceResult {
+    pub preference: LocalePreference,
+    #[serde(default)]
+    pub effective: Vec<String>,
+    #[serde(default)]
+    pub persisted: bool,
+}
+
+/// `setLocalePreference` 参数：整包替换。`system` 不带 `languages`；`explicit` 必带 1..=8 个 BCP 47 标签。
+#[derive(Clone, Debug, Serialize, Eq, PartialEq)]
+pub struct LocalePreferenceUpdate {
+    pub mode: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub languages: Option<Vec<String>>,
+}
+
+impl LocalePreferenceUpdate {
+    /// 跟随系统首选语言。
+    pub fn system() -> Self {
+        Self {
+            mode: "system".into(),
+            languages: None,
+        }
+    }
+
+    /// 显式的有序语言列表；daemon 负责校验、规范化大小写与去重。
+    pub fn explicit<I, S>(languages: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        Self {
+            mode: "explicit".into(),
+            languages: Some(languages.into_iter().map(Into::into).collect()),
+        }
+    }
 }
 
 /// 按已收字节推进 `offset` 循环取块，拼成完整附件。两道护栏：应答 `size` 中途改变即报错；
@@ -2729,6 +2807,20 @@ impl RpcClient {
         let params = serde_json::to_value(patch)
             .map_err(|error| ClientError::rpc(format!("阅读策略 patch 序列化失败: {error}")))?;
         self.call_typed("setReadingPolicy", params).await
+    }
+
+    /// ADR-0048：语言偏好与解析后的 `effective` 列表。老 daemon 返回 `-32601`，调用方回落基础语言。
+    pub async fn locale_preference(&self) -> Result<LocalePreferenceResult, ClientError> {
+        self.call_typed("getLocalePreference", json!({})).await
+    }
+
+    pub async fn set_locale_preference(
+        &self,
+        update: &LocalePreferenceUpdate,
+    ) -> Result<LocalePreferenceResult, ClientError> {
+        let params = serde_json::to_value(update)
+            .map_err(|error| ClientError::rpc(format!("语言偏好参数序列化失败: {error}")))?;
+        self.call_typed("setLocalePreference", params).await
     }
 
     /// 敲醒后台立即同步（ADR-0041 决策 4）。`account = None` = 全部启用账户。不等同步完成。
@@ -4561,6 +4653,70 @@ mod tests {
             ServerNotification::Unknown(notification)
                 if notification.method == "plugin/custom"
         ));
+    }
+
+    #[test]
+    fn locale_preference_notification_decodes_without_a_new_variant() {
+        let frame = br#"{"jsonrpc":"2.0","method":"preferences/locale","params":{"effective":["en","zh-Hans"],"future":1}}"#;
+        let Incoming::Notification(notification) = decode_incoming(frame).unwrap() else {
+            panic!("preferences/locale 应解码为通知帧");
+        };
+        assert_eq!(
+            notification.locale_preference_changed().unwrap().unwrap(),
+            LocalePreferenceChanged {
+                effective: vec!["en".into(), "zh-Hans".into()]
+            }
+        );
+        // 经 into_server_notification 走 Unknown，仍可再解码。
+        let ServerNotification::Unknown(unknown) =
+            notification.into_server_notification().unwrap()
+        else {
+            panic!("preferences/locale 应经 Unknown 送达");
+        };
+        assert!(unknown.locale_preference_changed().unwrap().is_ok());
+
+        assert!(Notification {
+            method: LOCALE_PREFERENCE_NOTIFICATION.into(),
+            params: json!({ "effective": "en" }),
+        }
+        .locale_preference_changed()
+        .unwrap()
+        .is_err());
+        assert!(Notification {
+            method: "account/state".into(),
+            params: json!({}),
+        }
+        .locale_preference_changed()
+        .is_none());
+    }
+
+    #[test]
+    fn locale_preference_dtos_match_the_wire_shape() {
+        assert_eq!(
+            serde_json::to_value(LocalePreferenceUpdate::system()).unwrap(),
+            json!({ "mode": "system" })
+        );
+        assert_eq!(
+            serde_json::to_value(LocalePreferenceUpdate::explicit(["en", "zh-Hans"])).unwrap(),
+            json!({ "mode": "explicit", "languages": ["en", "zh-Hans"] })
+        );
+        let result: LocalePreferenceResult = serde_json::from_value(json!({
+            "preference": { "mode": "system", "languages": [] },
+            "effective": ["zh-Hans-CN", "en-US"],
+            "persisted": true
+        }))
+        .unwrap();
+        assert_eq!(
+            result,
+            LocalePreferenceResult {
+                preference: LocalePreference {
+                    mode: "system".into(),
+                    languages: Vec::new(),
+                },
+                effective: vec!["zh-Hans-CN".into(), "en-US".into()],
+                persisted: true,
+            }
+        );
     }
 
     #[test]
