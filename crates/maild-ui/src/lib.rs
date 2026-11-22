@@ -29,7 +29,7 @@ static EMBEDDED_CONTRACT: &str = maild_brand::ui_embedded_contract!();
 
 #[cfg(all(feature = "embedded", feature = "studio"))]
 #[used]
-static EMBEDDED_CONTRACT: &str = "maild-ui-embedded:dev.featherpost.studio";
+static EMBEDDED_CONTRACT: &str = "\0maild-ui-embedded:dev.featherpost.studio\0";
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
