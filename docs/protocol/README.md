@@ -61,7 +61,7 @@
 | `listPendingOps` | `{account?, include_settled?, limit?, before_id?, summary_only?}` | `{ops, has_more}` | `store` |
 | `resolvePendingOp` | `{id, resolution, summary_only?}` | `{op}` | `store` |
 | `send` | `{from, to, cc?, bcc?, subject?, body?, body_html?, in_reply_to?, references?, attachments?}` | `{ok, message_id}` | `transport` |
-| `prepareReply` | `{account, uid, folder?, mode}` | `{draft}` | `store` |
+| `prepareReply` | `{account, uid, folder?, mode, locale?}` | `{draft}` | `store` |
 | `listDrafts` | `{account?, limit?, offset?}` | `{drafts, total}` | `store` |
 | `getDraft` | `{id}` | `{draft}` | `store` |
 | `createDraft` | `{account, from?, to?, cc?, bcc?, subject?, body?, body_html?, in_reply_to?, references?, attachments?}` | `{draft}` | `store` |
@@ -79,7 +79,7 @@
 | `claimNextOpenIntent` | `{frontend}` | `{intent}` | `frontend` |
 | `listFrontends` | `{}` | `{default, frontends}` | `frontend` |
 | `getPluginInstallRoot` | `{kind?: "plugin"\|"frontend"}` | `{root}`，仅本机原生复制器使用 | external / frontend，`plugins_manage` |
-| `previewPluginPackage` | `{kind?, staging? , rollback_id?}`，后二者恰有一个 | `{kind,id,name,version,lifecycle,capabilities,permissions,has_ui}` | external / frontend，`plugins_manage` |
+| `previewPluginPackage` | `{kind?, staging? , rollback_id?}`，后二者恰有一个 | `{kind,id,name,description?,l10n?,version,lifecycle,capabilities,permissions,has_ui}` | external / frontend，`plugins_manage` |
 | `setDefaultFrontend` | `{id}` | `{default,persisted:true}` | frontend，`plugins_manage` |
 | `stopManagedAgent` | `{}`；不接受 PID/路径 | `{stopping:true}`；已接受正常退出请求 | 仅同用户 Unix socket / named pipe 的 User；仅平台 Agent 装配 |
 | `repairBuiltinFrontend` | `{}`；不接受路径/id | `{id,version,backup}`；backup 是 `.repair-backups` 下相对目录名 | 仅同用户 Unix socket / named pipe 的 User；需完整应用内固定副本 |
@@ -244,13 +244,41 @@ Agent 内存与本地鉴权 API 中传递，不进入 URL、argv 或通知 ident
 等待草稿保存期间的后续手动导航也必须使原通知失效（ADR-0037）。
 
 `listFrontends` 返回内置恢复前端和通过受管 manifest 检查的第三方前端。每项包含稳定 `id`、
-显示 `name`、`version`、`lifecycle`、`capabilities`、`permissions` 和 `builtin`。字符串生命周期
+显示 `name`、可选的 `description` / `l10n`（见下文）、`version`、`lifecycle`、`capabilities`、
+`permissions` 和 `builtin`。字符串生命周期
 与 capability 允许客户端保留未来未知值；安装格式见
 [外部 frontend package v1](../plugins/README.md)。
 
 `permissions` 是 ADR-0030 的纯授权声明，与作为 intent 路由的 `capabilities` 分开
 （`#[serde(default)]`，旧 daemon 读到空表）。**它是给用户看的**：装一个前端之前应当能看见
 它要什么，尤其是 `plugins_manage`——声明它等于声明「我可以代表用户安装任意受管包」。
+
+#### 包的多语言名称与描述（ADR-0048 决策 5）
+
+`listFrontends` 的每项、`listExternalPlugins` 的每项与 `previewPluginPackage` 的应答另有两个可选字段，
+均来自包作者的 manifest（frontend `schema_version = 3`、external `schema_version = 2` 起）：
+
+```json
+{
+  "id": "org.example.reader",
+  "name": "Example Reader",
+  "description": "A reader for Featherpost",
+  "l10n": {
+    "en": { "description": "A reader for Featherpost" },
+    "zh-Hans": { "name": "示例阅读器", "description": "Featherpost 的阅读器" }
+  }
+}
+```
+
+- `description`：兜底描述（非空、≤1024 字节、无控制字符）；manifest 没写时**省略该键**。
+- `l10n`：BCP 47 标签 → `{name?, description?}`。标签已由 daemon 规范大小写（`zh-hans` → `zh-Hans`），
+  每项至少有 `name` 或 `description` 之一，缺的字段**省略**而不是 `null`；最多 16 种语言。映射为空时
+  **省略该键**；内置 `builtin-repair` 恒无这两个字段。
+- daemon **原样透传、不按语言偏好挑选**：前端拿自己协商出的语言查 `l10n`，找不到的字段回落到顶层
+  `name` / `description`。
+- `previewPluginPackage` 的这两个字段与其余字段一样参与 `expected_preview` 逐字段比对（用户批准的是
+  看到的文字），客户端应把收到的预览对象**原样**回传，不要只挑认识的字段重组。
+- 旧 daemon 不返回这两个键，共享 client 的 DTO 均为 `#[serde(default)]`。
 
 `openFrontend` 由菜单栏或其他同一信任域内的本地插件提交同一 DTO。省略 `frontend` 使用默认
 消费者，显式值只允许已安装 ID；`builtin-repair` 是原生恢复入口。服务端先入队，再尝试激活，
@@ -262,7 +290,8 @@ Agent 内存与本地鉴权 API 中传递，不进入 URL、argv 或通知 ident
 > **分片迁移（[ADR-0039](../decisions/0039-native-recovery-and-tauri-default.md)）**：09-B 保留旧阅读器默认，恢复改用 `builtin-repair`。09-C 才预装并切换默认 Tauri 包 `com.maild.ui`、迁移旧 ID、删除 egui。协议代数不变。
 
 `listExternalPlugins` 是只读、粗粒度生命周期观测。每项为
-`{id,name,version,lifecycle,capabilities,enabled,state,restart_count,has_ui}`；`has_ui`
+`{id,name,description?,l10n?,version,lifecycle,capabilities,enabled,state,restart_count,has_ui}`
+（`description` / `l10n` 见上文[包的多语言名称与描述](#包的多语言名称与描述adr-0048-决策-5)）；`has_ui`
 表示 package 声明了可由 Agent 打开的原生管理界面。`state` 当前可为
 `independent`、`disabled`、`starting`、`running`、`backoff`、`stopped`、`leaked` 或 `failed`。`leaked`（ADR-0020）表示停止流程结束后进程组内仍有存活成员；客户端应把
 未来未知字符串原样保留。`openExternalPluginUi` 仅启动管理界面，不会自动启用插件；配置和安全边界见
@@ -645,6 +674,7 @@ staging 目录路径（形状见 ADR-0019 的 `.incoming`），属独立切片�
 
 `account` 与 `uid` 必填，`folder` 可选（省略时按 `getMessage` 的规则消歧），
 `mode` 取 `reply` / `reply_all` / `forward`。消息不存在返回 `-32002`。
+`locale` 可选（BCP 47 字符串或 `null`），决定引用块的语言，见下文。出现其他字段或类型不对时返回 `-32602`。
 
 回复与转发的成型在**内核**完成——换前端不该换掉 `References` 的正确性。返回：
 
@@ -670,7 +700,16 @@ staging 目录路径（形状见 ADR-0019 的 `.incoming`），属独立切片�
   也去掉已经在 `to` 里的人。
 - **`forward`** 的 `to` 为空、不继承 `in_reply_to`/`references`（转发开启新会话），
   `attachments` 是原信的**非内联**附件引用，可直接放进 `send` 的 `attachments`。
-- 引用块的文案目前只有中文——maild 还没有 i18n 框架，这是一个独立的后续切片。
+- **引用块语言（ADR-0048 决策 7）**：引用块会写进发出去的正文，是**邮件内容的语言**，可以与界面语言
+  不同。回复引用行（`在 …，… 写道：` / `On …, … wrote:`）、转发头（分隔线与发件人/日期/主题/收件人四行）
+  以及其中给人读的本地日期（`2026年11月18日 周三 19:35（UTC+08:00）` /
+  `Wed, Nov 18, 2026 at 19:35 (UTC+08:00)`）都随协商结果成文：给了 `locale` 就只用它与内核支持的语言
+  （`zh-Hans`、`en`）协商，省略或 `null` 时用语言偏好的 `effective`（见 `getLocalePreference`）协商；
+  协商不出结果（如 `ja`、繁体 `zh-Hant*`）回落 `zh-Hans`。`locale` 按 `setLocalePreference` 的同一规则校验
+  （BCP 47 形状、≤35 字节），非法即 `-32602`。原信日期不可信（早于 1971）时回退的 RFC 5322 日期与语言无关。
+  `effective` 首选中文时不带 `locale` 的输出与引入本参数之前逐字节一致。
+- 主题前缀与 `locale` **无关**：归一照旧识别上面全部已知前缀，加上的前缀恒为 `Re:` / `Fwd:`。
+- 老 daemon 拒绝未知参数：共享 client 的 `prepare_reply` 只在给了 `locale` 时才发送该键。
 
 共享 client 的 typed send 会在请求进入传输前执行同一组字段校验。桌面 compose 为避免
 大文本编辑器持续布局超长正文，另设 64 KiB 输入上限；这不是协议收窄，`maildctl` 与其他

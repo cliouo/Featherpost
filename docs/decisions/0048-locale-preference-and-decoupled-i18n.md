@@ -157,6 +157,18 @@ description = "..."
 - 实现时核对 `frontend.toml` / `plugin.toml` 解析器对未知键的处理：若当前拒绝未知键，`l10n` 随
   `schema_version = 3` 引入，旧 daemon 对 v3 包按既有规则拒绝安装。
 
+> **L4 实施记录（偏差）**：
+>
+> - 两个解析器都是 `deny_unknown_fields`，旧 daemon 见到 `l10n` / `description` 会拒绝整包，所以走**新 schema
+>   版本**而不是 v2 内追加。但两份 manifest 的当前版本不同：`frontend.toml` 当前最高 v2，随 **v3** 引入；
+>   `plugin.toml` 当前只有 v1，随**下一个版本 v2** 引入（而不是跳到 3）。新版本是旧版本的超集；旧版本 manifest
+>   写了这两个键整包拒绝（与 `permissions` 之于 frontend v1 同理），v1/v2 包照原规则安装与运行。
+> - 两份 manifest 此前都没有顶层 `description`，按本决策新增为可选兜底字段：非空、≤1024 字节、无控制字符。
+>   各语言 `name` 与兜底 `name` 同限（160 字节）、`description` 与兜底同限；标签用
+>   `locale_preference::normalize_tag` 校验并规范大小写，规范化后重名拒绝；每项至少一个字段。
+> - 三个方法返回规范化后的映射，空时省略键；`description` 缺省同样省略。`previewPluginPackage` 的这两个字段
+>   参与 `expected_preview` 逐字段比对。共享 client 的 DTO 为 `PackageL10n`（`BTreeMap<String, PackageL10nEntry>`）。
+
 ### 6. 内核自己的界面：`maild-l10n` crate
 
 内核界面的语言 = 用 `effective` 列表与内核支持的语言（首版 `zh-Hans`、`en`）协商的结果。范围：
@@ -179,6 +191,12 @@ description = "..."
   缺省时用 `effective` 列表协商。
 - 主题前缀归一照旧识别全部已知前缀（`Re:` / `答复:` / `回复:` / `Fwd:` / `转发:` …），与 `locale` 无关。
 - 默认前端首版直接传界面语言；「按原信语言回复」留给后续。
+
+> **L4 实施记录**：`locale` 接受字符串或 `null`（等于缺省），用 `locale_preference::normalize_tag` 校验，非法
+> `-32602`。给了 `locale` 时只用 `[locale]` 协商，**不**再回落到 `effective`：协商不出结果（如 `ja`、`zh-Hant*`）
+> 回落 `zh-Hans`，与 `maild-l10n::negotiate` 一致。回复引用行、转发头与其中的人读日期都来自协商结果；
+> RFC 5322 回退日期与语言无关。没有装配偏好服务（纯 store 装配）时按 `effective = ["zh-Hans"]` 处理。
+> 共享 client 的 `prepare_reply` 多一个 `locale: Option<&str>` 参数，`None` 时不发送该键，旧 daemon 照常可用。
 
 ### 8. 默认前端的方案
 
