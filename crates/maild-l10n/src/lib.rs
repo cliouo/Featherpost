@@ -10,6 +10,7 @@
 //! - 系统通知（新邮件、验证码）：调用方在**发出通知时**按当时的偏好协商并成文；
 //! - 菜单栏 companion（`maild-menu`）；
 //! - 原生启动器与修复对话框（`maild-launcher`，ADR-0039）；
+//! - 命令行（`maildctl` 与 `maild` 维护子命令）的结果、确认、警告与输入提示（L5，见 [`Ctl`]）；
 //! - 回复/转发引用块（ADR-0048 决策 7）：它写进发出去的邮件正文，语言由 `prepareReply` 的
 //!   `locale` 参数或 `effective` 列表协商，可以与界面语言不同。
 //!
@@ -27,13 +28,15 @@
 //! 每种语言一个 `const` [`Messages`] 值（[`ZH_HANS`]、[`EN`]），字段即消息；带参数的消息是
 //! `fn` 字段，调用写作 `(m.menu.quit)(PRODUCT_NAME)`。新增消息时两种语言都必须填字段，
 //! **缺字段即编译失败**，不需要额外的 key 一致性检查。按界面分组：[`Notifications`]、
-//! [`Quote`]、[`Menu`]、[`Launcher`]。
+//! [`Quote`]、[`Menu`]、[`Launcher`]、[`Ctl`]。
 //!
 //! 本 crate 零依赖，只做协商与成文，不读系统语言、不读偏好文件。
 
+mod ctl;
 mod en;
 mod zh_hans;
 
+pub use ctl::Ctl;
 pub use en::EN;
 pub use zh_hans::ZH_HANS;
 
@@ -128,6 +131,7 @@ pub struct Messages {
     pub quote: Quote,
     pub menu: Menu,
     pub launcher: Launcher,
+    pub ctl: Ctl,
 }
 
 /// 系统通知（`maild` 的 `otp` 与 `rules::mail_notify`）。

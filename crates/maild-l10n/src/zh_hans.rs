@@ -107,6 +107,7 @@ pub const ZH_HANS: Messages = Messages {
         error_open_mail_window_failed: "无法打开邮件窗口",
         error_in_place_unsupported: "当前平台不支持原位打开邮件窗口",
     },
+    ctl: crate::ctl::ZH_HANS,
 };
 
 const WEEKDAYS: [&str; 7] = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];

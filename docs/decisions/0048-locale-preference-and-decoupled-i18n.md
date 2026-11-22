@@ -263,6 +263,21 @@ description = "..."
 | L4 | manifest `l10n` 段与三个列表/预览方法透传；`prepareReply` 的 `locale` 参数 | 是 |
 | L5 | `maildctl` 用户可见输出 | 是 |
 
+> **L5 实施记录**：
+>
+> - 文案进 `maild-l10n` 新分组 `Ctl`（独立文件 `ctl.rs`，两种语言同在一处），`Messages` 多一个 `ctl` 字段。
+>   `maild` 的 `backup` / `restore` / `paths` 维护子命令也用这一组。
+> - 语言来源：连上 daemon 时用 `getLocalePreference` 的 `effective` 协商；连不上、`-32601` 或其他失败时读系统
+>   首选语言（复用 L1 的 `maild::locale_preference::system_preferred_languages`，与 daemon `system` 模式同源），
+>   仍无结果回落 `zh-Hans`。每次调用因此多一次 `getLocalePreference` 往返；协议代握手已判定连不上时跳过，
+>   不重复等待。没有新增全局参数。`maild` 维护子命令不连 daemon（恢复要求它已停止），只读系统语言。
+> - 翻译范围：stdout/stderr 上给人读的结果、确认、警告与秘密输入提示。**不**翻译：`--json` 输出、`key: value`
+>   行的字段名与取值、`--help`、以及进入 `AppError` 的解析/校验/IO 报错——它同时是 `--json` 错误行的
+>   `message`，与协议 `error.message` 同属面向开发者的文字。唯一例外是 `account test` 的「探测未通过」：
+>   它只在人读分支出现，是结论而不是诊断。`maild` 守护进程启动路径上的报错是日志，不翻译。
+> - 新增 `maildctl locale [show]` / `locale set <LANGUAGE>...` / `locale set --system`，`--json` 与协议应答同形；
+>   `set` 的人读输出按写入后的新偏好成文。
+
 ## 兼容性
 
 - 新方法与通知均为 additive：老 daemon 对 `getLocalePreference` 返回 `-32601`，前端回落基础语言 `zh-CN`，
