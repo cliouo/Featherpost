@@ -1,0 +1,231 @@
+# ADR-0048：语言偏好归内核、翻译归各前端——可替换前端下的 i18n
+
+- 状态：提议（草稿，未实现）
+- 日期：2026-11-22
+- 关联：[ADR-0014](0014-m3-6-frontend-activation-and-plugin-lifecycle.md)（前端激活与可替换前端）、
+  [ADR-0028](0028-compose-reply-and-sent-append.md)（回复引用块文案的「诚实边界」）、
+  [ADR-0030](0030-frontend-authorization-closure.md)（授权词表）、
+  [ADR-0031](0031-tauri-frontend-shell-and-contribution-registry.md)（默认前端技术栈与偏好存储边界）、
+  [ADR-0032](0032-attachment-byte-channel-and-remote-content-policy.md)（daemon 拥有的偏好状态文件纪律）、
+  [ADR-0038](0038-settings-and-managed-packages.md)（包预览由当前前端渲染）、
+  [ADR-0039](0039-native-recovery-and-tauri-default.md)（原生启动器与修复入口）、
+  [ADR-0047](0047-decoupled-brand-and-open-source-readiness.md)（开源就绪）
+
+## 背景
+
+界面只有中文，且没有 i18n 框架：
+
+- 前端约 60 个 `.ts/.tsx` 文件直接写中文字面量；`packages/maild-ui/src/i18n.ts` 只有
+  `UI_LOCALE = "zh-CN"`、系统文件夹名、生命周期与权限名三张小表。
+- `crates/maild-ui/src/macos_locale.rs` 把 Tauri 默认英文菜单逐项换成中文。
+- Rust 侧约 125 个文件含中文字符串，其中大部分是日志与配置报错，少数是用户可见的内核界面：
+  系统通知（如 `otp.rs` 的「验证码」标题与正文格式）、菜单栏 companion、原生启动器对话框。
+- `prepareReply` 的引用块（「在 …，… 写道：」）只有中文，ADR-0028 决策 7 把它标为后续切片。
+
+直接套用 Web 项目的做法（URL 前缀 → cookie → 浏览器语言，一个前端一套 Provider）在这里不成立，
+原因是 ADR-0014 定下的架构：**前端可替换**。用户可以安装第三方前端并设为默认，内核还有自己的
+通知、菜单栏与启动器界面。于是「当前用哪种语言」不能由某一个前端决定，也不能存在某个 webview
+的 cookie/localStorage 里；而「用什么翻译框架、文案怎么写」又不该由内核替第三方决定。
+
+## 目标
+
+1. 用户只在一处表达语言偏好，内核界面、默认前端与第三方前端读到同一份。
+2. 内核不规定前端的翻译技术、文案风格与支持哪些语言。
+3. 协议保持语言中立：前端渲染文字所需的一切都以结构化数据与稳定 code 提供。
+4. 默认前端有一套带编译期/构建期守门的翻译方案，防止中文字面量回流。
+
+## 非目标
+
+- 不翻译日志、配置报错、`error.message` 等面向开发者的文字。
+- 不翻译用户或服务商数据：显式的文件夹显示名、账户名、邮件内容。
+- OTP 识别关键词（`otp.rs` 的「验证码 / 校验码 / 动态码 …」）是**内容识别规则**，与界面语言无关，
+  不随语言切换。
+- 不做 RTL 布局、运行时下载语言包、复数规则引擎（需要时用 `Intl.PluralRules`）。
+- `maildctl` 输出与已冻结的 egui 恢复界面本 ADR 不迁移；`maildctl` 留到最后一个切片。
+
+## 决策
+
+### 1. 语言偏好是 daemon 拥有的持久状态
+
+与「默认前端」「远程内容策略」同级，存在活动配置同目录的 `locale_preference.toml`，文件纪律照搬
+`reading_policy.toml`（ADR-0032 决策 5）：0600、当前用户拥有、单硬链接、拒符号链接、64 KiB 上限、
+未知版本/字段 fail-closed、临时文件 + `fsync` + 原子 rename；只读从不创建文件；首次写入才创建。
+`maild backup` 不覆盖它（是偏好，不是邮箱数据）。
+
+```toml
+format_version = 1
+mode = "explicit"          # "system" | "explicit"
+languages = ["en", "zh-Hans"]
+```
+
+- 缺省（文件不存在）为 `mode = "system"`。
+- `explicit` 时 `languages` 为 1..=8 个 BCP 47 标签，每个不超过 35 字节，规范化大小写后去重存储。
+- 文件损坏或来自未来版本：读到缺省偏好，`persisted = false`，写入返回 `-32001` 且绝不覆盖磁盘文件。
+
+**为什么不让各进程各自读系统语言**：macOS 允许按 app 单独设置语言，而 Studio、Agent、Menu、
+启动器是不同 bundle，各读各的会出现「托盘是英文、窗口是中文」。由 Agent 统一解析一次再下发，
+所有界面才能保持一致。
+
+### 2. 协议下发有序偏好列表，不下发「定好的一种语言」
+
+每个前端支持的语言不同（第三方可能只做了英文，也可能多做了日文），内核不替它挑。协议给的是用户的
+有序偏好，类似浏览器的 `Accept-Language`，由各前端与自己支持的语言协商。
+
+新增方法：
+
+| 方法 | 授权 | 说明 |
+|---|---|---|
+| `getLocalePreference` | `Open` | 语言偏好不敏感；后台插件也可能要渲染文字（如自己的通知），与 `getAgentInfo` 同级 |
+| `setLocalePreference` | `settings_write` | 与 `setSettings` / `setReadingPolicy` 同属应用级开关域，**不新增授权词** |
+
+`getLocalePreference` 应答：
+
+```json
+{
+  "preference": { "mode": "system", "languages": [] },
+  "effective": ["zh-Hans-CN", "en-US"],
+  "persisted": true
+}
+```
+
+- `effective` 是**解析后的有序列表**：`explicit` 时等于 `languages`；`system` 时是 Agent 读到的系统首选语言
+  （macOS：`CFLocaleCopyPreferredLanguages`）。列表永不为空；系统读取失败时为 `["zh-Hans"]`。
+- `setLocalePreference` 参数为 `{mode, languages?}`：`mode = "system"` 时不得带 `languages`；
+  `explicit` 时 `languages` 必填且合法，任一项非法整包 `-32602` 不落盘。成功应答与 `get` 同形。
+
+新增服务端通知 `preferences/locale`，`params` 为 `{"effective": [...]}`，在 `setLocalePreference` 成功
+或 `system` 模式下系统语言变化时推送给所有流式连接。尽力推送；丢失时前端在下次聚焦或重连时
+`getLocalePreference` 即可追上。
+
+> 实现时核验：Agent 作为登录项进程，`CFLocaleCopyPreferredLanguages` 是否受它自身的按 app 语言设置影响；
+> 系统语言变化的分布式通知（`AppleLanguagePreferencesChangedNotification`）是否可靠送达。不可靠则退化为
+> 每次 `getLocalePreference` 重读系统值。
+
+### 3. 协议本身语言中立
+
+- daemon 返回结构化数据与稳定 code，前端负责成文。既有做法照旧：文件夹给 `role`，由前端翻译；
+  显式显示名是用户/服务商数据，原样展示。
+- `error.message` 面向开发者，**语言不属于协议契约**，客户端不得据此分支或直接作为用户提示
+  （协议文档「错误码」一节已有此约定）。界面需要区分具体原因时，在对应方法的 `error.data` 增加稳定的
+  `reason` 字符串；前端遇到不认识的 `reason` 显示通用提示，详情中附上原始 `message`。
+- 新增的方法与字段遵循同一规则：不返回给人看的成品句子。
+
+### 4. 每个前端自带翻译，内核不规定技术与文案
+
+- 第三方前端对协议的义务只有三件：读 `getLocalePreference`、与自身支持的语言协商、监听
+  `preferences/locale` 重新渲染。翻译框架、文案风格、支持哪些语言完全自定。
+- **权限说明不由内核锁定。** 授权词本身（`mailbox_write`、`plugins_manage` …）是 ADR-0030 的稳定契约；
+  每个词允许调用哪些方法、意味着什么，写在协议文档里作为参考，前端各自翻译与措辞。
+  理由：按 ADR-0038，包预览由 daemon 校验后把权限词交给**当前已在使用的前端**渲染，被安装的包在安装前
+  无法控制任何显示文字；能决定措辞的只有当前默认前端，而它本身已持有这些权限。锁定文本挡不住真实威胁，
+  只会把默认前端的文案风格强加给第三方。
+
+### 5. 跨前端展示的包元数据：manifest 可选 `l10n` 段
+
+扩展与前端的名称、描述会出现在任何一个前端的设置页里，只能由包作者提供翻译：
+
+```toml
+name = "Featherpost Studio"        # 兜底，必填
+description = "..."                # 兜底，可选
+
+[l10n.en]
+description = "..."
+
+[l10n."zh-Hans"]
+name = "Featherpost 工作室"
+description = "..."
+```
+
+- `l10n` 下的键为 BCP 47 标签，值只允许 `name` 与 `description`，长度上限与兜底字段相同；最多 16 种语言。
+- `listFrontends`、`listExternalPlugins`、`previewPluginPackage` 原样返回 `l10n` 映射，**由前端协商**，
+  daemon 不按偏好挑选。
+- 实现时核对 `frontend.toml` / `plugin.toml` 解析器对未知键的处理：若当前拒绝未知键，`l10n` 随
+  `schema_version = 3` 引入，旧 daemon 对 v3 包按既有规则拒绝安装。
+
+### 6. 内核自己的界面：`maild-l10n` crate
+
+内核界面的语言 = 用 `effective` 列表与内核支持的语言（首版 `zh-Hans`、`en`）协商的结果。范围：
+
+- 系统通知（新邮件、验证码等）：在**发出通知时**按当时的偏好成文；
+- 菜单栏 companion（`maild-menu`）；
+- 原生启动器与修复对话框（`maild-launcher`，ADR-0039）。
+
+实现为一个无依赖的小 crate：每种语言一个 `const` 结构体（字段即消息，带参数的消息为函数），
+**缺字段编译失败**，不需要额外的 key 一致性检查。要翻译的字符串只有几十条，Fluent 或 `rust-i18n`
+在这个规模上收益不抵依赖成本；条目明显增多时再评估。
+
+日志、配置报错、`error.message` 不进 `maild-l10n`（见非目标）。
+
+### 7. 回复引用块：`prepareReply` 增加可选 `locale`
+
+引用块会写进发出去的邮件正文，属于**邮件内容的语言**，可以与界面语言不同（例如中文界面回复英文邮件）。
+
+- `prepareReply` 增加可选参数 `locale`（BCP 47）。daemon 用它与 `maild-l10n` 支持的语言协商；
+  缺省时用 `effective` 列表协商。
+- 主题前缀归一照旧识别全部已知前缀（`Re:` / `答复:` / `回复:` / `Fwd:` / `转发:` …），与 `locale` 无关。
+- 默认前端首版直接传界面语言；「按原信语言回复」留给后续。
+
+### 8. 默认前端的方案
+
+`maild-ui` 与 `featherpost-studio` 共用一份消息：
+
+- 新增 `packages/i18n`，用 **Paraglide JS v2**（inlang）以 CLI 在此**编译一次**，两个包都从这里导入；
+  不在两个 Vite 配置里各挂一个插件（会各生成一份产物，容易不一致）。
+- 消息为 JSON：`packages/i18n/messages/{zh-CN,en}.json`，`zh-CN` 为基础语言。JSON 便于开源后社区翻译。
+- **语言策略只用自定义策略**：从桥拿 `effective` 列表 → 与 `["zh-CN", "en"]` 协商 → 失败回落 `zh-CN`。
+  不用 URL、cookie、`navigator.language`（WKWebView 下的 `navigator.language` 与 app bundle 声明的
+  本地化相关，不可靠）。收到 `preferences/locale` 后切换语言并重新渲染，不重载页面。
+- 协商规则：按语言子标签匹配，`zh` 额外比较书写系统——`zh-Hans*`、无书写系统的 `zh` / `zh-CN` / `zh-SG`
+  匹配 `zh-CN`；`zh-Hant*` 不匹配，继续看下一项偏好。
+- key 用合法标识符、按模块分前缀：`mailbox_*`、`compose_*`、`settings_*`、`extensions_*`、`studio_*`，
+  调用形如 `m.mailbox_inbox()`，不用 `m["a.b.c"]`。
+- 构建前守门 `i18n:lint`：两种语言 key 集合与占位符一致；key 前缀合法；调用方没有引用不存在的 key；
+  **组件中不得出现中文字面量**（迁移期用白名单文件列表，逐步收紧到空）。
+- 类型：先用最小样例验证 Paraglide v2 产物在 `tsc` 下能否直接报出 key 拼错与参数错；只有确实存在缺口
+  时才补 `i18n:dts` 脚本。
+- 现有 `packages/maild-ui/src/i18n.ts`：`folderLabel` 的别名匹配逻辑保留，中文标签换成消息函数；
+  `UI_LOCALE` 常量换成当前协商结果（`Intl` 格式化同样使用它）。
+- 默认前端的 Tauri 原生菜单（`macos_locale.rs`）属于默认前端而非内核，跟随该前端的协商结果，
+  由壳从同一份偏好取得语言，不另读系统设置。
+
+## 交付切片
+
+| 切片 | 内容 | 可独立验收 |
+|---|---|---|
+| L1 | `locale_preference.toml`、`getLocalePreference` / `setLocalePreference`、`preferences/locale` 推送、协议文档、shared client typed 调用 | 是：`maildctl`/测试可读写偏好 |
+| L2 | `maild-l10n`；通知、菜单栏、启动器改走它 | 是：切换偏好后新通知与菜单语言随之变化 |
+| L3 | `packages/i18n` + Paraglide + `i18n:lint`；先迁一个模块（`FolderNav`）与原生菜单打通整条链路，再批量迁移两个前端 | 先打通一条链路，再按模块逐个迁移 |
+| L4 | manifest `l10n` 段与三个列表/预览方法透传；`prepareReply` 的 `locale` 参数 | 是 |
+| L5 | `maildctl` 用户可见输出 | 是 |
+
+## 兼容性
+
+- 新方法与通知均为 additive：老 daemon 对 `getLocalePreference` 返回 `-32601`，前端回落基础语言 `zh-CN`，
+  即今天的行为。老前端忽略未知通知。
+- 不新增授权词；既有已安装包的有效权限逐字节不变。
+- `prepareReply` 不带 `locale` 时，`effective` 首选为中文的用户得到与今天相同的中文引用块。
+- manifest `l10n` 若需 `schema_version = 3`，v2 包继续按原规则安装与运行。
+
+## 测试策略（hermetic）
+
+- 偏好文件：照 `reading_policy.toml` 的用例集（损坏、未来版本、符号链接、多硬链接、超限、原子写）。
+- 参数校验：非法 BCP 47、超长、超过 8 项、`system` 带 `languages` 均 `-32602` 且不落盘。
+- 协商函数：Rust 与 TS 各一份表驱动用例，覆盖 `zh-Hans-CN`、`zh-CN`、`zh`、`zh-Hant-TW`、`en-US`、空匹配回落。
+- `maild-l10n`：缺字段即编译失败，无需运行时测试；为带参数的消息做快照测试。
+- 前端：`i18n:lint` 进 CI；`packages/maild-ui/test/i18n.test.ts` 改为对两种语言分别断言。
+- 推送：`setLocalePreference` 后流式连接收到 `preferences/locale`；HTTP 不承载通知。
+
+## 后果
+
+- 换前端不换语言：用户设一次，内核界面与任何遵守协议的前端都跟着走。
+- 第三方前端零框架约束；代价是各前端的翻译质量与覆盖面不一致，这是可替换前端本身的取舍。
+- 权限说明由前端各自措辞，内核只保证授权词的语义稳定、文档化。
+- 中文字面量迁移是本 ADR 最大的工作量（约 60 个前端文件）；`i18n:lint` 白名单让迁移可以分批合入而不回退。
+- 落地后需同步更新 `docs/protocol/README.md` 中「maild 还没有 i18n 框架」两处表述与 ADR-0028 决策 7 的边界说明。
+
+## 未决
+
+- 内核支持的语言标签写作 `zh-Hans` 还是 `zh-CN`：本草稿内核用 `zh-Hans`、默认前端沿用 `zh-CN`，
+  是否统一待实现前决定。
+- 启动器与菜单栏是否在 daemon 不可用时直接读系统语言兜底（此时拿不到偏好）。倾向是：读系统语言，
+  能连上 daemon 后以 `effective` 为准。
