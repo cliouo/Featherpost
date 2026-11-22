@@ -16,9 +16,6 @@ packages/featherpost-studio/src/settings/module.tsx
 packages/maild-ui/src/app/App.tsx
 packages/maild-ui/src/app/ErrorBoundary.tsx
 packages/maild-ui/src/bridge/tauri.ts
-packages/maild-ui/src/compose/Editor.tsx
-packages/maild-ui/src/compose/controller.ts
-packages/maild-ui/src/compose/module.tsx
 packages/maild-ui/src/mailbox/Actions.tsx
 packages/maild-ui/src/mailbox/Activity.tsx
 packages/maild-ui/src/mailbox/Dialog.tsx
