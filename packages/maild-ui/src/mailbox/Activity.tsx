@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Choice } from "../settings/Choice";
 import { useStore } from "../host/hooks";
 import type { MailboxController } from "./controller";
 import {
@@ -48,10 +49,10 @@ export function Activity({
       <div className="activity-filter">
         <label>
           账户{" "}
-          <select
+          <Choice
             value={s.account}
             disabled={s.busy !== null}
-            onChange={(e) => controller.filter(e.target.value)}
+            onValueChange={(value) => controller.filter(value)}
           >
             <option value="">全部账户</option>
             {mail.snapshot.accounts.map((a) => (
@@ -59,7 +60,7 @@ export function Activity({
                 {mailbox.label(a.account)}
               </option>
             ))}
-          </select>
+          </Choice>
         </label>
         <span>按提交顺序倒序，含成功、失败与待核对项</span>
       </div>

@@ -1,4 +1,5 @@
 import { folderLabel, UI_LOCALE } from "../../maild-ui/src/i18n";
+import { Choice } from "../../maild-ui/src/settings/Choice";
 import {
   useEffect,
   useImperativeHandle,
@@ -547,11 +548,10 @@ function GroupManager({
               <strong>{label(id)}</strong>
               <small>{address(id)}</small>
             </span>
-            <select
+            <Choice
               aria-label={`${label(id)}的分组`}
               value={grouping.assignments[id] ?? OTHER_GROUP}
-              onChange={(e) => {
-                const group = e.target.value;
+              onValueChange={(group) => {
                 change((previous) => ({
                   ...previous,
                   assignments: { ...previous.assignments, [id]: group },
@@ -563,7 +563,7 @@ function GroupManager({
                   {g.name}
                 </option>
               ))}
-            </select>
+            </Choice>
           </label>
         ))}
       </div>

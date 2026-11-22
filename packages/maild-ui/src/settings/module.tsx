@@ -12,6 +12,7 @@ import { useExternal, useStore } from "../host/hooks";
 import type { Bundle, ViewProps } from "../host/types";
 import type { Preferences } from "../preferences";
 import { BRAND } from "../brand";
+import { Choice } from "./Choice";
 
 export const SETTINGS_VIEW = "maild.settings.page";
 
@@ -54,32 +55,32 @@ export function settingsModule(
           title="主题"
           description="跟随系统，或固定浅色 / 深色。深色外壳下邮件仍保持原色。"
         >
-          <select
+          <Choice
             aria-label="主题"
             value={preferences.theme}
-            onChange={(event) =>
-              update({ theme: event.target.value as Preferences["theme"] })
+            onValueChange={(value) =>
+              update({ theme: value as Preferences["theme"] })
             }
           >
             <option value="system">跟随系统</option>
             <option value="light">浅色</option>
             <option value="dark">深色</option>
-          </select>
+          </Choice>
         </Row>
         <Row
           title="列表密度"
           description="舒适 90px 一行，紧凑 68px 并隐藏摘要。"
         >
-          <select
+          <Choice
             aria-label="列表密度"
             value={preferences.density}
-            onChange={(event) =>
-              update({ density: event.target.value as Preferences["density"] })
+            onValueChange={(value) =>
+              update({ density: value as Preferences["density"] })
             }
           >
             <option value="comfortable">舒适</option>
             <option value="compact">紧凑</option>
-          </select>
+          </Choice>
         </Row>
       </>
     );

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Choice } from '../settings/Choice';
 
 import type { UiReadingPolicy, UiReadingPolicyPatch } from '../bridge/types';
 import { errorCode } from '../bridge/errors';
@@ -74,15 +75,15 @@ export function ReadingPrivacySection({ host, onChanged }: { host: Host; onChang
           <strong>远程内容</strong>
           <p>「阻止」时每封邮件可单独选择「加载本封」，只在本次会话内生效。</p>
         </div>
-        <select
+        <Choice
           aria-label="远程内容默认策略"
           value={policy?.remote_content ?? 'block'}
           disabled={!policy || busy || !policy.persisted}
-          onChange={(event) => void apply({ remote_content: event.target.value === 'allow' ? 'allow' : 'block' })}
+          onValueChange={(value) => void apply({ remote_content: value === 'allow' ? 'allow' : 'block' })}
         >
           <option value="block">阻止（推荐）</option>
           <option value="allow">对所有发件人加载</option>
-        </select>
+        </Choice>
       </div>
       <div className="setting-row">
         <div className="setting-copy">
