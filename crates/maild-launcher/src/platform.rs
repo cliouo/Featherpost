@@ -134,8 +134,8 @@ pub(crate) fn open_settings() {
 /// Initialise AppKit only when a native window is actually shown (ADR-0044): a normal open that
 /// hosts or hands off the mail window never becomes a foreground app of its own. Beside a
 /// running main mail window (e.g. "Open recovery" from its settings), the recovery dialogs float
-/// in front as an `Accessory` app, so no second Dock icon appears. Either way the app activates:
-/// the menu bar spawns it as a plain child process, which macOS leaves behind the frontmost app.
+/// in front as an `Accessory` app, so no second Dock icon appears. The activation request is only
+/// honoured on older macOS; `dialog` keeps the alerts visible on every version.
 pub(crate) fn prepare_ui() {
     #[cfg(target_os = "macos")]
     {
@@ -200,6 +200,11 @@ pub(crate) fn dialog(
     for label in labels {
         alert.addButtonWithTitle(&NSString::from_str(label));
     }
+    // Spawned by the menu bar as a plain child process, this app is not activated, and macOS 14+
+    // ignores its own activation request, so a normal-level alert would open behind the frontmost
+    // window. Float it above normal windows instead.
+    alert.layout();
+    alert.window().setLevel(objc2_app_kit::NSFloatingWindowLevel);
     let response = alert.runModal();
     usize::try_from(response - NSAlertFirstButtonReturn)
         .ok()
