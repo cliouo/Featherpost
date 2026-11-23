@@ -442,6 +442,28 @@ fi
 plutil -replace CFBundleVersion -string "$build_version_value" "$agent_plist"
 "$packaging_dir/verify-bundle.sh" "$bundle" >/dev/null
 
+# ADR-0048 decision 8: the UI bundle declares both UI languages, falling back to zh-Hans.
+ui_plist="$bundle/$payload_rel/$BRAND_UI_BUNDLE/Contents/Info.plist"
+[ "$(plutil -extract CFBundleLocalizations json -o - "$ui_plist")" = '["en","zh-Hans"]' ] ||
+    fail 'generated UI bundle does not declare en and zh-Hans'
+[ "$(plutil -extract CFBundleDevelopmentRegion raw "$ui_plist")" = zh-Hans ] ||
+    fail 'generated UI bundle does not fall back to zh-Hans'
+plutil -replace CFBundleLocalizations -json '["zh-Hans"]' "$ui_plist"
+if "$packaging_dir/verify-bundle.sh" "$bundle" >/dev/null 2>&1; then
+    fail 'verifier accepted a UI bundle without the en localization'
+fi
+plutil -remove CFBundleLocalizations "$ui_plist"
+if "$packaging_dir/verify-bundle.sh" "$bundle" >/dev/null 2>&1; then
+    fail 'verifier accepted a UI bundle without CFBundleLocalizations'
+fi
+plutil -insert CFBundleLocalizations -json '["en","zh-Hans"]' "$ui_plist"
+plutil -replace CFBundleDevelopmentRegion -string en "$ui_plist"
+if "$packaging_dir/verify-bundle.sh" "$bundle" >/dev/null 2>&1; then
+    fail 'verifier accepted a UI bundle whose development region is not zh-Hans'
+fi
+plutil -replace CFBundleDevelopmentRegion -string zh-Hans "$ui_plist"
+"$packaging_dir/verify-bundle.sh" "$bundle" >/dev/null
+
 # Rebrand without touching a script: a copy of packaging/macos with another brand.env (what
 # `scripts/sync-brand.sh` writes after a brand.toml edit) must build and verify a bundle whose
 # every name, identifier, icon and manifest comes from that brand.env. Spaces and `&` in the
@@ -556,6 +578,15 @@ if "${unset_versions[@]}" "$packaging_dir/verify-bundle.sh" "$studio_bundle" >/d
     fail 'unexpected Studio payload file accepted'
 fi
 rm "$studio_payload/unexpected"
+studio_plist="$studio_payload/Featherpost Studio.app/Contents/Info.plist"
+[ "$(plutil -extract CFBundleLocalizations json -o - "$studio_plist")" = '["en","zh-Hans"]' ] ||
+    fail 'Studio bundle does not declare en and zh-Hans'
+plutil -replace CFBundleLocalizations -json '["zh-Hans"]' "$studio_plist"
+if "${unset_versions[@]}" "$packaging_dir/verify-bundle.sh" "$studio_bundle" >/dev/null 2>&1; then
+    fail 'verifier accepted a Studio bundle without the en localization'
+fi
+plutil -replace CFBundleLocalizations -json '["en","zh-Hans"]' "$studio_plist"
+"${unset_versions[@]}" "$packaging_dir/verify-bundle.sh" "$studio_bundle" >/dev/null
 "${unset_versions[@]}" "$packaging_dir/build-preview-dmg.sh" --app "$studio_bundle" \
     --output "$work/output/studio-preview.dmg" >/dev/null
 hdiutil verify "$work/output/studio-preview.dmg" >/dev/null

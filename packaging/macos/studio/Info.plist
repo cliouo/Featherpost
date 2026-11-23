@@ -6,7 +6,7 @@
   <key>CFBundleName</key><string>Featherpost Studio</string>
   <key>CFBundleDisplayName</key><string>Featherpost Studio</string>
   <key>CFBundleDevelopmentRegion</key><string>zh-Hans</string>
-  <key>CFBundleLocalizations</key><array><string>zh-Hans</string></array>
+  <key>CFBundleLocalizations</key><array><string>en</string><string>zh-Hans</string></array>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
   <!-- Both version fields are synchronized from the Studio config by build-studio.sh. -->

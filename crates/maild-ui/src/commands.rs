@@ -197,7 +197,11 @@ pub(crate) async fn ui_set_locale_preference(
     state: State<'_, AppState>,
     update: UiLocaleUpdate,
 ) -> Result<UiLocalePreference, UiError> {
-    state.bridge.set_locale_preference(&update).await
+    let result = state.bridge.set_locale_preference(&update).await;
+    // ADR-0048 决策 8（M1）：系统画的文字下次启动跟随；`effective` 不变时没有推送，这里直接同步。
+    #[cfg(target_os = "macos")]
+    crate::macos_app_languages::sync_after_set(&result).await;
+    result
 }
 
 // ADR-0036: compose commands. No generic RPC or local-path entry point is exposed.

@@ -57,6 +57,7 @@ verify_studio_payload() {
     expect_plist_string "$app/Contents/Info.plist" CFBundleIconFile "$BRAND_ICON_NAME"
     expect_plist_string "$app/Contents/Info.plist" CFBundleShortVersionString "$version"
     expect_plist_string "$app/Contents/Info.plist" CFBundleVersion "$version"
+    expect_frontend_localizations "$app/Contents/Info.plist"
     expected_layout=$(printf '%s\n%s\n' "$expected_layout" "$(cat <<EOF
 $rel
 $rel/frontend.toml
