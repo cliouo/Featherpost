@@ -998,18 +998,54 @@ fn receive_for(ctx: &Context, account: &str) -> Option<crate::receive::Receive> 
 
 /// `syncMessages`：唤醒收信循环立即跑一轮增量同步（ADR-0041 决策 4）。
 ///
-/// 只是敲门：不等同步完成，结果经 `mail/*` 推送与列表刷新体现。省略 `account` = 全部启用账户。
+/// 默认只敲门；`track` 为指定账户返回可查询的同步 ID，可选 `folder`。
 async fn sync_messages(ctx: &Context, params: &Value) -> HandlerResult {
-    let account = match params {
-        Value::Null => None,
+    let (account, folder, track, sync_id) = match params {
+        Value::Null => (None, None, false, None),
         Value::Object(object) => {
-            if object.keys().any(|key| key != "account") {
-                return Err(invalid_params("参数只能包含 `account`"));
+            if object
+                .keys()
+                .any(|key| !["account", "folder", "track", "sync_id"].contains(&key.as_str()))
+            {
+                return Err(invalid_params("未知同步参数"));
             }
-            optional_account(object, "account")?
+            let folder = optional_account(object, "folder")?;
+            let track = match object.get("track") {
+                None => false,
+                Some(Value::Bool(track)) => *track,
+                _ => return Err(invalid_params("`track` 必须是布尔值")),
+            };
+            let sync_id = object
+                .get("sync_id")
+                .map(|value| {
+                    value
+                        .as_u64()
+                        .filter(|id| *id > 0)
+                        .ok_or_else(|| invalid_params("`sync_id` 必须是正整数"))
+                })
+                .transpose()?;
+            (optional_account(object, "account")?, folder, track, sync_id)
         }
         _ => return Err(invalid_params("参数必须是对象")),
     };
+    if track || folder.is_some() || sync_id.is_some() {
+        if folder
+            .as_ref()
+            .is_some_and(|name| !track || name.len() > MAX_FOLDER_NAME_BYTES)
+            || (track && sync_id.is_some())
+        {
+            return Err(invalid_params("同步参数组合无效"));
+        }
+        let account = account.ok_or_else(|| invalid_params("必须指定账户"))?;
+        let receive =
+            receive_for(ctx, &account).ok_or_else(|| invalid_params("账户不存在或未启用"))?;
+        if let Some(id) = sync_id {
+            let done = receive.manual_sync_done(id).map_err(internal)?;
+            return Ok(json!({ "done": done }));
+        }
+        let id = receive.start_manual_sync(folder).map_err(internal)?;
+        return Ok(json!({ "sync_id": id }));
+    }
     let entries = ctx
         .get::<Accounts>()
         .map(|accounts| accounts.snapshot())
@@ -1698,12 +1734,22 @@ async fn list_folders(ctx: &Context, params: &Value) -> HandlerResult {
         Some(_) => return Err(invalid_params("`account` 必须是非空字符串或 null")),
     };
     let store = ctx.get::<Store>().ok_or_else(|| unavailable("store"))?;
+    let inbox_folders: std::collections::HashMap<_, _> = ctx
+        .get::<Accounts>()
+        .map(|accounts| {
+            accounts
+                .snapshot()
+                .into_iter()
+                .filter_map(|(name, _, receive)| receive.inbox_folders().map(|folders| (name, folders)))
+                .collect()
+        })
+        .unwrap_or_default();
     let folders = tokio::task::spawn_blocking(move || {
         let records = store.list_folders(account.as_deref())?;
         let mut out = Vec::with_capacity(records.len());
         for record in records {
             let (total, unseen) = store.folder_counts(record.id)?;
-            out.push(json!({
+            let mut folder = json!({
                 "account": record.account,
                 "name": record.name,
                 "display_name": record.display_name,
@@ -1711,7 +1757,13 @@ async fn list_folders(ctx: &Context, params: &Value) -> HandlerResult {
                 "present": record.present,
                 "total": total,
                 "unseen": unseen,
-            }));
+            });
+            if let Some(inboxes) = inbox_folders.get(&record.account) {
+                let name = Some(record.name.as_str());
+                folder["is_primary"] = json!(inboxes.primary.as_deref() == name);
+                folder["is_search_inbox"] = json!(inboxes.search.as_deref() == name);
+            }
+            out.push(folder);
         }
         Ok::<_, rusqlite::Error>(out)
     })

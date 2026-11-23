@@ -4,6 +4,8 @@ use crate::{Bridge, UiError};
 use maild_client::{MessageResult, MessageSummariesResult, ProfilesResult};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::future::Future;
+use tokio::time::Instant;
 
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -277,6 +279,37 @@ impl Bridge {
         Ok(())
     }
 
+    pub async fn sync_mailbox_scope(
+        &self,
+        account: String,
+        folder: Option<String>,
+    ) -> Result<UiMailboxSyncOutcome, UiError> {
+        #[derive(serde::Deserialize)]
+        struct Started {
+            sync_id: u64,
+        }
+        let deadline = Instant::now() + maild_client::REQUEST_TIMEOUT;
+        let Started { sync_id } = self
+            .compose_call(
+                "syncMessages",
+                json!({ "account": account, "folder": folder, "track": true }),
+            )
+            .await?;
+        wait_for_mailbox_sync(deadline, sync_id, || self.mailbox_sync_status(&account, sync_id))
+            .await
+    }
+
+    pub async fn mailbox_sync_status(&self, account: &str, sync_id: u64) -> Result<bool, UiError> {
+        #[derive(serde::Deserialize)]
+        struct Status {
+            done: bool,
+        }
+        let status: Status = self
+            .compose_call("syncMessages", json!({ "account": account, "sync_id": sync_id }))
+            .await?;
+        Ok(status.done)
+    }
+
     /// 在服务器上检索本地缓存窗口之外的历史（`searchMessages` 的 `scope: "server"` 分支）。
     /// 结果只是摘要、不落库；要读全文请接着调 [`Bridge::fetch_server_message`]。
     pub async fn server_search(
@@ -348,5 +381,68 @@ impl Bridge {
             Err(error) if error.code == crate::UiErrorCode::NotFound => Ok(None),
             Err(error) => Err(error),
         }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UiMailboxSyncOutcome {
+    Complete,
+    Background { sync_id: u64 },
+}
+
+async fn wait_for_mailbox_sync<F>(
+    deadline: Instant,
+    sync_id: u64,
+    mut status: impl FnMut() -> F,
+) -> Result<UiMailboxSyncOutcome, UiError>
+where
+    F: Future<Output = Result<bool, UiError>>,
+{
+    match tokio::time::timeout_at(deadline, async {
+        loop {
+            if status().await? {
+                return Ok(UiMailboxSyncOutcome::Complete);
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        }
+    })
+    .await
+    {
+        Ok(result) => result,
+        Err(_) => Ok(UiMailboxSyncOutcome::Background { sync_id }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn expired_sync_wait_returns_background() {
+        let outcome = wait_for_mailbox_sync(Instant::now(), 42, || async { Ok(false) })
+            .await
+            .unwrap();
+        assert_eq!(outcome, UiMailboxSyncOutcome::Background { sync_id: 42 });
+        assert_eq!(
+            serde_json::to_value(outcome).unwrap(),
+            json!({ "background": { "sync_id": 42 } })
+        );
+    }
+
+    #[tokio::test]
+    async fn sync_wait_preserves_poll_errors() {
+        let error = wait_for_mailbox_sync(Instant::now() + Duration::from_secs(1), 42, || async {
+            Err(UiError::failed(
+                "syncMessages",
+                "LIST rejected",
+                "failed",
+                "同步失败",
+            ))
+        })
+        .await
+        .unwrap_err();
+        assert_eq!(error.message, "同步失败");
     }
 }

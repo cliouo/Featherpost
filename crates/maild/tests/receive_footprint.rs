@@ -10,12 +10,15 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use common::fake_mail::FakeMail;
+use common::fake_mail::{FakeMail, ListReply};
 use cordis::Context;
+use maild::api::{dispatch, JsonRpcRequest};
 use maild::events::{AccountStateKind, MailAttachment, MailMessage};
+use maild::notify::Notifier;
 use maild::receive::{Receive, FETCH_BATCH_SIZE};
 use maild::store::Store;
 use maild::Accounts;
+use serde_json::{json, Value};
 
 async fn wait_until<F: Fn() -> bool>(what: &str, deadline: Duration, check: F) {
     let until = tokio::time::Instant::now() + deadline;
@@ -284,16 +287,410 @@ async fn trigger_sync_wakes_an_idling_loop_and_sweeps_every_folder() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn manual_sync_refreshes_folders_on_idle_and_poll_connections() {
+    for extra in [
+        "folder_poll_secs = 3600",
+        "idle = false\npoll_secs = 3600\nfolder_poll_secs = 3600\n[plugins.scheduler]",
+    ] {
+        let server = FakeMail::start().await.expect("假邮件服务器启动");
+        server.add_mailbox("Archive", "\\Archive");
+        server.deliver_to("Archive", "", raw_mail("旧邮件", "x"));
+        let ctx = Context::new();
+        let mut assembly = maild::assemble(&ctx, &assembly_toml(server.imap_addr.port(), extra))
+            .expect("装配成功");
+        let receive = receive_of(&ctx);
+        tokio::time::timeout(Duration::from_secs(10), receive.wait_online())
+            .await
+            .expect("10s 内未在线");
+        let store = ctx.get::<Store>().expect("store 服务");
+
+        tracked_sync(&ctx, Some("Archive")).await;
+        assert_eq!(
+            store.count_messages(Some("e2e"), Some("Archive")).unwrap(),
+            1
+        );
+
+        server.remove_mailbox("Archive");
+        server.add_mailbox("Renamed", "\\Archive");
+        server.add_mailbox("Projects", "");
+        server.deliver_to("Renamed", "", raw_mail("新归档邮件", "x"));
+        server.deliver_to("Projects", "", raw_mail("新项目邮件", "x"));
+
+        // The item the user right-clicked may have vanished before LIST runs.
+        tracked_sync(&ctx, Some("Archive")).await;
+        assert!(
+            !store
+                .folder_by_name("e2e", "Archive")
+                .unwrap()
+                .unwrap()
+                .present
+        );
+        assert!(
+            store
+                .folder_by_name("e2e", "Renamed")
+                .unwrap()
+                .unwrap()
+                .present
+        );
+        assert_eq!(
+            store.count_messages(Some("e2e"), Some("Archive")).unwrap(),
+            1
+        );
+        assert_eq!(
+            store.count_messages(Some("e2e"), Some("Renamed")).unwrap(),
+            0
+        );
+
+        tracked_sync(&ctx, Some("Renamed")).await;
+        assert_eq!(
+            store.count_messages(Some("e2e"), Some("Renamed")).unwrap(),
+            1
+        );
+        assert_eq!(
+            store.count_messages(Some("e2e"), Some("Projects")).unwrap(),
+            0
+        );
+
+        server.add_mailbox("New", "");
+        server.deliver_to("New", "", raw_mail("新文件夹邮件", "x"));
+        tracked_sync(&ctx, None).await;
+        assert!(store.folder_by_name("e2e", "New").unwrap().unwrap().present);
+        assert_eq!(store.count_messages(Some("e2e"), Some("New")).unwrap(), 1);
+        assert_eq!(
+            store.count_messages(Some("e2e"), Some("Projects")).unwrap(),
+            1
+        );
+        assert_eq!(server.imap_connections(), 1);
+        assembly.dispose().await;
+    }
+}
+
+async fn tracked_sync(ctx: &Context, folder: Option<&str>) {
+    let started = sync_call(
+        ctx,
+        json!({"account": "e2e", "folder": folder, "track": true}),
+    )
+    .await;
+    let id = started["sync_id"].as_u64().expect("同步 ID");
+    wait_for_tracked_sync(ctx, id).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn manual_sync_rejects_failed_and_incomplete_folder_lists() {
+    let server = FakeMail::start().await.unwrap();
+    server.add_mailbox("Archive", "");
+    server.deliver_to("Archive", "", raw_mail("Cached mail", "body"));
+    let ctx = Context::new();
+    let mut assembly =
+        maild::assemble(&ctx, &assembly_toml(server.imap_addr.port(), "")).expect("装配成功");
+    let store = ctx.get::<Store>().expect("store 服务");
+    tokio::time::timeout(Duration::from_secs(5), receive_of(&ctx).wait_online())
+        .await
+        .unwrap();
+    tracked_sync(&ctx, Some("Archive")).await;
+    server.remove_mailbox("Archive");
+    server.add_mailbox("Projects", "\\NoSelect");
+
+    for (reply, expected_error) in [
+        (ListReply::Rejected, "Fixture LIST rejected"),
+        (ListReply::PartialRejected, "Fixture LIST rejected"),
+        (ListReply::Empty, "LIST 未返回可选文件夹"),
+        (ListReply::WithoutInbox, "LIST 未返回可选文件夹"),
+    ] {
+        server.set_list_reply(reply);
+        let started = sync_call(&ctx, json!({"account": "e2e", "track": true})).await;
+        let id = started["sync_id"].as_u64().unwrap();
+        let error = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let response = dispatch(
+                    &ctx,
+                    &JsonRpcRequest {
+                        jsonrpc: "2.0".into(),
+                        method: "syncMessages".into(),
+                        params: json!({"account": "e2e", "sync_id": id}),
+                        id: json!(1),
+                    },
+                )
+                .await;
+                if let Some(error) = response.error {
+                    break error;
+                }
+                assert_eq!(response.result.unwrap()["done"], false);
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(error.message.contains(expected_error), "{error:?}");
+        for folder in ["INBOX", "Archive"] {
+            assert!(
+                store
+                    .folder_by_name("e2e", folder)
+                    .unwrap()
+                    .unwrap()
+                    .present
+            );
+        }
+        assert!(store.folder_by_name("e2e", "Projects").unwrap().is_none());
+        assert_eq!(
+            store.count_messages(Some("e2e"), Some("Archive")).unwrap(),
+            1
+        );
+    }
+
+    server.set_list_reply(ListReply::Normal);
+    tracked_sync(&ctx, None).await;
+    assert!(
+        !store
+            .folder_by_name("e2e", "Archive")
+            .unwrap()
+            .unwrap()
+            .present
+    );
+    assert_eq!(server.imap_connections(), 1);
+    assembly.dispose().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn successful_list_without_inbox_syncs_selectable_folders() {
+    let server = FakeMail::start().await.unwrap();
+    server.set_list_reply(ListReply::WithoutInbox);
+    server.add_mailbox("Archive", "");
+    server.deliver_to("Archive", "", raw_mail("Startup mail", "body"));
+    let ctx = Context::new();
+    let config = assembly_toml(
+        server.imap_addr.port(),
+        r#"
+[plugins.filters]
+[plugins.filters.config]
+[[plugins.filters.config.rules]]
+field = "subject"
+pattern = "mail"
+action = "drop"
+"#,
+    );
+    let mut assembly = maild::assemble(&ctx, &config).expect("装配成功");
+    assert!(
+        assembly.errors.is_empty(),
+        "装配错误: {:?}",
+        assembly.errors
+    );
+    let store = ctx.get::<Store>().expect("store 服务");
+    wait_until("启动同步归档邮件", Duration::from_secs(5), || {
+        store.count_messages(Some("e2e"), Some("Archive")).unwrap() == 1
+    })
+    .await;
+
+    server.deliver_to("Archive", "", raw_mail("Manual sync mail", "body"));
+    tracked_sync(&ctx, Some("Archive")).await;
+    assert_eq!(
+        store.count_messages(Some("e2e"), Some("Archive")).unwrap(),
+        2
+    );
+
+    server.add_mailbox("Projects", "");
+    server.deliver_to("Projects", "", raw_mail("New folder mail", "body"));
+    tracked_sync(&ctx, None).await;
+    assert_eq!(
+        store.count_messages(Some("e2e"), Some("Projects")).unwrap(),
+        1
+    );
+    assert_eq!(server.imap_connections(), 1);
+    assembly.dispose().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn localized_inbox_without_inbox_runs_filters_and_notifies() {
+    assert_localized_inbox_runs_filters_and_notifies(None).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn declared_inbox_wins_over_an_earlier_inbox_like_folder() {
+    assert_localized_inbox_runs_filters_and_notifies(Some("Nested/INBOX")).await;
+}
+
+async fn assert_localized_inbox_runs_filters_and_notifies(guessed_inbox: Option<&str>) {
+    let server = FakeMail::start().await.unwrap();
+    server.set_list_reply(ListReply::WithoutInbox);
+    server.add_mailbox("Archive", "\\Archive");
+    let inbox = "Posteingang";
+    if let Some(guessed_inbox) = guessed_inbox {
+        server.add_mailbox(guessed_inbox, "");
+        server.deliver_to(guessed_inbox, "", raw_mail("Drop this", "body"));
+    }
+    server.add_mailbox(inbox, "\\Inbox");
+    for subject in ["Drop this", "Keep this"] {
+        server.deliver_to(
+            inbox,
+            "",
+            format!("From: sender@test.local\r\nSubject: {subject}\r\n\r\nbody\r\n").into_bytes(),
+        );
+    }
+
+    let ctx = Context::new();
+    let config = assembly_toml(
+        server.imap_addr.port(),
+        r#"
+[plugins.filters]
+[plugins.filters.config]
+[[plugins.filters.config.rules]]
+field = "subject"
+pattern = "Drop"
+action = "drop"
+
+[plugins.notify]
+[plugins.rules]
+[plugins.rules.config]
+notify_new_mail = true
+"#,
+    );
+    let mut assembly = maild::assemble(&ctx, &config).expect("装配成功");
+    assert!(assembly.errors.is_empty(), "装配错误: {:?}", assembly.errors);
+    tracked_sync(&ctx, None).await;
+
+    let folders = folder_list(&ctx).await;
+    let listed = folders["folders"].as_array().unwrap();
+    let primary: Vec<_> = listed.iter().filter(|folder| folder["is_primary"] == true).collect();
+    assert_eq!(primary.len(), 1);
+    assert_eq!(primary[0]["name"], inbox);
+
+    let store = ctx.get::<Store>().expect("store 服务");
+    if let Some(guessed_inbox) = guessed_inbox {
+        assert_eq!(
+            store.count_messages(Some("e2e"), Some(guessed_inbox)).unwrap(),
+            1
+        );
+    }
+    let messages = store
+        .list_message_summaries(Some("e2e"), Some(inbox), 10, 0)
+        .unwrap();
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].subject, "Keep this");
+    let notifier = ctx.get::<Notifier>().expect("notifier 服务");
+    wait_until("收件箱新邮件通知", Duration::from_secs(5), || {
+        !notifier.sent().is_empty()
+    })
+    .await;
+    assert_eq!(notifier.sent().len(), 1);
+    assert!(notifier.sent()[0].body.contains("Keep this"));
+    assembly.dispose().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn configured_primary_does_not_override_the_search_inbox() {
+    let server = FakeMail::start().await.unwrap();
+    server.set_list_reply(ListReply::WithoutInbox);
+    server.add_mailbox("Archive", "\\Archive");
+    server.add_mailbox("Nested/INBOX", "");
+    server.add_mailbox("Posteingang", "\\Inbox");
+    let ctx = Context::new();
+    let config = assembly_toml(server.imap_addr.port(), r#"mailbox = "Archive""#);
+    let mut assembly = maild::assemble(&ctx, &config).expect("装配成功");
+    assert!(assembly.errors.is_empty(), "装配错误: {:?}", assembly.errors);
+    tracked_sync(&ctx, None).await;
+
+    let folders = folder_list(&ctx).await;
+    for folder in folders["folders"].as_array().unwrap() {
+        assert_eq!(folder["is_primary"], folder["name"] == "Archive");
+        assert_eq!(folder["is_search_inbox"], folder["name"] == "Posteingang");
+    }
+    let listed = folders["folders"].as_array().unwrap();
+    assert_eq!(listed.len(), 3);
+    assembly.dispose().await;
+}
+
+async fn folder_list(ctx: &Context) -> Value {
+    dispatch(
+        ctx,
+        &JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            method: "listFolders".into(),
+            params: json!({ "account": "e2e" }),
+            id: json!(1),
+        },
+    )
+    .await
+    .result
+    .unwrap()
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn connection_time_list_rejection_preserves_cached_folders() {
+    let server = FakeMail::start().await.unwrap();
+    server.set_list_reply(ListReply::PartialRejected);
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("mail.db");
+    let db = db.to_str().unwrap();
+    {
+        let store = Store::open(db).unwrap();
+        store.upsert_folder("e2e", "INBOX", "INBOX", None).unwrap();
+        store
+            .upsert_folder("e2e", "Archive", "Archive", None)
+            .unwrap();
+    }
+    let ctx = Context::new();
+    let config = assembly_toml(server.imap_addr.port(), "")
+        .replace(r#"db_path = """#, &format!("db_path = {db:?}"));
+    let mut assembly = maild::assemble(&ctx, &config).expect("装配成功");
+    tokio::time::timeout(Duration::from_secs(5), receive_of(&ctx).wait_online())
+        .await
+        .unwrap();
+    let store = ctx.get::<Store>().expect("store 服务");
+    assert!(
+        store
+            .folder_by_name("e2e", "Archive")
+            .unwrap()
+            .unwrap()
+            .present
+    );
+    assembly.dispose().await;
+}
+
+async fn wait_for_tracked_sync(ctx: &Context, id: u64) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let status = sync_call(ctx, json!({"account": "e2e", "sync_id": id})).await;
+            if status["done"] == true {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("同步超时");
+}
+
+async fn sync_call(ctx: &Context, params: Value) -> Value {
+    let response = dispatch(
+        ctx,
+        &JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            method: "syncMessages".into(),
+            params,
+            id: json!(1),
+        },
+    )
+    .await;
+    response
+        .result
+        .unwrap_or_else(|| panic!("{:?}", response.error))
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn trigger_sync_and_shutdown_cut_the_reconnect_backoff_short() {
-    // 一个接受即断开的 TCP 端点：每次连接尝试都失败在读 greeting。
+    // 前两次连接失败在读 greeting，第三次转发给假 IMAP 服务器。
+    let server = FakeMail::start().await.unwrap();
+    let imap_addr = server.imap_addr;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let accepts = Arc::new(AtomicUsize::new(0));
     let counter = Arc::clone(&accepts);
     let acceptor = tokio::spawn(async move {
-        while let Ok((stream, _)) = listener.accept().await {
-            counter.fetch_add(1, Ordering::SeqCst);
-            drop(stream);
+        while let Ok((mut stream, _)) = listener.accept().await {
+            if counter.fetch_add(1, Ordering::SeqCst) >= 2 {
+                let mut imap = tokio::net::TcpStream::connect(imap_addr).await.unwrap();
+                let _ = tokio::io::copy_bidirectional(&mut stream, &mut imap).await;
+            }
         }
     });
 
@@ -328,11 +725,37 @@ async fn trigger_sync_and_shutdown_cut_the_reconnect_backoff_short() {
     })
     .await;
 
-    // 关断同样打断退避睡眠：卸载不必等满 1 小时。
+    wait_until("再次进入离线退避", Duration::from_secs(5), || {
+        receive.state().state == AccountStateKind::Offline
+    })
+    .await;
+    server.add_mailbox("Archive", "");
+    let started = sync_call(
+        &ctx,
+        json!({"account": "e2e", "folder": "Archive", "track": true}),
+    )
+    .await;
+    let id = started["sync_id"].as_u64().expect("同步 ID");
+    wait_until(
+        "跟踪同步打断退避并重连",
+        Duration::from_secs(5),
+        || accepts.load(Ordering::SeqCst) >= 3,
+    )
+    .await;
+
+    wait_for_tracked_sync(&ctx, id).await;
+
+    // 再断开进入退避，确认关断不必等待退避睡眠结束。
+    acceptor.abort();
+    wait_until(
+        "转发断开后进入离线退避",
+        Duration::from_secs(5),
+        || receive.state().state == AccountStateKind::Offline,
+    )
+    .await;
     tokio::time::timeout(Duration::from_secs(5), assembly.dispose())
         .await
         .expect("退避中的收信循环应立即响应关断");
-    acceptor.abort();
 }
 
 fn sample_message(uid: &str, attachment: &[u8]) -> MailMessage {

@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { applyEffectiveLocales } from "@featherpost/i18n";
 import { afterEach, expect, it, vi } from "vitest";
 import { ContextMenuHost } from "../../featherpost-studio/src/ContextMenu";
+import { SyncCount } from "../../featherpost-studio/src/SyncCount";
 import { clipboardCopier } from "../../featherpost-studio/src/studioActions";
 import {
   accountMenu,
@@ -164,10 +165,16 @@ it("builds sender, folder, account and selection menus", () => {
   expect(labels(folderEntries)).not.toContain("展开子文件夹");
 
   const assign = vi.fn();
+  const sync = vi.fn();
   const account = accountMenu("me@example.test", {
     open: vi.fn(), openUnread: vi.fn(), canOpen: true, groups: [{ id: "a", name: "工作" }, { id: "b", name: "其他" }],
+    sync, canSync: true,
     group: "b", assign, manageGroups: vi.fn(), copy, settings: vi.fn(),
   });
+  const syncItem = find(account, "立即同步");
+  expect(syncItem.disabled).toBe(false);
+  syncItem.run();
+  expect(sync).toHaveBeenCalledOnce();
   const groups = sub(account, "移到分组").entries;
   expect(groups.map((g) => g.kind === "check" && g.checked)).toEqual([false, true, false, false]);
   (groups[0] as Extract<MenuEntry, { kind: "check" }>).run();
@@ -179,6 +186,15 @@ it("builds sender, folder, account and selection menus", () => {
   expect(labels(selected)).toEqual(["复制", "搜索邮件「下周 产品评审的议程和发布计划安排表…」"]);
   (selected[1] as Item).run();
   expect(search).toHaveBeenCalledWith("下周 产品评审的议程和发布计划安排表格");
+});
+
+it("uses the count slot for the sync glyph while keeping the count in place", () => {
+  const idle = renderToStaticMarkup(h(SyncCount, { count: 12, busy: false }));
+  const busy = renderToStaticMarkup(h(SyncCount, { count: 12, busy: true }));
+  expect(idle).toContain("<span>12</span>");
+  expect(idle).not.toContain("sync-count-spinner");
+  expect(busy).toContain('<span class="sync-count-hidden">12</span>');
+  expect(busy).toContain("sync-count-spinner");
 });
 
 it("wraps the Studio root without adding markup", () => {
@@ -210,12 +226,15 @@ it("ADR-0048: every Studio menu follows the UI language", () => {
     }),
     ...accountMenu("lin@example.com", {
       open: vi.fn(), openUnread: vi.fn(), canOpen: true, groups: [], group: "", assign: vi.fn(),
+      sync: vi.fn(), canSync: false,
       manageGroups: vi.fn(), copy, settings: vi.fn(), expansion: { expanded: false, toggle: vi.fn() },
     }),
     ...groupMenu({ open: vi.fn(), openUnread: vi.fn(), manage: vi.fn(), expansion: { expanded: true, toggle: vi.fn() } }),
     ...selectionMenu("quarterly review", { copy, search: vi.fn() }),
   ];
   const texts = flatten(all);
+  expect(find(all, "Sync Now").disabled).toBe(false);
+  expect(all.filter((entry) => entry.kind === "item" && entry.label === "Sync Now").at(-1)).toMatchObject({ disabled: true });
   expect(texts).toContain("Reply All");
   expect(texts).toContain("Delete 2 Messages");
   expect(texts).toContain("Search Mail for “quarterly review”");

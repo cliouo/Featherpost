@@ -65,6 +65,8 @@
     "allow-ui-mailbox-activity",
     "allow-ui-mailbox-resolve",
     "allow-ui-sync-mailbox",
+    "allow-ui-sync-mailbox-scope",
+    "allow-ui-mailbox-sync-status",
     "allow-ui-server-search",
     "allow-ui-fetch-server-message",
     "allow-ui-settings-discover-provider",

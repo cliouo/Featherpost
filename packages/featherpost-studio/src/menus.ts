@@ -305,6 +305,8 @@ export interface AccountMenuDeps {
   open(): void;
   openUnread(): void;
   canOpen: boolean;
+  sync(): void;
+  canSync: boolean;
   groups: { id: string; name: string }[];
   group: string;
   assign(group: string): void;
@@ -325,6 +327,7 @@ export function accountMenu(address: string, deps: AccountMenuDeps): MenuEntry[]
       label: deps.expansion.expanded ? m.studio_menu_collapse_folders() : m.studio_menu_expand_folders(),
       run: deps.expansion.toggle,
     },
+    { kind: "item", label: m.studio_menu_sync_now(), icon: "refresh", disabled: !deps.canSync, run: deps.sync },
     separator,
     {
       kind: "submenu",

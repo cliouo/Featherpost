@@ -335,6 +335,7 @@
   "mailbox_star_add": "Star",
   "mailbox_star_remove": "Unstar",
   "mailbox_subject_empty": "(No subject)",
+  "mailbox_sync_background": "Sync started and is still running in the background.",
   "mailbox_thread_capped": "This conversation is long; use search to narrow it down.",
   "mailbox_thread_collapse": "Hide conversation",
   "mailbox_thread_count_one": "{count} message · oldest first",

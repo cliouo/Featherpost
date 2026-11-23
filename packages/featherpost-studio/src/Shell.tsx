@@ -14,6 +14,7 @@ import { MailboxNavigation, type NavigationHandle } from "./MailboxNavigation";
 import { readStudioView, saveStudioView, type StudioView } from "./layout";
 import { ContextMenuHost, useContextMenu } from "./ContextMenu";
 import { folderMenu, selectionMenu } from "./menus";
+import { SyncCount } from "./SyncCount";
 import {
   StudioActionsContext,
   clipboardCopier,
@@ -145,9 +146,11 @@ export function Studio({
         searchInput.current?.focus();
         searchInput.current?.select();
       }),
-    sync: () => void mailbox.syncNow(),
-    canSync: online && !mail.syncing,
+    sync: (folder) => void mailbox.syncNow({ account: folder.account, folder: folder.name }),
+    canSync: (folder) => online && !mailbox.isSyncPending(folder.account),
+    syncing: (folder) => mail.syncingScopes.get(folder.account)?.folder === folder.name,
   };
+  const syncing = mailbox.isSyncing();
   const unread = state.snapshot.accounts.reduce(
     (n, a) =>
       n +
@@ -261,14 +264,14 @@ export function Studio({
             </button>
           </div>
           <button
-            className={`sync-status ${mail.syncing ? "spinning" : ""}`}
-            disabled={!online || mail.syncing}
+            className={`sync-status ${syncing ? "spinning" : ""}`}
+            disabled={!online || mailbox.isSyncPending()}
             title={m.studio_sync_now()}
             onClick={() => void mailbox.syncNow()}
           >
             <Icon name="refresh" />
             <span>
-              {mail.syncing
+              {syncing
                 ? m.studio_sync_status_syncing()
                 : online
                   ? m.studio_sync_status_online()
@@ -375,8 +378,9 @@ interface FolderActions {
   open(folder: Folder): void;
   openUnread(folder: Folder): void;
   searchIn(folder: Folder): void;
-  sync(): void;
-  canSync: boolean;
+  sync(folder: Folder): void;
+  canSync(folder: Folder): boolean;
+  syncing(folder: Folder): boolean;
 }
 
 function FolderBranches({
@@ -427,10 +431,12 @@ function FolderBranches({
         const expanded = !!filter || !collapsed.has(folder.name);
         const label = labels.get(folder)!;
         const count = folder.role === "drafts" ? folder.total : folder.unseen;
+        const syncing = actions.syncing(folder);
         return (
           <div key={folder.name}>
             <div
               className={`folder-row ${depth === 0 ? "folder-root-row" : ""} ${active && current(folder.account, folder.name) ? "is-active" : ""}`}
+              aria-busy={syncing || undefined}
               style={{ "--depth": depth } as CSSProperties}
               onContextMenu={(e) =>
                 menu.offer(e, () =>
@@ -438,8 +444,8 @@ function FolderBranches({
                     open: () => actions.open(folder),
                     openUnread: () => actions.openUnread(folder),
                     searchIn: () => actions.searchIn(folder),
-                    sync: actions.sync,
-                    canSync: actions.canSync,
+                    sync: () => actions.sync(folder),
+                    canSync: actions.canSync(folder),
                     copy,
                     expansion:
                       children.length && !filter
@@ -480,7 +486,7 @@ function FolderBranches({
               >
                 <Icon name={folderIcon(folder)} />
                 <span>{label}</span>
-                {count > 0 && <small>{count}</small>}
+                <SyncCount count={count} busy={syncing} />
               </button>
             </div>
             {children.length > 0 && expanded && (

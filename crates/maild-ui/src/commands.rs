@@ -11,6 +11,7 @@ use crate::bridge::{
     UiMessage, UiPage, UiReadingPolicy, UiReadingPolicyPatch, UiSnapshot,
 };
 use crate::html::LinkKind;
+use crate::mailbox::UiMailboxSyncOutcome;
 use crate::{system, AppState};
 
 #[tauri::command]
@@ -476,6 +477,24 @@ pub(crate) async fn ui_sync_mailbox(
     account: Option<String>,
 ) -> Result<(), UiError> {
     state.bridge.sync_mailbox(account).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub(crate) async fn ui_sync_mailbox_scope(
+    state: State<'_, AppState>,
+    account: String,
+    folder: Option<String>,
+) -> Result<UiMailboxSyncOutcome, UiError> {
+    state.bridge.sync_mailbox_scope(account, folder).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub(crate) async fn ui_mailbox_sync_status(
+    state: State<'_, AppState>,
+    account: String,
+    sync_id: u64,
+) -> Result<bool, UiError> {
+    state.bridge.mailbox_sync_status(&account, sync_id).await
 }
 
 #[tauri::command(rename_all = "snake_case")]

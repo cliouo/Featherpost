@@ -184,6 +184,8 @@ pub fn run(bridge: Arc<Bridge>) -> Result<(), tauri::Error> {
             commands::ui_locale_preference,
             commands::ui_set_locale_preference,
             commands::ui_sync_mailbox,
+            commands::ui_sync_mailbox_scope,
+            commands::ui_mailbox_sync_status,
             commands::ui_server_search,
             commands::ui_fetch_server_message,
             commands::ui_settings_discover_provider,
