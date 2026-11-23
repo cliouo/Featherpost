@@ -3,7 +3,8 @@ import { useUiLocale } from "@featherpost/i18n/react";
 import { packageText, providerName } from "../../../maild-ui/src/i18n";
 import { AccountReason } from "../../../maild-ui/src/settings/AccountReason";
 import { Choice } from "../../../maild-ui/src/settings/Choice";
-import { useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
+import { PopoverMenu } from "../../../maild-ui/src/app/PopoverMenu";
 import { useStore } from "../../../maild-ui/src/host/hooks";
 import type { AccountProfile, Endpoint, ProbeStage } from "../../../maild-ui/src/settings/types";
 import { SettingsController, newDraft } from "../../../maild-ui/src/settings/controller";
@@ -612,22 +613,32 @@ function Editor({ controller }: { controller: SettingsController }) {
 export function AccountMore({ profile, controller, disabled = false }: { profile: AccountProfile; controller: SettingsController; disabled?: boolean }) {
   useUiLocale();
   const s = useStore(controller.store);
+  const [open, setOpen] = useState(false);
+  const openRef = useRef(open);
+  openRef.current = open;
   const confirm = (remove: boolean) => {
     if (disabled || controller.dirty || !s.online || s.busy || s.closeLocked) return;
+    if (openRef.current) setOpen(false);
     // Account actions refresh profile revisions. Never retain an obsolete editor.
     controller.discard();
     controller.confirmAccount(profile, remove);
   };
-  return <details className="account-more">
-    <summary aria-label={m.studio_account_more_label({ account: profile.display_name })}>{m.studio_account_more()} <Icon name="more" /></summary>
-    <div>
+  return (
+    <PopoverMenu
+      className="account-more"
+      open={open}
+      onOpenChange={setOpen}
+      forceClosed={s.closeLocked}
+      triggerLabel={m.studio_account_more_label({ account: profile.display_name })}
+      trigger={<>{m.studio_account_more()} <Icon name="more" /></>}
+    >
       <button type="button" disabled={disabled || !s.online || s.busy || s.closeLocked} onClick={() => confirm(false)}>{profile.enabled ? m.studio_account_pause() : m.studio_account_enable()}</button>
       <button type="button" className="danger" disabled={disabled || !s.online || s.busy || s.closeLocked} onClick={() => confirm(true)}>{m.studio_account_remove()}</button>
       {disabled && <small>{m.studio_account_save_first()}</small>}
       <small>{m.studio_account_id_revision({ id: profile.id, revision: profile.revision })}</small>
       <small>{profile.credentials.incoming === "saved" ? m.studio_account_credentials_saved() : m.studio_account_credentials_missing()}</small>
-    </div>
-  </details>;
+    </PopoverMenu>
+  );
 }
 
 export function Accounts({ controller }: { controller: SettingsController }) {

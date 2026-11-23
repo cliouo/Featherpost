@@ -3,6 +3,7 @@ import { useEffect, useRef, type ReactNode } from "react";
 import type React from "react";
 
 import { useUiLocale } from "../i18n";
+import { closeAllPopovers } from "../app/popover";
 
 export function Dialog({
   title,
@@ -23,6 +24,7 @@ export function Dialog({
     close = useRef(onClose);
   close.current = onClose;
   useEffect(() => {
+    closeAllPopovers();
     const previous = document.activeElement;
     ref.current?.showModal();
     return () => {
