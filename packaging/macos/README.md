@@ -26,7 +26,7 @@
 | `templates/App.Info.plist.in` | `Contents/Info.plist`（`LSUIElement = true`） |
 | `templates/Agent.Info.plist.in` | `Contents/Library/LoginItems/<Agent>.app/Contents/Info.plist`（`LSUIElement = true`） |
 | `templates/Menu.Info.plist.in` | `Contents/Library/Helpers/<Menu>.app/Contents/Info.plist`（`LSUIElement = true`） |
-| `templates/UI.Info.plist.in` | 恢复副本 `<UI>.app/Contents/Info.plist` |
+| `templates/UI.Info.plist.in` | 恢复副本 `<UI>.app/Contents/Info.plist`（`CFBundleLocalizations = [en, zh-Hans]`，开发区域 `zh-Hans`） |
 | `templates/frontend.toml.in` | 恢复副本 `frontend.toml`（schema 与 `crates/maild-ui/package/frontend.toml` 一致，只改 `on_demand` + `[launch]`） |
 
 可用占位符：`PRODUCT_NAME`、`LAUNCHER_BIN`、`AGENT_BIN`、`MENU_BIN`、`UI_BIN`、`ICON_NAME`、
@@ -110,6 +110,11 @@ Spotlight 仍显示应用图标并可正常双击启动；只有窗口存在期�
 窗口、菜单栏与后台守护（ADR-0045 / ADR-0046）。若磁盘 plist 缺少 `LSUIElement`，即使进程退出前切回
 `Accessory`，Dock 仍会按 plist 把它记入最近使用区，因此 `verify-bundle.sh` 要求顶层 plist 含布尔值
 `LSUIElement=true`，缺失、为 `false` 或非布尔值都会被拒绝。
+
+两个前端 bundle（UI 模板与 `studio/Info.plist`）固定声明 `CFBundleLocalizations = [en, zh-Hans]`、
+`CFBundleDevelopmentRegion = zh-Hans`：WebKit 右键菜单、打开/保存面板、标准按钮等系统画的文字按它与本 app
+偏好域的 `AppleLanguages` 选语言，壳把用户的显式语言镜像到这个键，下次启动生效；协商不出结果时回落简体中文，
+与前端和内核一致（ADR-0048 决策 8）。`verify-bundle.sh` 对两份 plist 都核对这两个键。
 
 ### Bundle identity
 

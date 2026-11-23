@@ -48,6 +48,19 @@ expect_plist_string() {
         die "$key in $plist is '$actual', expected '$expected'"
 }
 
+# ADR-0048 decision 8: the frontend bundles declare both UI languages so that system-drawn
+# strings (WebKit context menu, open/save panels, alert buttons) follow the per-app
+# AppleLanguages the shell mirrors; with no match they fall back to Simplified Chinese.
+expect_frontend_localizations() {
+    local plist=$1
+    local actual
+    expect_plist_string "$plist" CFBundleDevelopmentRegion zh-Hans
+    actual=$(plutil -extract CFBundleLocalizations json -o - -- "$plist" 2>/dev/null) ||
+        die "missing array key CFBundleLocalizations in $plist"
+    [ "$actual" = '["en","zh-Hans"]' ] ||
+        die "CFBundleLocalizations in $plist is $actual, expected [\"en\",\"zh-Hans\"]"
+}
+
 validate_bundle_id() {
     local label=$1
     local value=$2
@@ -458,6 +471,7 @@ expect_plist_string "$ui_plist" CFBundlePackageType APPL
 expect_plist_string "$ui_plist" CFBundleShortVersionString "$short_version"
 expect_plist_string "$ui_plist" CFBundleVersion "$build_version"
 expect_plist_string "$ui_plist" LSMinimumSystemVersion 13.0
+expect_frontend_localizations "$ui_plist"
 
 # The recovery manifest is generated, never hand-edited: it must equal the rendered template.
 expected_manifest=$(render_template "$script_dir/templates/frontend.toml.in" toml)
