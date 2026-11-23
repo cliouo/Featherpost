@@ -42,6 +42,222 @@ afterEach(() => {
   vi.useRealTimers();
 });
 describe("08-B mailbox workspace", () => {
+  describe("mark as read after opening", () => {
+    const unread = (uid: string) => ({ ...summary("INBOX", uid), seen: false });
+    const detail = (uid: string) => message("INBOX", uid, { seen: false });
+
+    it("starts the dwell when the detail opens and updates list and detail before the receipt", async () => {
+      const { bridge, c } = await ready([unread("1")]);
+      vi.useFakeTimers();
+      const receipt = deferred<Receipt>();
+      bridge.mailbox.writeHook = () => receipt.promise;
+      c.selectMessage(c.state.rows[0]);
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(bridge.mailbox.writes).toEqual([]);
+      bridge.detailRequests[0].d.resolve(detail("1"));
+      await vi.advanceTimersByTimeAsync(1499);
+      expect(c.state.detail?.seen).toBe(false);
+      expect(bridge.mailbox.writes).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(bridge.mailbox.writes).toEqual([
+        { action: "mark", flag: "seen", value: true, account: "demo", folder: "INBOX", uids: ["1"] },
+      ]);
+      expect(c.state.rows[0].seen).toBe(true);
+      expect(c.state.selectedRow?.seen).toBe(true);
+      expect(c.state.detail?.seen).toBe(true);
+      receipt.resolve({ queued: 0, queued_uids: [], unchanged_uids: ["1"], missing_uids: [], mode: null });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(c.state.detail?.seen).toBe(true);
+      expect(c.state.report).toBeNull();
+    });
+
+    it("leaves messages skimmed with the keyboard unread, including a late detail response", async () => {
+      const { bridge, c } = await ready(["1", "2", "3"].map(unread));
+      vi.useFakeTimers();
+      c.selectMessage(c.state.rows[0]);
+      c.step(1);
+      bridge.detailRequests[1].d.resolve(detail("2"));
+      await vi.advanceTimersByTimeAsync(1000);
+      c.step(1);
+      bridge.detailRequests[0].d.resolve(detail("1"));
+      bridge.detailRequests[2].d.resolve(detail("3"));
+      await vi.advanceTimersByTimeAsync(1499);
+      expect(bridge.mailbox.writes).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(bridge.mailbox.writes.map((write) => write.uids)).toEqual([["3"]]);
+      expect(c.state.rows.map((row) => row.seen)).toEqual([false, false, true]);
+    });
+
+    it.each([
+      ["closing the message", (c: MailboxController) => c.clearSelection()],
+      ["leaving the mailbox view", (c: MailboxController) => c.invalidateNavigation()],
+      ["disposing the controller", (c: MailboxController) => c.stop()],
+    ] as const)("cancels the dwell when %s", async (_label, cancel) => {
+      const { bridge, c } = await ready([unread("1")]);
+      vi.useFakeTimers();
+      c.selectMessage(c.state.rows[0]);
+      bridge.detailRequests[0].d.resolve(detail("1"));
+      await vi.advanceTimersByTimeAsync(1000);
+      cancel(c);
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(bridge.mailbox.writes).toEqual([]);
+      expect(c.state.rows[0].seen).toBe(false);
+    });
+
+    it("skips already-read detail and passive detail reloads", async () => {
+      const { bridge, c } = await ready([unread("1")]);
+      vi.useFakeTimers();
+      c.selectMessage(c.state.rows[0]);
+      bridge.detailRequests[0].d.resolve(message("INBOX", "1"));
+      await vi.advanceTimersByTimeAsync(1500);
+      c.reloadSelected();
+      bridge.detailRequests[1].d.resolve(detail("1"));
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(bridge.mailbox.writes).toEqual([]);
+      expect(c.state.detail?.seen).toBe(false);
+    });
+
+    it("marks a remote result only after the local fetch succeeds and it stays open", async () => {
+      const { bridge, c } = await ready();
+      const fetch = deferred<ReturnType<typeof detail> | null>();
+      bridge.mailbox.serverSearch = async () => [unread("1"), unread("2")];
+      bridge.mailbox.fetchServerMessage = async (_account, _folder, uid) =>
+        uid === "1" ? null : fetch.promise;
+      c.search({ query: "needle" });
+      expect(bridge.mailbox.queries.at(-1)!.query).toEqual({ search: true, query: "needle" });
+      bridge.mailbox.queries.at(-1)!.d.resolve({ messages: [], total: 0 });
+      await c.searchServer();
+      vi.useFakeTimers();
+      c.openRemote(c.state.remote.rows[0]);
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(bridge.mailbox.writes).toEqual([]);
+      c.openRemote(c.state.remote.rows[1]);
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(bridge.mailbox.writes).toEqual([]);
+      fetch.resolve(detail("2"));
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(bridge.mailbox.writes.map((write) => write.uids)).toEqual([["2"]]);
+      expect(c.state.remote.rows.map((row) => row.seen)).toEqual([false, true]);
+    });
+
+    it("rolls back optimistic read state if the write is unconfirmed", async () => {
+      const { bridge, c } = await ready([unread("1")]);
+      vi.useFakeTimers();
+      const receipt = deferred<Receipt>();
+      bridge.mailbox.writeHook = () => receipt.promise;
+      c.selectMessage(c.state.rows[0]);
+      bridge.detailRequests[0].d.resolve(detail("1"));
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(c.state.detail?.seen).toBe(true);
+      receipt.resolve({ queued: 0, queued_uids: [], unchanged_uids: [], missing_uids: ["1"], mode: null });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(c.state.rows[0].seen).toBe(false);
+      expect(c.state.selectedRow?.seen).toBe(false);
+      expect(c.state.detail?.seen).toBe(false);
+      expect(c.state.detailError).toBeNull();
+      expect(c.state.report).toMatchObject({ requested: 1, unconfirmed: 1, error: expect.any(String) });
+    });
+  });
+
+  it.each([
+    ["dwell", 1, "4"],
+    ["dwell", -1, "2"],
+    ["manual mark", 1, "4"],
+  ] as const)("keeps navigation in Unread after a %s (direction %s)", async (mark, direction, neighbor) => {
+    const rows = ["1", "2", "3", "4"].map((uid) => ({ ...summary("INBOX", uid), seen: false }));
+    const { bridge, c } = await ready(rows);
+    c.setUnreadFilter(true);
+    const initial = bridge.mailbox.queries.at(-1)!;
+    expect(initial.query).toEqual({ role: "inbox", seen: false });
+    initial.d.resolve({ messages: rows, total: rows.length });
+    await flush();
+    vi.useFakeTimers();
+    c.selectMessage(c.state.rows[2]);
+    bridge.detailRequests[0].d.resolve(message("INBOX", "3", { seen: false }));
+    await vi.advanceTimersByTimeAsync(0);
+    if (mark === "dwell") await vi.advanceTimersByTimeAsync(1500);
+    else await c.toggleSelected("seen");
+    const refresh = bridge.mailbox.queries.at(-1)!;
+    expect(refresh).not.toBe(initial);
+    refresh.d.resolve({ messages: [rows[0], rows[1], rows[3]], total: 3 });
+    await vi.advanceTimersByTimeAsync(0);
+
+    const pinned = c.state;
+    expect(pinned.rows.map((row) => row.uid)).toEqual(["1", "2", "3", "4"]);
+    expect(pinned.rows[2].seen).toBe(true);
+    expect(pinned.total).toBe(4);
+    expect(pinned.nextOffset).toBe(3);
+    expect(c.canLoadMore).toBe(false);
+    expect(c.step(direction)?.uid).toBe(neighbor);
+    expect(c.state.rows.map((row) => row.uid)).toEqual(["1", "2", "4"]);
+    expect(c.state.total).toBe(3);
+    expect(c.state.nextOffset).toBe(3);
+    expect(c.canLoadMore).toBe(false);
+  });
+
+  it("opens the next older unread message after newer arrivals move the pinned message down", async () => {
+    const rows = ["1", "2", "3", "4"].map((uid, i) => ({
+      ...summary("INBOX", uid), seen: false, sort_at: 40 - i * 10,
+    }));
+    const { bridge, c } = await ready(rows);
+    c.setUnreadFilter(true);
+    bridge.mailbox.queries.at(-1)!.d.resolve({ messages: rows, total: rows.length });
+    await flush();
+    vi.useFakeTimers();
+    c.selectMessage(c.state.rows[2]);
+    bridge.detailRequests[0].d.resolve(message("INBOX", "3", { seen: false, sort_at: 20 }));
+    await vi.advanceTimersByTimeAsync(1500);
+    const afterRead = bridge.mailbox.queries.at(-1)!;
+    afterRead.d.resolve({ messages: [rows[0], rows[1], rows[3]], total: 3 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(c.state.rows.map((row) => row.uid)).toEqual(["1", "2", "3", "4"]);
+
+    c.acceptSnapshot({ ...c.state.snapshot, revision: c.state.snapshot.revision + 1 });
+    await vi.advanceTimersByTimeAsync(250);
+    const refreshed = [
+      { ...summary("INBOX", "newer"), seen: false, sort_at: 60 },
+      { ...summary("INBOX", "new"), seen: false, sort_at: 50 },
+      rows[0], rows[1], rows[3],
+    ];
+    const afterArrival = bridge.mailbox.queries.at(-1)!;
+    expect(afterArrival).not.toBe(afterRead);
+    afterArrival.d.resolve({ messages: refreshed, total: refreshed.length });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(c.state.rows.map((row) => row.uid)).toEqual(["newer", "new", "1", "2", "3", "4"]);
+    expect(c.step(1)?.uid).toBe("4");
+    expect(c.state.rows).toEqual(refreshed);
+  });
+
+  it("drops the read pin from Starred → Unread after the message is unstarred", async () => {
+    const rows = ["1", "2"].map((uid) => ({ ...summary("INBOX", uid), seen: false, flagged: true }));
+    const { bridge, c } = await ready();
+    c.selectSmart("starred");
+    c.setUnreadFilter(true);
+    const initial = bridge.mailbox.queries.at(-1)!;
+    expect(initial.query).toEqual({ flagged: true, seen: false });
+    initial.d.resolve({ messages: rows, total: rows.length });
+    await flush();
+    vi.useFakeTimers();
+    c.selectMessage(c.state.rows[0]);
+    bridge.detailRequests[0].d.resolve(message("INBOX", "1", { seen: false, flagged: true }));
+    await vi.advanceTimersByTimeAsync(1500);
+    const afterRead = bridge.mailbox.queries.at(-1)!;
+    afterRead.d.resolve({ messages: [rows[1]], total: 1 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(c.state.rows.map((row) => row.uid)).toEqual(["1", "2"]);
+
+    await c.toggleSelected("flagged");
+    const afterUnstar = bridge.mailbox.queries.at(-1)!;
+    expect(afterUnstar.query).toEqual(initial.query);
+    afterUnstar.d.resolve({ messages: [rows[1]], total: 1 });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(c.state.rows).toEqual([rows[1]]);
+    expect(c.state.total).toBe(1);
+    expect(c.state.selectedRow).toMatchObject({ uid: "1", seen: true, flagged: false });
+  });
+
   it("starts with one daemon-paged inbox query and preserves equal UIDs across accounts", async () => {
     const { bridge, c } = await ready([
       summary("INBOX", "1"),

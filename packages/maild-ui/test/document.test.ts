@@ -9,6 +9,24 @@ import { FakeBridge, document as doc, flush, message, noHtml, offlineError } fro
 const htmlMail = (uid: string, extra: Partial<UiMessage> = {}) => message('INBOX', uid, { has_html: true, html_bytes: 100, ...extra });
 
 describe('DocumentController', () => {
+  it('keeps the HTML document when only the read flag changes', async () => {
+    const bridge = new FakeBridge();
+    const documents = new DocumentController(bridge);
+    const mail = htmlMail('1', { seen: false });
+    const detail = new Store<{ detail: UiMessage | null }>({ detail: mail });
+    documents.bindTo(detail);
+    bridge.prepareRequests[0].d.resolve(doc('t1'));
+    await flush();
+
+    detail.patch({ detail: { ...mail, seen: true } });
+    expect(documents.store.getSnapshot().document?.token).toBe('t1');
+    expect(bridge.prepareRequests).toHaveLength(1);
+    expect(bridge.released).toEqual([]);
+
+    detail.patch({ detail: htmlMail('1') });
+    expect(bridge.prepareRequests).toHaveLength(2);
+  });
+
   it('prepares a document for html mail with the kernel decision and releases it on switch', async () => {
     const bridge = new FakeBridge();
     const documents = new DocumentController(bridge);

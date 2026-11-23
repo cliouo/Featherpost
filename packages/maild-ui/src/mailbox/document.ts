@@ -96,15 +96,19 @@ export class DocumentController {
   }
 
   /**
-   * 跟着邮箱控制器的 `detail` 走：详情对象变了（换信、重取）就重新准备，清了就释放。
-   * 用对象同一性比较——同一封信重取（策略变了）也会重新准备，这正是想要的。
+   * 换信或重取详情就重新准备，清了就释放；单独更新已读状态不影响正文。
    */
   bindTo(store: Store<{ detail: UiMessage | null }>): () => void {
     let last: UiMessage | null = null;
     const sync = () => {
       const detail = store.getSnapshot().detail;
       if (detail === last) return;
+      const previous = last;
       last = detail;
+      if (
+        detail && previous && detail.seen !== previous.seen &&
+        (Object.keys(detail) as (keyof UiMessage)[]).every((key) => key === 'seen' || detail[key] === previous[key])
+      ) return;
       if (detail) this.show(detail);
       else this.clear();
     };
