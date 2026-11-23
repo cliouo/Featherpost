@@ -1890,6 +1890,15 @@ async fn discover_folders(
     let listed = tokio::time::timeout(Duration::from_secs(30), list_mailboxes(session))
         .await
         .map_err(fixed(AccountDetailCode::SyncFailed, "LIST 超时"))??;
+    if !listed
+        .iter()
+        .any(|entry| entry.selectable && entry.name.eq_ignore_ascii_case("INBOX"))
+    {
+        return Err(ReceiveError::new(
+            AccountDetailCode::SyncFailed,
+            "LIST 未返回可选的 INBOX",
+        ));
+    }
 
     let present: Vec<String> = listed.iter().map(|entry| entry.name.clone()).collect();
     let Some(store) = store_of(ctx) else {
@@ -1937,38 +1946,70 @@ struct ListedFolder {
     selectable: bool,
 }
 
-/// `LIST` 的结果必须先收完再释放对 session 的可变借用，之后才能发别的命令。
+/// async-imap 的 LIST 流丢弃 tagged 状态，需读到对应的 OK 才能使用结果。
 async fn list_mailboxes(
     session: &mut async_imap::Session<Conn>,
 ) -> Result<Vec<ListedFolder>, ReceiveError> {
-    let names = session
-        .list(Some(""), Some("*"))
+    use async_imap::imap_proto::{MailboxDatum, Response, Status};
+    use async_imap::types::NameAttribute;
+
+    let request = session
+        .run_command(r#"LIST "" "*""#)
         .await
         .map_err(sync_stage("LIST 失败"))?;
-    futures::pin_mut!(names);
     let mut out = Vec::new();
-    while let Some(name) = names.next().await {
-        let name = name.map_err(sync_stage("LIST 流出错"))?;
-        let raw = name.name().to_string();
-        if raw.is_empty() {
-            continue;
+    while let Some(response) = session.read_response().await {
+        let response = response.map_err(sync_stage("LIST 流出错"))?;
+        match response.parsed() {
+            Response::Done {
+                tag,
+                status,
+                information,
+                ..
+            } if tag == &request => {
+                if *status == Status::Ok {
+                    return Ok(out);
+                }
+                return Err(sync_stage("LIST 失败")(format_args!(
+                    "{status:?} {}",
+                    information.as_deref().unwrap_or_default()
+                )));
+            }
+            Response::Data {
+                status: Status::Bye,
+                information,
+                ..
+            } => {
+                return Err(sync_stage("LIST 连接已断开")(
+                    information.as_deref().unwrap_or_default(),
+                ));
+            }
+            Response::MailboxData(MailboxDatum::List {
+                name,
+                name_attributes,
+                delimiter,
+            }) if !name.is_empty() => {
+                let attributes: Vec<String> = name_attributes
+                    .iter()
+                    .filter_map(special_use_token)
+                    .collect();
+                let display_name = folders::decode_modified_utf7(name);
+                let role =
+                    folders::resolve_role(&attributes, name, &display_name, delimiter.as_deref());
+                out.push(ListedFolder {
+                    name: name.to_string(),
+                    display_name,
+                    role,
+                    selectable: !name_attributes.contains(&NameAttribute::NoSelect),
+                });
+            }
+            _ => {}
         }
-        let attributes: Vec<String> =
-            name.attributes().iter().filter_map(special_use_token).collect();
-        let selectable = !name
-            .attributes()
-            .iter()
-            .any(|attribute| matches!(attribute, async_imap::types::NameAttribute::NoSelect));
-        let display_name = folders::decode_modified_utf7(&raw);
-        let role = folders::resolve_role(&attributes, &raw, &display_name, name.delimiter());
-        out.push(ListedFolder {
-            name: raw,
-            display_name,
-            role,
-            selectable,
-        });
     }
-    Ok(out)
+    Err(ReceiveError::new(
+        AccountDetailCode::SyncFailed,
+        "LIST 未收到命令完成响应",
+    ))
 }
 
 /// 把 IMAP 标记位快照到消息上。

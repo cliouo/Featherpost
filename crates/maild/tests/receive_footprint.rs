@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use common::fake_mail::FakeMail;
+use common::fake_mail::{FakeMail, ListReply};
 use cordis::Context;
 use maild::api::{dispatch, JsonRpcRequest};
 use maild::events::{AccountStateKind, MailAttachment, MailMessage};
@@ -372,6 +372,114 @@ async fn tracked_sync(ctx: &Context, folder: Option<&str>) {
     .await;
     let id = started["sync_id"].as_u64().expect("同步 ID");
     wait_for_tracked_sync(ctx, id).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn manual_sync_rejects_failed_and_incomplete_folder_lists() {
+    let server = FakeMail::start().await.unwrap();
+    server.add_mailbox("Archive", "");
+    server.deliver_to("Archive", "", raw_mail("Cached mail", "body"));
+    let ctx = Context::new();
+    let mut assembly =
+        maild::assemble(&ctx, &assembly_toml(server.imap_addr.port(), "")).expect("装配成功");
+    let store = ctx.get::<Store>().expect("store 服务");
+    tokio::time::timeout(Duration::from_secs(5), receive_of(&ctx).wait_online())
+        .await
+        .unwrap();
+    tracked_sync(&ctx, Some("Archive")).await;
+    server.remove_mailbox("Archive");
+    server.add_mailbox("Projects", "");
+
+    for (reply, expected_error) in [
+        (ListReply::Rejected, "Fixture LIST rejected"),
+        (ListReply::PartialRejected, "Fixture LIST rejected"),
+        (ListReply::Empty, "LIST 未返回可选的 INBOX"),
+        (ListReply::WithoutInbox, "LIST 未返回可选的 INBOX"),
+    ] {
+        server.set_list_reply(reply);
+        let started = sync_call(&ctx, json!({"account": "e2e", "track": true})).await;
+        let id = started["sync_id"].as_u64().unwrap();
+        let error = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let response = dispatch(
+                    &ctx,
+                    &JsonRpcRequest {
+                        jsonrpc: "2.0".into(),
+                        method: "syncMessages".into(),
+                        params: json!({"account": "e2e", "sync_id": id}),
+                        id: json!(1),
+                    },
+                )
+                .await;
+                if let Some(error) = response.error {
+                    break error;
+                }
+                assert_eq!(response.result.unwrap()["done"], false);
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(error.message.contains(expected_error), "{error:?}");
+        for folder in ["INBOX", "Archive"] {
+            assert!(
+                store
+                    .folder_by_name("e2e", folder)
+                    .unwrap()
+                    .unwrap()
+                    .present
+            );
+        }
+        assert!(store.folder_by_name("e2e", "Projects").unwrap().is_none());
+        assert_eq!(
+            store.count_messages(Some("e2e"), Some("Archive")).unwrap(),
+            1
+        );
+    }
+
+    server.set_list_reply(ListReply::Normal);
+    tracked_sync(&ctx, None).await;
+    assert!(
+        !store
+            .folder_by_name("e2e", "Archive")
+            .unwrap()
+            .unwrap()
+            .present
+    );
+    assert_eq!(server.imap_connections(), 1);
+    assembly.dispose().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn connection_time_list_rejection_preserves_cached_folders() {
+    let server = FakeMail::start().await.unwrap();
+    server.set_list_reply(ListReply::PartialRejected);
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("mail.db");
+    let db = db.to_str().unwrap();
+    {
+        let store = Store::open(db).unwrap();
+        store.upsert_folder("e2e", "INBOX", "INBOX", None).unwrap();
+        store
+            .upsert_folder("e2e", "Archive", "Archive", None)
+            .unwrap();
+    }
+    let ctx = Context::new();
+    let config = assembly_toml(server.imap_addr.port(), "")
+        .replace(r#"db_path = """#, &format!("db_path = {db:?}"));
+    let mut assembly = maild::assemble(&ctx, &config).expect("装配成功");
+    tokio::time::timeout(Duration::from_secs(5), receive_of(&ctx).wait_online())
+        .await
+        .unwrap();
+    let store = ctx.get::<Store>().expect("store 服务");
+    assert!(
+        store
+            .folder_by_name("e2e", "Archive")
+            .unwrap()
+            .unwrap()
+            .present
+    );
+    assembly.dispose().await;
 }
 
 async fn wait_for_tracked_sync(ctx: &Context, id: u64) {
