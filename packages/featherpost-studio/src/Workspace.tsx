@@ -8,6 +8,7 @@ import {
   messageKey,
   type MailboxController,
 } from "../../maild-ui/src/mailbox/controller";
+import { useSelectedRowScroll } from "../../maild-ui/src/mailbox/listScroll";
 import { displayName, shortDate } from "../../maild-ui/src/mailbox/format";
 import { Actions } from "../../maild-ui/src/mailbox/Actions";
 import type { DocumentController } from "../../maild-ui/src/mailbox/document";
@@ -61,6 +62,19 @@ export function Workspace({
   const title = searching ? m.studio_list_search_results() : context.name;
   const menu = useContextMenu(),
     menuDeps = useMailMenu(controller, composer);
+  const selectedKey = s.selected ? messageKey(s.selected) : null;
+  const {
+    listRef,
+    setSelectedRowRef,
+    setPendingIntent,
+    revealSelected,
+    cancelScroll,
+  } = useSelectedRowScroll<HTMLDivElement, HTMLElement>(
+    selectedKey,
+    s.scope,
+    s.rows,
+    s.remote.rows,
+  );
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       if (
@@ -76,17 +90,35 @@ export function Workspace({
         return;
       if (e.key === "ArrowDown" || e.key === "j") {
         e.preventDefault();
-        controller.step(1);
+        const before = controller.state.selected
+          ? messageKey(controller.state.selected)
+          : null;
+        const intent = { repeat: e.repeat, revealGroupHeader: false };
+        setPendingIntent(intent);
+        const next = controller.step(1);
+        if (next && before === messageKey(next)) {
+          setPendingIntent(null);
+          revealSelected(intent);
+        }
       }
       if (e.key === "ArrowUp" || e.key === "k") {
         e.preventDefault();
-        controller.step(-1);
+        const before = controller.state.selected
+          ? messageKey(controller.state.selected)
+          : null;
+        const intent = { repeat: e.repeat, revealGroupHeader: true };
+        setPendingIntent(intent);
+        const next = controller.step(-1);
+        if (next && before === messageKey(next)) {
+          setPendingIntent(null);
+          revealSelected(intent);
+        }
       }
       if (e.key === "Escape") controller.clearSelection();
     };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
-  }, [controller]);
+  }, [controller, revealSelected, setPendingIntent]);
   const day = (at: number) =>
     new Date(at * 1000).toDateString() === new Date().toDateString()
       ? m.studio_list_day_today()
@@ -157,7 +189,12 @@ export function Workspace({
               </span>
             </div>
           </header>
-          <div className="message-scroll" aria-busy={s.loadingRows}>
+          <div
+            ref={listRef}
+            className="message-scroll"
+            aria-busy={s.loadingRows}
+            onWheel={cancelScroll}
+          >
             {s.rowsError && (
               <div className="notice error" role="alert">
                 {s.rowsError}
@@ -217,6 +254,7 @@ export function Workspace({
                     <div className="date-group">{day(row.sort_at)}</div>
                   )}
                   <article
+                    ref={selected ? setSelectedRowRef : undefined}
                     className={`message-row ${selected ? "selected" : ""} ${!row.seen ? "unread" : ""} ${checked ? "checked" : ""}`}
                     onContextMenu={(e) =>
                       menu.offer(e, () => messageMenu(row, menuDeps))
@@ -293,18 +331,24 @@ export function Workspace({
             {s.remote.rows.length > 0 && (
               <>
                 <p className="date-group">{m.studio_list_server_history()}</p>
-                {s.remote.rows.map((row) => (
-                  <button
-                    className="remote-row"
-                    key={messageKey(row)}
-                    onClick={() => controller.openRemote(row)}
-                  >
-                    <strong>{row.subject || m.studio_message_no_subject()}</strong>
-                    <span>
-                      {row.sender} · {controller.label(row.account)}
-                    </span>
-                  </button>
-                ))}
+                {s.remote.rows.map((row) => {
+                  const key = messageKey(row);
+                  const selected = selectedKey === key;
+                  return (
+                    <button
+                      ref={selected ? setSelectedRowRef : undefined}
+                      className={`remote-row ${selected ? "selected" : ""}`}
+                      aria-current={selected ? "true" : undefined}
+                      key={key}
+                      onClick={() => controller.openRemote(row)}
+                    >
+                      <strong>{row.subject || m.studio_message_no_subject()}</strong>
+                      <span>
+                        {row.sender} · {controller.label(row.account)}
+                      </span>
+                    </button>
+                  );
+                })}
               </>
             )}
           </div>
