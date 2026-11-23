@@ -120,7 +120,7 @@ export function settingsModule(
         <Row title={m.studio_connection_recovery()} description={snapshot.phase === "online"
           ? m.studio_connection_recovery_online()
           : m.studio_connection_recovery_offline({ app: BRAND.appBundleName })}>
-          <button type="button" disabled={opening || snapshot.phase !== "online"} onClick={() => void openRecovery()}>
+          <button type="button" className="secondary" disabled={opening || snapshot.phase !== "online"} onClick={() => void openRecovery()}>
             {opening ? m.studio_connection_opening() : m.studio_connection_open_recovery()}
           </button>
         </Row>
@@ -336,7 +336,7 @@ export function settingsModule(
               {state.error && <p className="settings-alert" role="alert">{state.error}</p>}
               {state.notice && <p className="settings-alert settings-notice" role="status">{state.notice}</p>}
               {(state.loading || state.busy) && <p className="settings-progress" role="status">{state.busy ? m.studio_settings_busy() : m.studio_settings_loading()}</p>}
-              <fieldset disabled={state.closeLocked} className={accounts || active?.id === "maild.settings.appearance" ? "studio-section-bare" : "studio-settings-section"}>
+              <fieldset key={active?.id} disabled={state.closeLocked} className={accounts || active?.id === "maild.settings.appearance" ? "studio-section-bare" : "studio-settings-section"}>
                 {Section && <Section active />}
               </fieldset>
             </div>

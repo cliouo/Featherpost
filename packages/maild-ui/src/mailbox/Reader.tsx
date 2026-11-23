@@ -14,6 +14,7 @@ import { useExternal, useStore } from "../host/hooks";
 import type { Host } from "../host/host";
 import type { CommandContribution } from "../host/types";
 import type { MailboxController } from "./controller";
+import { messageKey } from "./controller";
 import type { DocumentController } from "./document";
 import { presentation, truncationNote } from "./document";
 import { addressOnly, displayName, fullDate, initials, isoDateTime } from "./format";
@@ -29,10 +30,11 @@ function CommandButton({
   iconOnly: boolean;
 }) {
   const enabled = host.isEnabled(command.enabledWhen);
+  const danger = command.id === "maild.mailbox.delete" ? " danger-action" : "";
   return (
     <button
       type="button"
-      className={iconOnly ? "icon-button" : "menu-item"}
+      className={`${iconOnly ? "icon-button" : "menu-item"}${danger}`}
       title={iconOnly ? command.title : undefined}
       aria-label={iconOnly ? command.title : undefined}
       disabled={!enabled}
@@ -65,6 +67,7 @@ function OverflowMenu({
       open={open}
       onOpenChange={setOpen}
       triggerLabel={m.mailbox_reader_more_actions()}
+      triggerTitle={m.mailbox_reader_more_actions()}
       trigger={<Icon name="more" />}
     >
       {commands.map((command) => (
@@ -129,6 +132,7 @@ export function Reader({ host, controller, documents, composer }: ReaderProps) {
         <button
           type="button"
           className="icon-button back-to-list"
+          title={m.mailbox_reader_back()}
           aria-label={m.mailbox_reader_back()}
           onClick={() => controller.clearSelection()}
         >
@@ -160,7 +164,7 @@ export function Reader({ host, controller, documents, composer }: ReaderProps) {
         <div className="reader-stack">
           <Thread controller={controller} />
           <div className="reader-header">
-            <div className="reader-inner">
+            <div className="reader-inner reader-fade" key={messageKey(row)}>
               <div className="reader-path">
                 <span className="source-chip">
                   {controller.label(row.account)}
@@ -280,7 +284,7 @@ export function Reader({ host, controller, documents, composer }: ReaderProps) {
               />
             )}
             {detail && body.mode === "text" && (
-              <div className="reader-text">
+              <div className="reader-text" key={messageKey(row)}>
                 <div className="reader-inner">
                   <pre className="letter">{detail.body || m.mailbox_reader_body_empty()}</pre>
                 </div>

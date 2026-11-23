@@ -1,5 +1,5 @@
 import { m } from '@featherpost/i18n/messages';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 
 import type { UiSnapshot } from '../bridge/types';
 import { compatBlocksWrites } from '../bridge/types';
@@ -68,6 +68,10 @@ export function App({ host }: { host: Host }) {
   // 订阅界面语言：切换时整棵树随根组件重新渲染（不重挂载、不丢状态）。
   useUiLocale();
   const state = useStore(host.state);
+  const [toastText, setToastText] = useState<string | null>(null);
+  useEffect(() => {
+    if (state.toast) setToastText(state.toast);
+  }, [state.toast]);
   const registry = useExternal(host.registry.subscribe, host.registry.getSnapshot);
   useEffect(() => { void host.bridge.compose.ready().catch(()=>{}); }, [host]);
   useEffect(() => applyTheme(state.preferences), [state.preferences]);
@@ -118,7 +122,7 @@ export function App({ host }: { host: Host }) {
                 <span className="account-name">{m.common_app_nav_extensions()}</span>
               </div>
               {extensionViews.map(({ value }) => (
-                <button key={value.id} type="button" className={`nav-item${active?.id === value.id ? ' active' : ''}`} aria-current={active?.id === value.id ? 'page' : undefined} onClick={() => host.openView(value.id)}>
+                <button key={value.id} type="button" className={`nav-item${active?.id === value.id ? ' active' : ''}`} title={value.title} aria-current={active?.id === value.id ? 'page' : undefined} onClick={() => host.openView(value.id)}>
                   {value.icon && <Icon name={value.icon} />}
                   <span className="nav-text">{value.title}</span>
                 </button>
@@ -132,7 +136,7 @@ export function App({ host }: { host: Host }) {
             <span className="status-text">{status.text}</span>
           </button>
           {settings && (
-            <button type="button" className={`nav-item${active?.id === settings.id ? ' active' : ''}`} aria-current={active?.id === settings.id ? 'page' : undefined} onClick={() => host.openView(settings.id)}>
+            <button type="button" className={`nav-item${active?.id === settings.id ? ' active' : ''}`} title={m.common_app_nav_settings()} aria-current={active?.id === settings.id ? 'page' : undefined} onClick={() => host.openView(settings.id)}>
               <Icon name="settings" />
               <span className="nav-text">{m.common_app_nav_settings()}</span>
               <kbd>⌘,</kbd>
@@ -152,8 +156,8 @@ export function App({ host }: { host: Host }) {
           )
         )}
       </main>
-      <div id="toast" className={state.toast ? 'show' : ''} role="status" aria-live="polite">
-        {state.toast}
+      <div id="toast" className={state.toast ? 'show' : ''} role="status" aria-live="polite" aria-hidden={!state.toast || undefined}>
+        {state.toast ?? toastText}
       </div>
     </div>
   );

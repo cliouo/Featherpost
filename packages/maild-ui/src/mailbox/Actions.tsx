@@ -214,7 +214,11 @@ export function Actions({
               {m.mailbox_action_cancel()}
             </button>
             <button
-              className="primary-button"
+              className={
+                prompt.kind === "delete"
+                  ? "primary-button danger-button"
+                  : "primary-button"
+              }
               disabled={
                 s.busy ||
                 s.snapshot.phase !== "online" ||

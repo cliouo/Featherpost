@@ -23,10 +23,29 @@
   color: var(--studio-text);
   box-shadow: 0 1px 4px #00000012;
 }
+.view-switch button:active:not(:disabled) {
+  transform: scale(0.97);
+}
+@media (hover: hover) {
+  .view-switch button:not([aria-pressed="true"]):hover:not(:disabled) {
+    background: var(--hover-bg);
+    color: var(--studio-text);
+  }
+}
 .group-manage {
   font-size: 10px;
   color: var(--studio-secondary);
-  padding: 2px 0 2px 8px;
+  padding: 2px 7px;
+  border-radius: 5px;
+}
+.group-manage:active:not(:disabled) {
+  background: var(--active-bg);
+}
+@media (hover: hover) {
+  .group-manage:hover:not(:disabled) {
+    background: var(--hover-bg);
+    color: var(--studio-text);
+  }
 }
 .mailbox-group {
   margin-bottom: 8px;
@@ -39,12 +58,27 @@
   min-height: 30px;
   text-align: left;
   color: var(--studio-muted);
-  padding: 5px 3px;
+  padding: 5px 6px;
+  border-radius: 6px;
+}
+.group-toggle:active:not(:disabled) {
+  background: var(--active-bg);
+}
+@media (hover: hover) {
+  .group-toggle:hover:not(:disabled) {
+    background: var(--hover-bg);
+    color: var(--studio-text);
+  }
+  .group-toggle:hover:not(:disabled) strong,
+  .group-toggle:hover:not(:disabled) .chevron {
+    color: var(--studio-text);
+  }
 }
 .group-toggle strong {
   font-size: 11px;
   font-weight: 500;
   color: var(--studio-secondary);
+  transition: color var(--motion-fast) var(--ease-standard);
 }
 .group-toggle small {
   font-size: 9px;
@@ -69,12 +103,31 @@
   height: 40px;
   width: 100%;
   text-align: left;
-  padding: 7px 0;
-  transition: height 160ms ease;
+  padding: 7px 6px;
+  border-radius: 6px;
+  transition:
+    background-color var(--motion-fast) var(--ease-standard),
+    color var(--motion-fast) var(--ease-standard),
+    height var(--motion-base) var(--ease-standard);
 }
 .grouped-account.account-has-address.account-expanded .account-heading,
 .directory-body .grouped-account.account-has-address .account-heading {
   height: 48px;
+}
+.grouped-account .account-heading:active:not(:disabled) {
+  background: var(--active-bg);
+}
+@media (hover: hover) {
+  .grouped-account .account-heading:hover:not(:disabled) {
+    background: var(--hover-bg);
+  }
+  .grouped-account .account-heading:hover:not(:disabled) .chevron {
+    color: var(--studio-text);
+  }
+  .grouped-account .account-heading:hover:not(:disabled) .account-mark {
+    border-color: var(--hover-border);
+    color: var(--studio-text);
+  }
 }
 .grouped-account .account-heading > .chevron {
   font-size: 12px;
@@ -101,8 +154,11 @@
   font-size: 9px;
   line-height: 14px;
   margin-top: 0;
-  transition: height 160ms ease, margin-top 160ms ease, opacity 160ms ease,
-    visibility 160ms ease;
+  transition:
+    height var(--motion-base) var(--ease-standard),
+    margin-top var(--motion-base) var(--ease-standard),
+    opacity var(--motion-base) var(--ease-standard),
+    visibility var(--motion-base) var(--ease-standard);
 }
 .grouped-account.account-expanded .account-identity strong {
   font-weight: 600;
@@ -118,7 +174,9 @@
   display: grid;
   grid-template-rows: 0fr;
   opacity: 0;
-  transition: grid-template-rows 160ms ease, opacity 160ms ease;
+  transition:
+    grid-template-rows var(--motion-base) var(--ease-standard),
+    opacity var(--motion-base) var(--ease-standard);
 }
 .account-folders > div {
   min-height: 0;
@@ -141,6 +199,9 @@
   border-radius: 50%;
   background: none;
   color: var(--studio-secondary);
+  transition:
+    border-color var(--motion-fast) var(--ease-standard),
+    color var(--motion-fast) var(--ease-standard);
 }
 .grouped-account.account-selected .account-mark {
   color: var(--studio-text);
@@ -151,6 +212,7 @@
   margin: 4px 0 15px 20px;
   border-left: 1px solid var(--studio-border);
   padding-left: 13px;
+  animation: fp-reveal-down var(--motion-fast) var(--ease-standard);
 }
 .empty-group {
   margin: 3px 8px 12px 18px;
@@ -168,9 +230,19 @@
   align-items: center;
   gap: 7px;
   cursor: pointer;
-  padding: 3px 7px;
+  padding: 5px 7px;
+  border-radius: 6px;
   list-style: none;
   font-size: 11px;
+}
+@media (hover: hover) {
+  .account-directory > summary:hover {
+    background: var(--hover-bg);
+    color: var(--studio-text);
+  }
+}
+.account-directory:not([open]) > summary .chevron {
+  transform: rotate(-90deg);
 }
 .account-directory > summary::-webkit-details-marker {
   display: none;
@@ -198,6 +270,7 @@
   border-radius: 7px;
   padding: 7px 0 7px 7px;
   background: var(--studio-surface);
+  animation: fp-reveal-down var(--motion-base) var(--ease-standard);
 }
 .directory-body .account-filter {
   margin: 0 0 7px;
@@ -275,6 +348,18 @@
   background: var(--studio-tint);
   color: var(--studio-text);
 }
+.group-filters button:active:not(:disabled) {
+  background: var(--active-bg);
+}
+@media (hover: hover) {
+  .group-filters button:not([aria-pressed="true"]):hover:not(:disabled) {
+    background: var(--hover-bg);
+    color: var(--studio-text);
+  }
+  .group-filters button[aria-pressed="true"]:hover:not(:disabled) {
+    background: var(--hover-bg-strong);
+  }
+}
 .group-manager {
   min-width: min(540px, 70vw);
   max-height: 65vh;
@@ -315,6 +400,11 @@
   background: var(--studio-surface);
   color: var(--studio-text);
 }
+@media (hover: hover) {
+  .group-manager .group-name-form input:hover:not(:disabled) {
+    border-color: var(--hover-border);
+  }
+}
 .group-name-form > button {
   padding: 9px 13px;
   border-radius: 5px;
@@ -335,7 +425,21 @@
 .group-definitions button {
   color: var(--studio-secondary);
   font-size: 10px;
-  padding: 6px;
+  padding: 5px 8px;
+  border-radius: 5px;
+}
+.group-definitions button.danger-text {
+  color: var(--studio-danger);
+}
+@media (hover: hover) {
+  .group-definitions button:not(.danger-text):hover:not(:disabled) {
+    background: var(--hover-bg);
+    color: var(--studio-text);
+  }
+  .group-definitions button.danger-text:hover:not(:disabled) {
+    background: var(--hover-danger-bg);
+    color: var(--hover-danger-ink);
+  }
 }
 .mailbox-assignment {
   display: flex;

@@ -60,6 +60,7 @@ export function Workspace({
     (s.scope.kind === "smart" && s.scope.name === "unread");
   const folderUnread = context.folder?.unseen;
   const title = searching ? m.studio_list_search_results() : context.name;
+  const scopeKey = JSON.stringify(s.scope);
   const menu = useContextMenu(),
     menuDeps = useMailMenu(controller, composer);
   const selectedKey = s.selected ? messageKey(s.selected) : null;
@@ -200,6 +201,7 @@ export function Workspace({
             aria-busy={s.loadingRows}
             onWheel={cancelScroll}
           >
+            <div className="message-list-body" key={scopeKey}>
             {s.rowsError && (
               <div className="notice error" role="alert">
                 {s.rowsError}
@@ -356,6 +358,7 @@ export function Workspace({
                 })}
               </>
             )}
+            </div>
           </div>
           <footer className="list-footer">
             <span>

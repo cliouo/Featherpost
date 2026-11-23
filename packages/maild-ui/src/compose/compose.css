@@ -6,6 +6,7 @@
   display: flex;
   flex-direction: column;
   background: var(--surface);
+  animation: fp-fade-in var(--motion-base) var(--ease-standard);
 }
 .compose-heading {
   display: flex;
@@ -79,10 +80,18 @@
   color: var(--ink);
   font: inherit;
   padding: 7px 6px;
+  transition: background-color var(--motion-fast) var(--ease-standard), box-shadow var(--motion-fast) var(--ease-standard);
 }
 .compose-control option {
   background: var(--surface);
   color: var(--ink);
+}
+@media (hover: hover) {
+  .compose-control input:hover:not(:disabled),
+  .compose-control select:hover:not(:disabled),
+  .compose-body textarea:hover:not(:disabled) {
+    background: var(--hover-bg);
+  }
 }
 .compose-control input:focus-visible,
 .compose-control select:focus-visible,
@@ -128,6 +137,7 @@
   border-radius: var(--r-sm);
   padding: 6px;
   box-sizing: border-box;
+  transition: background-color var(--motion-fast) var(--ease-standard);
 }
 .compose-body textarea:disabled {
   opacity: 1;
@@ -170,6 +180,7 @@
   margin: 8px 0 12px;
   background: var(--canvas);
   font-size: 12px;
+  animation: fp-reveal-down var(--motion-fast) var(--ease-standard);
 }
 .compose-notice.success {
   background: var(--selected);
@@ -236,6 +247,7 @@
   max-height: 54%;
   flex: 0 1 auto;
   border-top: 2px solid var(--accent);
+  animation: fp-reveal-down var(--motion-base) var(--ease-standard);
 }
 .inline-composer .compose-heading {
   min-height: 46px;
@@ -274,10 +286,19 @@
   text-align: left;
   justify-content: space-between;
   border-bottom: 1px solid var(--line);
-  padding: 18px 4px;
+  padding: 18px 12px;
   gap: 20px;
-  border-radius: 0;
+  border-radius: var(--r-sm);
   width: 100%;
+  transition: background-color var(--motion-fast) var(--ease-standard);
+}
+.draft-row:active:not(:disabled) {
+  transform: none;
+}
+@media (hover: hover) {
+  .draft-row:hover:not(:disabled) {
+    background: var(--hover-bg);
+  }
 }
 .draft-row > div {
   min-width: 0;
