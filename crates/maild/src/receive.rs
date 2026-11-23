@@ -564,7 +564,7 @@ impl Receive {
 
     pub(crate) fn start_manual_sync(&self, folder: Option<String>) -> Result<u64, String> {
         let mut state = self.inner.manual_sync.lock().unwrap();
-        if !self.is_online() || self.is_shutdown() {
+        if self.is_shutdown() {
             return Err("账户当前离线，无法同步".into());
         }
         if state.as_ref().is_some_and(|sync| sync.outcome.is_none()) {
@@ -599,6 +599,15 @@ impl Receive {
             .filter(|sync| sync.queued && sync.outcome.is_none())?;
         sync.queued = false;
         Some((sync.id, sync.folder.take()))
+    }
+
+    fn has_queued_manual_sync(&self) -> bool {
+        self.inner
+            .manual_sync
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|sync| sync.queued && sync.outcome.is_none())
     }
 
     fn cancel_manual_sync(&self) {
@@ -659,6 +668,9 @@ impl Receive {
         let mut sync_rx = self.sync_rx();
         if self.is_shutdown() {
             return false;
+        }
+        if self.has_queued_manual_sync() {
+            return true;
         }
         tokio::select! {
             _ = tokio::time::sleep(delay) => {}
@@ -906,6 +918,9 @@ async fn serve(
     }
 
     let mut sync_rx = receive.sync_rx();
+    if receive.has_queued_manual_sync() {
+        sync_rx.mark_changed();
+    }
     receive.set_state(ctx, AccountStateKind::Online);
     receive.set_online(true);
 

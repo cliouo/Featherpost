@@ -365,30 +365,19 @@ async fn manual_sync_refreshes_folders_on_idle_and_poll_connections() {
 }
 
 async fn tracked_sync(ctx: &Context, folder: Option<&str>) {
-    async fn call(ctx: &Context, params: Value) -> Value {
-        let response = dispatch(
-            ctx,
-            &JsonRpcRequest {
-                jsonrpc: "2.0".into(),
-                method: "syncMessages".into(),
-                params,
-                id: json!(1),
-            },
-        )
-        .await;
-        response
-            .result
-            .unwrap_or_else(|| panic!("{:?}", response.error))
-    }
-    let started = call(
+    let started = sync_call(
         ctx,
         json!({"account": "e2e", "folder": folder, "track": true}),
     )
     .await;
     let id = started["sync_id"].as_u64().expect("同步 ID");
+    wait_for_tracked_sync(ctx, id).await;
+}
+
+async fn wait_for_tracked_sync(ctx: &Context, id: u64) {
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            let status = call(ctx, json!({"account": "e2e", "sync_id": id})).await;
+            let status = sync_call(ctx, json!({"account": "e2e", "sync_id": id})).await;
             if status["done"] == true {
                 return;
             }
@@ -399,17 +388,37 @@ async fn tracked_sync(ctx: &Context, folder: Option<&str>) {
     .expect("同步超时");
 }
 
+async fn sync_call(ctx: &Context, params: Value) -> Value {
+    let response = dispatch(
+        ctx,
+        &JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            method: "syncMessages".into(),
+            params,
+            id: json!(1),
+        },
+    )
+    .await;
+    response
+        .result
+        .unwrap_or_else(|| panic!("{:?}", response.error))
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn trigger_sync_and_shutdown_cut_the_reconnect_backoff_short() {
-    // 一个接受即断开的 TCP 端点：每次连接尝试都失败在读 greeting。
+    // 前两次连接失败在读 greeting，第三次转发给假 IMAP 服务器。
+    let server = FakeMail::start().await.unwrap();
+    let imap_addr = server.imap_addr;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let accepts = Arc::new(AtomicUsize::new(0));
     let counter = Arc::clone(&accepts);
     let acceptor = tokio::spawn(async move {
-        while let Ok((stream, _)) = listener.accept().await {
-            counter.fetch_add(1, Ordering::SeqCst);
-            drop(stream);
+        while let Ok((mut stream, _)) = listener.accept().await {
+            if counter.fetch_add(1, Ordering::SeqCst) >= 2 {
+                let mut imap = tokio::net::TcpStream::connect(imap_addr).await.unwrap();
+                let _ = tokio::io::copy_bidirectional(&mut stream, &mut imap).await;
+            }
         }
     });
 
@@ -444,11 +453,37 @@ async fn trigger_sync_and_shutdown_cut_the_reconnect_backoff_short() {
     })
     .await;
 
-    // 关断同样打断退避睡眠：卸载不必等满 1 小时。
+    wait_until("再次进入离线退避", Duration::from_secs(5), || {
+        receive.state().state == AccountStateKind::Offline
+    })
+    .await;
+    server.add_mailbox("Archive", "");
+    let started = sync_call(
+        &ctx,
+        json!({"account": "e2e", "folder": "Archive", "track": true}),
+    )
+    .await;
+    let id = started["sync_id"].as_u64().expect("同步 ID");
+    wait_until(
+        "跟踪同步打断退避并重连",
+        Duration::from_secs(5),
+        || accepts.load(Ordering::SeqCst) >= 3,
+    )
+    .await;
+
+    wait_for_tracked_sync(&ctx, id).await;
+
+    // 再断开进入退避，确认关断不必等待退避睡眠结束。
+    acceptor.abort();
+    wait_until(
+        "转发断开后进入离线退避",
+        Duration::from_secs(5),
+        || receive.state().state == AccountStateKind::Offline,
+    )
+    .await;
     tokio::time::timeout(Duration::from_secs(5), assembly.dispose())
         .await
         .expect("退避中的收信循环应立即响应关断");
-    acceptor.abort();
 }
 
 fn sample_message(uid: &str, attachment: &[u8]) -> MailMessage {
