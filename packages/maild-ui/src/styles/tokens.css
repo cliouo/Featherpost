@@ -20,6 +20,14 @@
   --list-width: 344px;
   --row-height: 90px;
   --bar-height: 64px;
+  --scrollbar-size: 10px;
+  --scrollbar-thumb-inset: 3px;
+  --scrollbar-thumb-inset-hover: 2px;
+  --scrollbar-track: transparent;
+  --scrollbar-thumb: oklch(26% 0.018 155 / 0.16);
+  --scrollbar-thumb-container-hover: oklch(26% 0.018 155 / 0.24);
+  --scrollbar-thumb-hover: oklch(26% 0.018 155 / 0.38);
+  --scrollbar-thumb-active: oklch(26% 0.018 155 / 0.52);
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
   font-size: 13px;
   line-height: 1.55;
@@ -46,6 +54,10 @@
     --danger: oklch(78% 0.1 28);
     --wash: oklch(26% 0.025 75);
     --on-accent: #14281e;
+    --scrollbar-thumb: oklch(92% 0.008 155 / 0.18);
+    --scrollbar-thumb-container-hover: oklch(92% 0.008 155 / 0.26);
+    --scrollbar-thumb-hover: oklch(92% 0.008 155 / 0.40);
+    --scrollbar-thumb-active: oklch(92% 0.008 155 / 0.54);
   }
 }
 :root[data-theme="dark"] {
@@ -62,6 +74,10 @@
   --danger: oklch(78% 0.1 28);
   --wash: oklch(26% 0.025 75);
   --on-accent: #14281e;
+  --scrollbar-thumb: oklch(92% 0.008 155 / 0.18);
+  --scrollbar-thumb-container-hover: oklch(92% 0.008 155 / 0.26);
+  --scrollbar-thumb-hover: oklch(92% 0.008 155 / 0.40);
+  --scrollbar-thumb-active: oklch(92% 0.008 155 / 0.54);
 }
 :root[data-density="compact"] {
   --row-height: 68px;

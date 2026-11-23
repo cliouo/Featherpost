@@ -9,7 +9,7 @@
 .studio-activity .activity-account-filter select { appearance: none; -webkit-appearance: none; height: 36px; min-width: 180px; max-width: 280px; padding: 0 36px 0 12px; background-color: var(--studio-surface); color: var(--studio-text); font: inherit; border: 1px solid var(--studio-border); border-radius: 7px; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23696973' stroke-width='1.6'%3E%3Cpath d='m4 6 4 4 4-4'/%3E%3C/svg%3E"); background-position: right 12px center; background-size: 12px; background-repeat: no-repeat; }
 :root[data-studio-theme="dark"] .studio-activity .activity-account-filter select { color-scheme: dark; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23b3b3c0' stroke-width='1.6'%3E%3Cpath d='m4 6 4 4 4-4'/%3E%3C/svg%3E"); }
 .studio-activity .activity-toolbar > span { color: var(--studio-muted); font-size: 11px; }
-.studio-activity .activity-scroll { overflow-y: auto; min-height: 0; flex: 1; }
+.studio-activity .activity-scroll { overflow-y: scroll; overflow-x: hidden; overscroll-behavior: contain; margin-right: calc(-1 * var(--scrollbar-size, 10px)); min-height: 0; flex: 1; }
 .studio-activity .activity-columns { display: grid; grid-template-columns: minmax(250px,1.4fr) minmax(180px,1fr) 120px 94px; grid-template-areas: "operation account result time"; gap: 20px; }
 .studio-activity .activity-operation { grid-area: operation; }
 .studio-activity .activity-account { grid-area: account; }
