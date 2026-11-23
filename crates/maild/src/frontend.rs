@@ -21,7 +21,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use cordis::{Context, Plugin, PluginError, Service};
 pub use maild_client::OpenIntent;
-use maild_client::{FrontendInfo, FrontendsResult};
+use maild_client::{FrontendInfo, FrontendsResult, PackageL10nEntry};
 use serde::Deserialize;
 
 use crate::notify::Notifier;
@@ -246,15 +246,26 @@ struct FrontendRecord {
     launch: LaunchTarget,
 }
 
+/// The native launcher's listing name, worded like its window title in each kernel language.
+fn recovery_name(locale: maild_l10n::Locale) -> String {
+    (locale.messages().launcher.window_title)(maild_brand::PRODUCT_NAME)
+}
+
 impl FrontendRecord {
     /// The native launcher: always present, routes only `background` and authorizes no API.
     fn recovery() -> Self {
         Self {
             info: FrontendInfo {
                 id: BUILTIN_RECOVERY_FRONTEND.into(),
-                name: format!("{} 修复与后台管理", maild_brand::PRODUCT_NAME),
+                name: recovery_name(maild_l10n::Locale::default()),
                 description: None,
-                l10n: Default::default(),
+                l10n: maild_l10n::Locale::ALL
+                    .into_iter()
+                    .map(|locale| {
+                        let entry = PackageL10nEntry { name: Some(recovery_name(locale)), description: None };
+                        (locale.tag().to_owned(), entry)
+                    })
+                    .collect(),
                 version: env!("CARGO_PKG_VERSION").into(),
                 lifecycle: FrontendLifecycle::OnDemand.as_str().into(),
                 capabilities: vec!["background".into()],
@@ -1544,6 +1555,14 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[test]
+    fn recovery_listing_names_itself_in_every_kernel_language() {
+        let info = FrontendRecord::recovery().info;
+        assert_eq!(info.name, "Featherpost 修复与后台管理");
+        assert_eq!(info.l10n["en"].name.as_deref(), Some("Featherpost Repair & Background"));
+        assert_eq!(info.l10n["zh-Hans"].name.as_deref(), Some("Featherpost 修复与后台管理"));
+    }
+
     fn install_root() -> tempfile::TempDir {
         use std::os::unix::fs::PermissionsExt as _;
         let root = tempfile::tempdir().unwrap();
@@ -1758,10 +1777,12 @@ mod tests {
         );
         // v3 仍可声明 permissions：新版本是 v2 的超集。
         assert_eq!(localized["permissions"], serde_json::json!(["mailbox_write"]));
-        for plain in ["org.example.v2", BUILTIN_RECOVERY_FRONTEND] {
-            let plain = entry(plain);
-            assert!(plain.get("l10n").is_none() && plain.get("description").is_none(), "{plain}");
-        }
+        let plain = entry("org.example.v2");
+        assert!(plain.get("l10n").is_none() && plain.get("description").is_none(), "{plain}");
+        // 内置修复入口没有 manifest，名字按内核语言目录给出各语言版本。
+        let recovery = entry(BUILTIN_RECOVERY_FRONTEND);
+        assert!(recovery.get("description").is_none(), "{recovery}");
+        assert_eq!(recovery["l10n"]["en"]["name"], "Featherpost Repair & Background");
     }
 
     /// ADR-0031 决策 8：notifications_read 是可声明的词，走 permissions 而不是塞进 settings 路由。
