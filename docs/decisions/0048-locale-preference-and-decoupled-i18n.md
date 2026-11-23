@@ -347,7 +347,7 @@ description = "..."
 | L3 | `packages/i18n` + Paraglide + `i18n:lint`；先迁一个模块（`FolderNav`）与原生菜单打通整条链路，再批量迁移两个前端 | 先打通一条链路，再按模块逐个迁移 |
 | L4 | manifest `l10n` 段与三个列表/预览方法透传；`prepareReply` 的 `locale` 参数 | 是 |
 | L5 | `maildctl` 用户可见输出 | 是 |
-| L6（计划） | 账户状态 `detail_code`：同步循环自己写的错误前缀换成稳定 code，服务器原文单独透传 | 是：英文界面的账户离线原因不再夹中文 |
+| L6 | 账户状态 `detail_code`：同步循环自己写的错误前缀换成稳定 code，服务器原文单独透传 | 是：英文界面的账户离线原因不再夹中文 |
 
 > **L5 实施记录**：
 >
@@ -364,30 +364,62 @@ description = "..."
 > - 新增 `maildctl locale [show]` / `locale set <LANGUAGE>...` / `locale set --system`，`--json` 与协议应答同形；
 >   `set` 的人读输出按写入后的新偏好成文。
 
-> **L6 计划（账户状态的稳定 code，未实施）**
+> **L6 实施记录（账户状态的稳定 code）**：
 >
-> 现状：`account/state` 的 `detail` 是一整句中文，例如 `连接 imap.example.com:993 失败: <OS 报错>`、
-> `IMAP 登录失败: <服务器应答>`、`provider 不可用: <原因>`。中文前缀是同步循环（`receive.rs`）写的界面文字，冒号后
-> 面才是服务器或系统的原文。`receive.rs` 里这样的字符串约 80 处，集中在连接、TLS、登录、IDLE、轮询、对账和委托
-> 收信几段。
+> 改造前 `account/state` 的 `detail` 是一整句中文，例如 `连接 imap.example.com:993 失败: <OS 报错>`、
+> `IMAP 登录失败: <服务器应答>`、`provider 不可用: <原因>`：前缀是收信循环（`receive.rs`）写的界面文字，冒号后才是
+> 服务器或系统原文。
 >
-> - 协议（additive）：`account/state` 推送与账户列表里的状态对象增加可选 `detail_code`（稳定 snake_case）与
->   `server_detail`（去掉中文前缀、经 `sanitize_detail` 的原文，可空）。`detail` 保持今天的整句，老前端与日志
->   不变。
-> - 首批 code：`credential_unavailable`、`credential_invalid`、`connect_failed`、`connect_timeout`、`tls_failed`、
->   `tls_timeout`、`starttls_unsupported`、`greeting_invalid`、`login_failed`、`login_timeout`、`idle_failed`、
->   `idle_timeout`、`sync_failed`（LIST / SELECT / FETCH / 对账 / 游标）、`poll_failed`、`provider_unavailable`、
->   `provider_timeout`、`provider_failed`、`provider_response_invalid`；兜底 `internal`。新增 code 不算破坏性变更，
->   前端遇到不认识的 code 显示通用文案加 `server_detail`。
-> - 实现：`serve` 一路的 `Result<_, String>` 换成带 `code` 与原文的错误类型，`Display` 仍拼出今天的中文整句，
->   日志与 `detail` 逐字节不变；按阶段收成几个 `map_err` 辅助函数，不逐处手写。
-> - 前端：`maild-ui` 与 Studio 的账户状态按 `detail_code` 成文，`server_detail` 作为次要信息原样显示；没有 code
->   （老 daemon）时照旧显示 `detail`。`maildctl accounts` 的人读输出同样按 code 成文。
-> - 同一轮顺带：写队列 op 的失败说明（`APPEND 失败: …`、`STORE 失败: …`）在 `listPendingOps` 摘要里补
->   `detail_code = "server_rejected"` 与原文；服务器检索、按需拉取的 RPC 报错仍是协议 `error.message`（面向开发者，
->   与 L5 口径一致），不在本切片内。
-> - 测试：每个 code 至少一条触发路径（假服务器拒登录、TLS 握手失败、provider 超时等）；`detail` 整句的回归断言
->   保持；前端核对每个 Rust 侧 code 都有两种语言的文案。
+> - **内核**：收信循环的 `Result<_, String>`（连接、TLS / STARTTLS、登录、IDLE、轮询、同步与对账、写队列、委托收信）
+>   换成 `receive::ReceiveError { code, message, server_detail }`。`Display` 输出 `message`，即改造前的整句，日志与
+>   `detail` 逐字节不变（单测逐句钉住）。各调用点只写前缀，code 由几个按阶段的辅助函数决定：`stage(code, 前缀)`
+>   （带原文）、`sync_stage` / `store_stage`（同步命令 / 本地库）、`fixed(code, 整句)`（超时与我们自己的判断）、
+>   `line_stage`（STARTTLS 逐字节读行）。`SecretFetcher` 的错误类型随之改为 `ReceiveError`。code 是
+>   `events::AccountDetailCode`（serde 名即 `as_str`），`AccountStateInfo` 多 `detail_code`、`server_detail` 两个
+>   可选字段，`set_offline` 一处写入。
+> - **最终 code 清单**（与计划相同，19 个）及来源：
+>   - `credential_unavailable`：凭据库读取失败、读取任务失败；`credential_invalid`：秘密不是 UTF-8。
+>   - `connect_failed`：DNS 报错、套接字报错、没有可用地址；`connect_timeout`：DNS 超时、单地址或总预算超时。
+>   - `tls_failed`：TLS 握手失败、构建 connector 失败、写 STARTTLS / 读其应答的 IO 失败；`tls_timeout`：整个握手阶段超时。
+>   - `starttls_unsupported`：STARTTLS 应答不是 `OK`；`greeting_invalid`：STARTTLS 前读 greeting 失败或不是 `* OK` /
+>     `* PREAUTH`。
+>   - `login_failed` / `login_timeout`；`idle_failed`（IDLE 启动失败、等待出错、DONE 失败）/ `idle_timeout`（IDLE
+>     启动或 DONE 超时）。
+>   - `sync_failed`：LIST、SELECT（含 sweep 回主文件夹）、各类 FETCH、对账、游标与 modseq 的本地读写、取待办、写队列
+>     命令的连接级故障（如 `APPEND 失败: io: …` 让循环掉线时）。
+>   - `poll_failed`：缺 scheduler、注册轮询任务失败、调度通道关闭。
+>   - `provider_unavailable`：provider 未注册、连接已关闭 / 端点已失效；`provider_timeout`；`provider_failed`
+>     （插件应答业务失败）；`provider_response_invalid`（应答结构、uid、received_at、正文超限）。
+>   - `internal`：provider 注册表或 store 未装配。
+> - **`server_detail` 的口径**：只放外来原文（IMAP 应答、OS / TLS 报错、greeting 行、插件消息），经
+>   `probe::sanitize_detail`（去控制字符、≤160 字节）。我们自己写的文字不放：超时、凭据库与本地库的报错、装配缺失、
+>   provider 模块的「连接已关闭 / 端点已失效」，以及 `read_line_exact` 在对端提前关闭时自造的「连接在行尾前关闭」——
+>   否则英文界面仍会夹中文。这些情况下 `server_detail` 为空、序列化时省略。
+> - **协议**：`account/state` 推送、`status` / `listAccounts` 的账户数组、账户 profile 视图的 `runtime`（受管与 legacy）
+>   都带这两个可选键；在线、连接中、重连中不带，老客户端看到的帧不变。推送里 `server_detail` 同样按 8 KiB 截断。
+> - **写队列摘要**：写队列失败说明的前缀收成一张表（`OP_FAILURE_PREFIXES` 与带文件夹名的 `SELECT … 失败`），
+>   收信循环按它拼说明，`listPendingOps` 摘要按同一张表拆出原文：`failed` 且是服务器命令失败 → `detail_code =
+>   "server_rejected"` 与 `server_detail`；其他 `failed` 仍是 `rejected`；`unknown` 仍是 `unconfirmed`，说明里有原文
+>   时同样附 `server_detail`。表对老版本落库的说明同样适用（文字没变）。`detail` 仍是老前端看到的固定句子。
+>   **偏差**：可重放的标记操作因连接级故障重试耗尽后落为 `failed`，说明形如 `STORE 失败: io: …`，按表也归
+>   `server_rejected`——原文仍如实给出，只是「服务器拒绝」不完全准确；为此另起 code 需要在库里记录失败类别，不值得。
+>   服务器检索、按需拉取的 RPC 报错仍是协议 `error.message`（这两条路径把 `ReceiveError` 转回字符串）。
+> - **客户端**：`maild-client` 的 `AccountState`、`RuntimeView` 多两个可选字段；`maild-app` actor 校验并计入通知缓冲
+>   大小；桥的 `UiAccount` 原样携带，`UiOperation` 带 `server_detail`。账户页的 profile 投影**照旧清空** `detail`
+>   （此前桥就不让 daemon 的中文整句过桥），只放行 code 与再限长一次的 `server_detail`——所以 Tauri 下的老 daemon
+>   账户页仍不显示原因，与改造前相同。
+> - **前端**：`accountReason` / `accountReasonLine`（`maild-ui/src/i18n.ts`）按 code 取 `common_account_detail_*` 成文，
+>   原文作为次要信息；认不出的 code 给通用说明加原文；没有 code 时用 `detail`。两个账户页共用 `AccountReason`
+>   组件，`FolderNav` 的悬停提示用单行形式。写队列活动的 `server_rejected` 有自己的句子，原文接在后面。
+>   前端测试从 `events.rs` 读出全部 code，核对两种语言都有文案且映射表无多余项；英文账户页（两个前端）对编码过的
+>   离线原因不含中文。
+> - **CLI**：`maildctl accounts` 与 `account list` 的人读输出按 code 用 `maild-l10n` 的 `ctl.account_detail` 成文，
+>   原文接在后面；老 daemon 照旧显示 `detail`。`--json` 原样输出，新键只增不改。`maild` 的测试核对每个 code 在 CLI
+>   两种语言里都有文案。
+> - **测试**：每个 code 都有真实触发路径——脚本化 IMAP 服务器（拒登录、不应答登录 / IDLE、拒 IDLE、SELECT 失败、
+>   坏 greeting、拒 STARTTLS、不是 TLS 的对端、只读不写的对端）、关闭的端口、耗尽的连接预算、无 scheduler 的轮询、
+>   注册在表里的 provider 端点（断开、不应答、业务失败、坏应答）。超时分支用仅测试可见的线程内超时覆盖缩短，生产
+>   恒为原常量。
 
 ## 兼容性
 

@@ -31,8 +31,8 @@ use tokio::sync::{mpsc, oneshot, watch};
 use crate::config::Merge;
 use crate::credential::SecretBuffer;
 use crate::events::{
-    AccountState, AccountStateInfo, AccountStateKind, FilterDecision, MailFiltered, MailMessage,
-    MailReceived, MessageSummary,
+    AccountDetailCode, AccountState, AccountStateInfo, AccountStateKind, FilterDecision,
+    MailFiltered, MailMessage, MailReceived, MessageSummary,
 };
 use crate::folders::{self, FolderRole};
 use crate::pending::{ObservedFlags, OpKind, OpState, PendingOp};
@@ -52,7 +52,105 @@ pub(crate) type Conn = Box<dyn ImapIo>;
 
 /// 每次连接尝试前取回秘密的回调。受管账户经 Keychain 取入短生命周期缓冲，
 /// 秘密不进入长期 `ReceiveConfig`（ADR-0015 §5）。
-pub type SecretFetcher = Arc<dyn Fn() -> Result<SecretBuffer, String> + Send + Sync>;
+pub type SecretFetcher = Arc<dyn Fn() -> Result<SecretBuffer, ReceiveError> + Send + Sync>;
+
+/// 收信循环的错误（ADR-0048 L6）：稳定 code + 服务器/系统原文。
+///
+/// `Display` 是今天的中文整句，日志与账户状态的 `detail` 逐字节不变；前端改按 `code` 成文，
+/// `server_detail` 作为数据原样展示。原文全由我们自己判断（超时、凭据库、本地库、装配缺失）
+/// 时 `server_detail` 为空——那些文字是界面文案，不是数据。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReceiveError {
+    code: AccountDetailCode,
+    message: String,
+    server_detail: String,
+}
+
+impl ReceiveError {
+    /// 整句都是我们写的：没有外来原文。
+    pub fn new(code: AccountDetailCode, message: impl Into<String>) -> Self {
+        ReceiveError {
+            code,
+            message: message.into(),
+            server_detail: String::new(),
+        }
+    }
+
+    /// `{prefix}: {detail}`：`prefix` 是界面文字，`detail` 是服务器或系统原文。
+    pub fn with_detail(
+        code: AccountDetailCode,
+        prefix: impl std::fmt::Display,
+        detail: impl std::fmt::Display,
+    ) -> Self {
+        let detail = detail.to_string();
+        ReceiveError {
+            code,
+            message: format!("{prefix}: {detail}"),
+            server_detail: crate::probe::sanitize_detail(&detail),
+        }
+    }
+
+    pub fn code(&self) -> AccountDetailCode {
+        self.code
+    }
+
+    pub fn server_detail(&self) -> &str {
+        &self.server_detail
+    }
+}
+
+impl std::fmt::Display for ReceiveError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for ReceiveError {}
+
+// —— 按阶段的 `map_err` 辅助：一处决定 code，各调用点只写前缀 ——
+
+/// 带服务器/系统原文的阶段失败：`.map_err(stage(code, "前缀"))` 得到 `前缀: 原文`。
+fn stage<E: std::fmt::Display, P: std::fmt::Display>(
+    code: AccountDetailCode,
+    prefix: P,
+) -> impl FnOnce(E) -> ReceiveError {
+    move |error| ReceiveError::with_detail(code, prefix, error)
+}
+
+/// IMAP 同步命令（LIST / SELECT / FETCH / 对账）失败。
+fn sync_stage<E: std::fmt::Display, P: std::fmt::Display>(
+    prefix: P,
+) -> impl FnOnce(E) -> ReceiveError {
+    stage(AccountDetailCode::SyncFailed, prefix)
+}
+
+/// 本地库（游标、modseq、对账写回）失败：整句仍是 `前缀: 报错`，但报错是我们自己的文字，
+/// 不作为 `server_detail` 透出。归 `sync_failed`（ADR-0048 L6 计划：游标属于同步阶段）。
+fn store_stage<E: std::fmt::Display, P: std::fmt::Display>(
+    prefix: P,
+) -> impl FnOnce(E) -> ReceiveError {
+    move |error| ReceiveError::new(AccountDetailCode::SyncFailed, format!("{prefix}: {error}"))
+}
+
+/// 整句是固定文案的失败（超时、我们自己的判断）：丢弃底层错误值。
+fn fixed<E>(code: AccountDetailCode, message: &'static str) -> impl FnOnce(E) -> ReceiveError {
+    move |_| ReceiveError::new(code, message)
+}
+
+/// STARTTLS 协商逐字节读行的 IO 失败。`read_line_exact` 在对端提前关闭时自己写了一句中文，
+/// 那不是系统原文，不透出。
+fn line_stage<P: std::fmt::Display>(
+    code: AccountDetailCode,
+    prefix: P,
+) -> impl FnOnce(tokio::io::Error) -> ReceiveError {
+    move |error| {
+        if error.kind() == tokio::io::ErrorKind::UnexpectedEof {
+            ReceiveError::new(code, format!("{prefix}: {error}"))
+        } else {
+            ReceiveError::with_detail(code, prefix, error)
+        }
+    }
+}
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct ReceiveConfig {
@@ -274,6 +372,52 @@ const TCP_KEEPALIVE_IDLE_SECS: libc::c_int = 120;
 const RECONNECT_BACKOFF_MAX: Duration = Duration::from_secs(300);
 const RECONNECT_BACKOFF_MAX_EXPONENT: u32 = 6;
 
+/// 分阶段超时的一份取值。生产恒为上面的常量；单测在本线程临时缩短，以确定性地走到各个超时
+/// 分支（ADR-0048 L6 要求每个 code 都有触发路径）。
+#[derive(Clone, Copy, Debug)]
+struct StageTimeouts {
+    connect_per_addr: Duration,
+    connect_total: Duration,
+    handshake: Duration,
+    login: Duration,
+    idle_init: Duration,
+    idle_done: Duration,
+    /// `None` = 用 provider 模块的反向调用预算。
+    provider_call: Option<Duration>,
+}
+
+const STAGE_TIMEOUTS: StageTimeouts = StageTimeouts {
+    connect_per_addr: CONNECT_PER_ADDR_TIMEOUT,
+    connect_total: CONNECT_TOTAL_TIMEOUT,
+    handshake: HANDSHAKE_TIMEOUT,
+    login: LOGIN_TIMEOUT,
+    idle_init: IDLE_INIT_TIMEOUT,
+    idle_done: IDLE_DONE_TIMEOUT,
+    provider_call: None,
+};
+
+#[cfg(not(test))]
+fn stage_timeouts() -> StageTimeouts {
+    STAGE_TIMEOUTS
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_STAGE_TIMEOUTS: std::cell::Cell<Option<StageTimeouts>> =
+        const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+fn stage_timeouts() -> StageTimeouts {
+    TEST_STAGE_TIMEOUTS.with(|cell| cell.get()).unwrap_or(STAGE_TIMEOUTS)
+}
+
+fn provider_call_budget() -> Duration {
+    stage_timeouts()
+        .provider_call
+        .unwrap_or_else(crate::provider::receive_call_budget)
+}
+
 impl Receive {
     pub(crate) fn new(account: &str) -> Receive {
         let (online, _) = watch::channel(false);
@@ -292,11 +436,7 @@ impl Receive {
                 sync_wake,
                 fetch,
                 fetch_rx: tokio::sync::Mutex::new(fetch_rx),
-                state: Mutex::new(AccountStateInfo {
-                    account: account.to_string(),
-                    state: AccountStateKind::Connecting,
-                    detail: String::new(),
-                }),
+                state: Mutex::new(AccountStateInfo::plain(account, AccountStateKind::Connecting)),
                 online,
                 shutdown,
             }),
@@ -327,12 +467,26 @@ impl Receive {
         let _ = self.inner.online.send_replace(v);
     }
 
-    fn set_state(&self, ctx: &Context, state: AccountStateKind, detail: impl Into<String>) {
-        let info = AccountStateInfo {
-            account: self.inner.account.clone(),
-            state,
-            detail: detail.into(),
-        };
+    /// 没有原因的状态（连接中、在线、重连中）。
+    fn set_state(&self, ctx: &Context, state: AccountStateKind) {
+        self.publish(ctx, AccountStateInfo::plain(self.inner.account.clone(), state));
+    }
+
+    /// 离线并附原因：`detail` 是今天的整句，另带稳定 code 与服务器原文（ADR-0048 L6）。
+    fn set_offline(&self, ctx: &Context, error: &ReceiveError) {
+        self.publish(
+            ctx,
+            AccountStateInfo {
+                account: self.inner.account.clone(),
+                state: AccountStateKind::Offline,
+                detail: error.to_string(),
+                detail_code: Some(error.code()),
+                server_detail: error.server_detail().to_string(),
+            },
+        );
+    }
+
+    fn publish(&self, ctx: &Context, info: AccountStateInfo) {
         *self.inner.state.lock().unwrap() = info.clone();
         ctx.emit::<AccountState>(info);
     }
@@ -517,27 +671,32 @@ async fn run_loop(
         } else {
             AccountStateKind::Reconnecting
         };
-        receive.set_state(&ctx, state, "");
+        receive.set_state(&ctx, state);
         first = false;
 
         // 钥匙串读取是同步阻塞的系统调用：`SecItemCopyMatching` 要等 securityd，
         // 钥匙串锁定或 Agent 签名变更时还会弹授权窗。守护进程跑在 tokio
         // current_thread 上，直接在这里调用会把整个运行时钉死——连 API socket
         // 都不再应答（2026-08-28 实测到过一次）。所以移出运行时线程。
-        let fetched: Result<SecretBuffer, String> = match &secret_fetcher {
+        let fetched: Result<SecretBuffer, ReceiveError> = match &secret_fetcher {
             Some(fetch) => {
                 let fetch = Arc::clone(fetch);
                 tokio::task::spawn_blocking(move || fetch())
                     .await
-                    .unwrap_or_else(|_| Err("凭据读取任务失败".into()))
+                    .unwrap_or_else(|_| {
+                        Err(ReceiveError::new(
+                            AccountDetailCode::CredentialUnavailable,
+                            "凭据读取任务失败",
+                        ))
+                    })
             }
             None => Ok(SecretBuffer::new(cfg.password.clone().into_bytes())),
         };
         let secret: SecretBuffer = match fetched {
             Ok(secret) => secret,
-            Err(detail) => {
+            Err(error) => {
                 // 凭据读取失败是可恢复状态：不回滚配置，退避后重试。
-                receive.set_state(&ctx, AccountStateKind::Offline, detail);
+                receive.set_offline(&ctx, &error);
                 receive.set_online(false);
                 let delay = reconnect_backoff(cfg.reconnect_secs, consecutive_failures);
                 consecutive_failures = consecutive_failures.saturating_add(1);
@@ -555,7 +714,7 @@ async fn run_loop(
                 if receive.is_online() {
                     consecutive_failures = 0;
                 }
-                receive.set_state(&ctx, AccountStateKind::Offline, &e);
+                receive.set_offline(&ctx, &e);
                 receive.set_online(false);
                 eprintln!("[maild/receive] 账户 {}: {e}", cfg.account);
                 let delay = reconnect_backoff(cfg.reconnect_secs, consecutive_failures);
@@ -630,15 +789,18 @@ async fn serve(
     receive: &Receive,
     scheduler: Option<&Scheduler>,
     secret: SecretBuffer,
-) -> Result<(), String> {
+) -> Result<(), ReceiveError> {
     let client = connect_client(cfg).await?;
-    let password = std::str::from_utf8(secret.expose())
-        .map_err(|_| "账户密码不是有效的 UTF-8 文本".to_string())?;
+    let password = std::str::from_utf8(secret.expose()).map_err(fixed(
+        AccountDetailCode::CredentialInvalid,
+        "账户密码不是有效的 UTF-8 文本",
+    ))?;
     // 休眠唤醒后的半开连接上，LOGIN 可能永远等不到应答（ADR-0041 决策 3）。
-    let mut session = tokio::time::timeout(LOGIN_TIMEOUT, client.login(&cfg.username, password))
+    let login_timeout = stage_timeouts().login;
+    let mut session = tokio::time::timeout(login_timeout, client.login(&cfg.username, password))
         .await
-        .map_err(|_| "IMAP 登录超时".to_string())?
-        .map_err(|(e, _)| format!("IMAP 登录失败: {e}"))?;
+        .map_err(fixed(AccountDetailCode::LoginTimeout, "IMAP 登录超时"))?
+        .map_err(|(e, _)| ReceiveError::with_detail(AccountDetailCode::LoginFailed, "IMAP 登录失败", e))?;
     // 认证完成：立即释放秘密缓冲（协议库内部的一次性拷贝由其自身边界负责）。
     // password 是 secret 的借用，NLL 在此之后结束；drop(secret) 清零并释放缓冲。
     drop(secret);
@@ -656,7 +818,7 @@ async fn serve(
         }
     }
 
-    receive.set_state(ctx, AccountStateKind::Online, "");
+    receive.set_state(ctx, AccountStateKind::Online);
     receive.set_online(true);
 
     // 会话内每文件夹状态（游标 / 对账标记 / 有界去重环）：常驻内存 O(folders)，
@@ -708,10 +870,10 @@ async fn serve(
             drain_unsolicited(&session);
 
             let mut idle = session.idle();
-            tokio::time::timeout(IDLE_INIT_TIMEOUT, idle.init())
+            tokio::time::timeout(stage_timeouts().idle_init, idle.init())
                 .await
-                .map_err(|_| "IDLE 启动超时".to_string())?
-                .map_err(|e| format!("IDLE 失败: {e}"))?;
+                .map_err(fixed(AccountDetailCode::IdleTimeout, "IDLE 启动超时"))?
+                .map_err(stage(AccountDetailCode::IdleFailed, "IDLE 失败"))?;
             let (waiter, stop) = idle.wait();
             // sweep 到期要能把 IDLE 叫醒；续期点再按 RFC 2177 封顶 25 分钟。
             let until_sweep = next_sweep.saturating_duration_since(tokio::time::Instant::now());
@@ -722,8 +884,12 @@ async fn serve(
                 res = waiter => {
                     drop(stop);
                     if let Err(e) = res {
-                        let _ = tokio::time::timeout(IDLE_DONE_TIMEOUT, idle.done()).await;
-                        return Err(format!("IDLE 出错: {e}"));
+                        let _ = tokio::time::timeout(stage_timeouts().idle_done, idle.done()).await;
+                        return Err(ReceiveError::with_detail(
+                            AccountDetailCode::IdleFailed,
+                            "IDLE 出错",
+                            e,
+                        ));
                     }
                     session = finish_idle(idle).await?;
                 }
@@ -775,7 +941,9 @@ async fn serve(
         sync.sync_folder(&mut session, &targets[0], true).await?;
         drain_pending_ops(&mut session, &cfg.account, ctx, &mut sync.selected, capabilities)
             .await?;
-        let scheduler = scheduler.ok_or_else(|| "轮询 receive 缺少 scheduler 服务".to_string())?;
+        let scheduler = scheduler.ok_or_else(|| {
+            ReceiveError::new(AccountDetailCode::PollFailed, "轮询 receive 缺少 scheduler 服务")
+        })?;
         let (tick_tx, mut tick_rx) = mpsc::channel(1);
         let account = cfg.account.clone();
         let _poll_job = scheduler
@@ -798,7 +966,9 @@ async fn serve(
                     })
                 },
             )
-            .map_err(|error| format!("注册轮询任务失败: {error}"))?;
+            .map_err(|error| {
+                ReceiveError::new(AccountDetailCode::PollFailed, format!("注册轮询任务失败: {error}"))
+            })?;
 
         loop {
             drain_unsolicited(&session);
@@ -806,7 +976,10 @@ async fn serve(
             let full_round = tokio::select! {
                 tick = tick_rx.recv() => {
                     if tick.is_none() {
-                        return Err("轮询 scheduler 通道已关闭".into());
+                        return Err(ReceiveError::new(
+                            AccountDetailCode::PollFailed,
+                            "轮询 scheduler 通道已关闭",
+                        ));
                     }
                     true
                 }
@@ -866,11 +1039,11 @@ async fn serve(
 /// 结束一次 IDLE 并取回会话。`DONE` 之后等不到 tagged 应答 = 连接已死（ADR-0041 决策 3）。
 async fn finish_idle(
     idle: async_imap::extensions::idle::Handle<Conn>,
-) -> Result<async_imap::Session<Conn>, String> {
-    tokio::time::timeout(IDLE_DONE_TIMEOUT, idle.done())
+) -> Result<async_imap::Session<Conn>, ReceiveError> {
+    tokio::time::timeout(stage_timeouts().idle_done, idle.done())
         .await
-        .map_err(|_| "IDLE done 超时（连接可能已失效）".to_string())?
-        .map_err(|e| format!("IDLE done 失败: {e}"))
+        .map_err(fixed(AccountDetailCode::IdleTimeout, "IDLE done 超时（连接可能已失效）"))?
+        .map_err(stage(AccountDetailCode::IdleFailed, "IDLE done 失败"))
 }
 
 /// 丢弃积压的未请求响应（只为释放内存；新邮件由 IDLE / 增量同步发现）。
@@ -920,7 +1093,10 @@ async fn run_server_search(
     since: Option<u64>,
     until: Option<u64>,
 ) -> Result<Vec<MessageSummary>, String> {
-    ensure_selected(session, selected, folder, capabilities.condstore).await?;
+    // 服务器检索是 RPC，报错仍是协议 `error.message`（ADR-0048 L6 不涉及）。
+    ensure_selected(session, selected, folder, capabilities.condstore)
+        .await
+        .map_err(|error| error.to_string())?;
     // 非 ASCII 查询必须声明字符集。RFC 3501 严格来说要求用 literal 传 8bit，
     // 但那需要续行握手；这里用 `CHARSET UTF-8` + 引用串，服务器不接受时回 BAD，
     // 原样透出给用户，而不是假装搜过了（ADR-0029 决策 11）。
@@ -991,7 +1167,7 @@ async fn reconcile_folder_flags(
     ctx: &Context,
     selected: &Selected,
     capabilities: ServerCapabilities,
-) -> Result<(), String> {
+) -> Result<(), ReceiveError> {
     let server_modseq = selected
         .as_ref()
         .filter(|current| current.name == target.name)
@@ -999,7 +1175,7 @@ async fn reconcile_folder_flags(
     let stored_modseq = match store_of(ctx) {
         Some(store) => store
             .folder_modseq(folder_id)
-            .map_err(|error| format!("读取 modseq 失败: {error}"))?,
+            .map_err(store_stage("读取 modseq 失败"))?,
         None => return Ok(()),
     };
 
@@ -1018,10 +1194,10 @@ async fn reconcile_folder_flags(
         let fetches = session
             .uid_fetch("1:*", query)
             .await
-            .map_err(|error| format!("对账 FETCH 失败: {error}"))?;
+            .map_err(sync_stage("对账 FETCH 失败"))?;
         futures::pin_mut!(fetches);
         while let Some(fetch) = fetches.next().await {
-            let fetch = fetch.map_err(|error| format!("对账 FETCH 流出错: {error}"))?;
+            let fetch = fetch.map_err(sync_stage("对账 FETCH 流出错"))?;
             let Some(uid) = fetch.uid else { continue };
             let mut flags = ObservedFlags::default();
             for flag in fetch.flags() {
@@ -1045,10 +1221,10 @@ async fn reconcile_folder_flags(
     };
     let outcome = store
         .reconcile_flags(folder_id, &observed, full, protect_after)
-        .map_err(|error| format!("对账写回失败: {error}"))?;
+        .map_err(store_stage("对账写回失败"))?;
     store
         .set_folder_modseq(folder_id, server_modseq)
-        .map_err(|error| format!("写入 modseq 失败: {error}"))?;
+        .map_err(store_stage("写入 modseq 失败"))?;
     if outcome.updated > 0 || outcome.removed > 0 {
         eprintln!(
             "[maild/receive] 账户 {account}: 文件夹 {} 对账 更新 {} / 移除 {} / 保护 {}",
@@ -1068,14 +1244,14 @@ async fn drain_pending_ops(
     ctx: &Context,
     selected: &mut Selected,
     capabilities: ServerCapabilities,
-) -> Result<(), String> {
+) -> Result<(), ReceiveError> {
     loop {
         let Some(store) = store_of(ctx) else {
             return Ok(());
         };
         let claimed = store
             .claim_next_op(account, now_unix())
-            .map_err(|error| format!("取出待办失败: {error}"))?;
+            .map_err(store_stage("取出待办失败"))?;
         drop(store);
         let Some(op) = claimed else { return Ok(()) };
 
@@ -1085,10 +1261,54 @@ async fn drain_pending_ops(
         }
         let (outcome, detail, fatal) = execute_op(session, &op, selected, capabilities).await;
         settle_op(ctx, &op, outcome, &detail);
-        if fatal {
-            return Err(detail);
+        if let Some(error) = fatal {
+            return Err(error);
         }
     }
+}
+
+// —— 写队列命令失败说明的前缀（ADR-0048 L6）——
+// `listPendingOps` 摘要按同一张表拆出服务器原文（`detail_code = "server_rejected"`），两边不能漂移。
+// `SELECT` 的前缀带文件夹名，见 [`op_select_prefix`]。
+const OP_APPEND_FAILED: &str = "APPEND 失败";
+const OP_STORE_FAILED: &str = "STORE 失败";
+const OP_MOVE_FAILED: &str = "MOVE 失败";
+const OP_COPY_FAILED: &str = "COPY 失败";
+const OP_COPY_UNMARKED: &str = "COPY 已成功但标记删除失败";
+const OP_EXPUNGE_FAILED: &str = "已复制并标记删除，EXPUNGE 失败";
+const OP_FAILURE_PREFIXES: [&str; 6] = [
+    OP_APPEND_FAILED,
+    OP_STORE_FAILED,
+    OP_MOVE_FAILED,
+    OP_COPY_FAILED,
+    OP_COPY_UNMARKED,
+    OP_EXPUNGE_FAILED,
+];
+
+fn op_select_prefix(folder: &str) -> String {
+    format!("SELECT {folder} 失败")
+}
+
+/// 写队列 op 失败说明里服务器给的原文（`前缀: 原文` 的后半段）。说明不是服务器命令失败
+/// （用户放弃、载荷无法解析、文件夹记录丢失……）时为 `None`。老版本落库的说明同形，同样适用。
+pub(crate) fn op_failure_server_text<'a>(folder: &str, detail: &'a str) -> Option<&'a str> {
+    let select = op_select_prefix(folder);
+    OP_FAILURE_PREFIXES
+        .iter()
+        .copied()
+        .chain(std::iter::once(select.as_str()))
+        .find_map(|prefix| detail.strip_prefix(prefix)?.strip_prefix(": "))
+}
+
+/// 一次写队列命令失败：按 IMAP 错误决定终态与是否连接级故障（ADR-0027 决策 2）。
+/// 说明是 `前缀: 原文`；连接级故障另返回同一句的错误，让收信循环带着 code 掉线。
+fn op_failure(
+    prefix: impl std::fmt::Display,
+    error: &async_imap::error::Error,
+) -> (OpState, String, Option<ReceiveError>) {
+    let (state, fatal) = classify_op_error(error);
+    let failure = ReceiveError::with_detail(AccountDetailCode::SyncFailed, prefix, error);
+    (state, failure.to_string(), fatal.then_some(failure))
 }
 
 fn settle_op(ctx: &Context, op: &PendingOp, outcome: OpState, detail: &str) {
@@ -1109,93 +1329,79 @@ fn settle_op(ctx: &Context, op: &PendingOp, outcome: OpState, detail: &str) {
     }
 }
 
-/// 返回 (终态, 详情, 是否连接级故障)。
+/// 返回 (终态, 详情, 连接级故障)。连接级故障为 `Some` 时整轮中止、收信循环掉线。
 async fn execute_op(
     session: &mut async_imap::Session<Conn>,
     op: &PendingOp,
     selected: &mut Selected,
     capabilities: ServerCapabilities,
-) -> (OpState, String, bool) {
+) -> (OpState, String, Option<ReceiveError>) {
+    let done = || (OpState::Done, String::new(), None);
     if op.kind == OpKind::Append {
         // APPEND 的实参就是 mailbox 名，不需要先选中它。
         return match session.append(&op.folder, op.payload.as_bytes()).await {
-            Ok(()) => (OpState::Done, String::new(), false),
-            Err(error) => {
-                let (state, fatal) = classify_op_error(&error);
-                (state, format!("APPEND 失败: {error}"), fatal)
-            }
+            Ok(()) => done(),
+            Err(error) => op_failure(OP_APPEND_FAILED, &error),
         };
     }
     if let Err(error) = select_mailbox(session, selected, &op.folder, capabilities.condstore).await
     {
         // 服务器明确拒绝（文件夹不存在）= 命令根本没发出，是 failed 而不是未知——
         // 消息应该回到源文件夹，而不是留在「结果未知」的限台上等用户裁决。
-        let (state, fatal) = classify_op_error(&error);
-        return (state, format!("SELECT {} 失败: {error}", op.folder), fatal);
+        return op_failure(op_select_prefix(&op.folder), &error);
     }
     match op.kind {
         // 上面已提前返回。
-        OpKind::Append => (OpState::Failed, "不可达".into(), false),
+        OpKind::Append => (OpState::Failed, "不可达".into(), None),
         OpKind::Flag => {
             let Some(payload) = op.flag_payload() else {
-                return (OpState::Failed, "flag 载荷无法解析".into(), false);
+                return (OpState::Failed, "flag 载荷无法解析".into(), None);
             };
             let sign = if payload.value { "+" } else { "-" };
             let query = format!("{sign}FLAGS.SILENT ({})", payload.flag.imap_name());
             match drain_store(session, &op.uid, &query).await {
-                Ok(()) => (OpState::Done, String::new(), false),
-                Err(error) => {
-                    let (state, fatal) = classify_op_error(&error);
-                    (state, format!("STORE 失败: {error}"), fatal)
-                }
+                Ok(()) => done(),
+                Err(error) => op_failure(OP_STORE_FAILED, &error),
             }
         }
         OpKind::Move => {
             let Some(payload) = op.move_payload() else {
-                return (OpState::Failed, "move 载荷无法解析".into(), false);
+                return (OpState::Failed, "move 载荷无法解析".into(), None);
             };
             if capabilities.move_command {
                 return match session.uid_mv(&op.uid, &payload.target).await {
-                    Ok(()) => (OpState::Done, String::new(), false),
-                    Err(error) => {
-                        let (state, fatal) = classify_op_error(&error);
-                        (state, format!("MOVE 失败: {error}"), fatal)
-                    }
+                    Ok(()) => done(),
+                    Err(error) => op_failure(OP_MOVE_FAILED, &error),
                 };
             }
             // 降级链：COPY → +\Deleted →（仅在 UIDPLUS 下）UID EXPUNGE。
             if let Err(error) = session.uid_copy(&op.uid, &payload.target).await {
-                let (state, fatal) = classify_op_error(&error);
-                return (state, format!("COPY 失败: {error}"), fatal);
+                return op_failure(OP_COPY_FAILED, &error);
             }
             if let Err(error) = drain_store(session, &op.uid, "+FLAGS.SILENT (\\Deleted)").await {
-                let (state, fatal) = classify_op_error(&error);
+                let (state, detail, fatal) = op_failure(OP_COPY_UNMARKED, &error);
                 // COPY 已经成功，源件是否清理未知——不能报成 failed（会把消息放回来）。
                 let state = if state == OpState::Failed {
                     OpState::Unknown
                 } else {
                     state
                 };
-                return (state, format!("COPY 已成功但标记删除失败: {error}"), fatal);
+                return (state, detail, fatal);
             }
             if !capabilities.uidplus {
                 // 裸 EXPUNGE 会连带清除其他客户端标记 \Deleted 的邮件——那是别人的数据。
                 return (
                     OpState::Done,
                     "服务器无 UIDPLUS：已复制并标记删除，未 EXPUNGE".into(),
-                    false,
+                    None,
                 );
             }
             match drain_expunge(session, &op.uid).await {
-                Ok(()) => (OpState::Done, String::new(), false),
+                Ok(()) => done(),
                 Err(error) => {
-                    let (_, fatal) = classify_op_error(&error);
                     // 同上：COPY 已成功，源件残留与否不改变「移动已完成」这个事实。
-                    (
-                        OpState::Done,
-                        format!("已复制并标记删除，EXPUNGE 失败: {error}"),
-                        fatal,
-                    )
+                    let (_, detail, fatal) = op_failure(OP_EXPUNGE_FAILED, &error);
+                    (OpState::Done, detail, fatal)
                 }
             }
         }
@@ -1231,46 +1437,54 @@ async fn drain_expunge(
 /// - none：明文
 /// - starttls：手动协商（greeting → `a0 STARTTLS` → OK → 就地 TLS 握手）
 /// - implicit：直接 TLS 握手（993）
-async fn connect_client(cfg: &ReceiveConfig) -> Result<Client<Conn>, String> {
+async fn connect_client(cfg: &ReceiveConfig) -> Result<Client<Conn>, ReceiveError> {
     let stream = connect_tcp(&cfg.server, cfg.port).await?;
     // 握手阶段同样可能撞上半开连接：整体设上限（ADR-0041 决策 3）。
-    tokio::time::timeout(HANDSHAKE_TIMEOUT, negotiate(cfg, stream))
+    tokio::time::timeout(stage_timeouts().handshake, negotiate(cfg, stream))
         .await
-        .map_err(|_| "TLS / STARTTLS 握手超时".to_string())?
+        .map_err(fixed(AccountDetailCode::TlsTimeout, "TLS / STARTTLS 握手超时"))?
 }
 
 /// 解析全部地址并逐个尝试：单地址 10s、总计 20s（ADR-0041 决策 3）。
 ///
 /// 双栈环境里第一个地址（常见是 IPv6）不通时，`TcpStream::connect` 会在它上面耗满
 /// 系统默认的 75s；这里给每个地址独立预算，后面的地址还有机会。
-async fn connect_tcp(server: &str, port: u16) -> Result<TcpStream, String> {
-    let label = format!("{server}:{port}");
-    let deadline = tokio::time::Instant::now() + CONNECT_TOTAL_TIMEOUT;
+async fn connect_tcp(server: &str, port: u16) -> Result<TcpStream, ReceiveError> {
+    let timeouts = stage_timeouts();
+    let prefix = format!("连接 {server}:{port} 失败");
+    // 超时与「没有地址」是我们的判断（`connect_timeout` / `connect_failed`，无原文）；
+    // DNS 与套接字报错是系统原文。
+    let ours = |code, reason: String| ReceiveError::new(code, format!("{prefix}: {reason}"));
+    let deadline = tokio::time::Instant::now() + timeouts.connect_total;
     let addrs: Vec<std::net::SocketAddr> =
-        tokio::time::timeout(CONNECT_TOTAL_TIMEOUT, tokio::net::lookup_host((server, port)))
+        tokio::time::timeout(timeouts.connect_total, tokio::net::lookup_host((server, port)))
             .await
-            .map_err(|_| format!("连接 {label} 失败: DNS 解析超时"))?
-            .map_err(|e| format!("连接 {label} 失败: {e}"))?
+            .map_err(|_| ours(AccountDetailCode::ConnectTimeout, "DNS 解析超时".into()))?
+            .map_err(stage(AccountDetailCode::ConnectFailed, &prefix))?
             .collect();
-    let mut last_error = String::from("没有可用地址");
+    let mut last_error = ours(AccountDetailCode::ConnectFailed, "没有可用地址".into());
     for addr in addrs {
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
         if remaining.is_zero() {
-            last_error = "连接超时".into();
+            last_error = ours(AccountDetailCode::ConnectTimeout, "连接超时".into());
             break;
         }
-        match tokio::time::timeout(CONNECT_PER_ADDR_TIMEOUT.min(remaining), TcpStream::connect(addr))
+        match tokio::time::timeout(timeouts.connect_per_addr.min(remaining), TcpStream::connect(addr))
             .await
         {
             Ok(Ok(stream)) => {
                 tune_socket(&stream);
                 return Ok(stream);
             }
-            Ok(Err(error)) => last_error = error.to_string(),
-            Err(_) => last_error = format!("{addr} 连接超时"),
+            Ok(Err(error)) => {
+                last_error = ReceiveError::with_detail(AccountDetailCode::ConnectFailed, &prefix, error)
+            }
+            Err(_) => {
+                last_error = ours(AccountDetailCode::ConnectTimeout, format!("{addr} 连接超时"))
+            }
         }
     }
-    Err(format!("连接 {label} 失败: {last_error}"))
+    Err(last_error)
 }
 
 /// 关 Nagle（IMAP 是小命令往返），开低开销 TCP keepalive：笔电盒盖休眠后，半开连接会被
@@ -1306,14 +1520,14 @@ fn tune_socket(stream: &TcpStream) {
     }
 }
 
-async fn negotiate(cfg: &ReceiveConfig, stream: TcpStream) -> Result<Client<Conn>, String> {
+async fn negotiate(cfg: &ReceiveConfig, stream: TcpStream) -> Result<Client<Conn>, ReceiveError> {
     match cfg.tls.as_str() {
         "implicit" => {
             let conn = build_tls_connector(cfg)?;
             let tls = conn
                 .connect(&cfg.server, stream)
                 .await
-                .map_err(|e| format!("TLS 握手失败: {e}"))?;
+                .map_err(stage(AccountDetailCode::TlsFailed, "TLS 握手失败"))?;
             Ok(Client::new(Box::new(tls) as Conn))
         }
         "starttls" => {
@@ -1322,32 +1536,40 @@ async fn negotiate(cfg: &ReceiveConfig, stream: TcpStream) -> Result<Client<Conn
             let mut stream = stream;
             let greeting = read_line_exact(&mut stream)
                 .await
-                .map_err(|e| format!("读 greeting 失败: {e}"))?;
+                .map_err(line_stage(AccountDetailCode::GreetingInvalid, "读 greeting 失败"))?;
             if !greeting.starts_with("* OK") && !greeting.starts_with("* PREAUTH") {
-                return Err(format!("IMAP greeting 异常: {greeting}"));
+                return Err(ReceiveError::with_detail(
+                    AccountDetailCode::GreetingInvalid,
+                    "IMAP greeting 异常",
+                    greeting,
+                ));
             }
             stream
                 .write_all(b"a0 STARTTLS\r\n")
                 .await
-                .map_err(|e| format!("写 STARTTLS 失败: {e}"))?;
+                .map_err(stage(AccountDetailCode::TlsFailed, "写 STARTTLS 失败"))?;
             let resp = read_line_exact(&mut stream)
                 .await
-                .map_err(|e| format!("读 STARTTLS 响应失败: {e}"))?;
+                .map_err(line_stage(AccountDetailCode::TlsFailed, "读 STARTTLS 响应失败"))?;
             if !resp.starts_with("a0 OK") {
-                return Err(format!("服务器不支持 STARTTLS: {resp}"));
+                return Err(ReceiveError::with_detail(
+                    AccountDetailCode::StarttlsUnsupported,
+                    "服务器不支持 STARTTLS",
+                    resp,
+                ));
             }
             let conn = build_tls_connector(cfg)?;
             let tls = conn
                 .connect(&cfg.server, stream)
                 .await
-                .map_err(|e| format!("TLS 握手失败: {e}"))?;
+                .map_err(stage(AccountDetailCode::TlsFailed, "TLS 握手失败"))?;
             Ok(Client::new(Box::new(tls) as Conn))
         }
         _ => Ok(Client::new(Box::new(stream) as Conn)),
     }
 }
 
-fn build_tls_connector(cfg: &ReceiveConfig) -> Result<tokio_native_tls::TlsConnector, String> {
+fn build_tls_connector(cfg: &ReceiveConfig) -> Result<tokio_native_tls::TlsConnector, ReceiveError> {
     let mut b = native_tls::TlsConnector::builder();
     // legacy 配置可显式携带自签开关；受管路径恒为 false，
     // 只有 debug 构建下的 hermetic 环境变量能打开豁免。
@@ -1356,7 +1578,7 @@ fn build_tls_connector(cfg: &ReceiveConfig) -> Result<tokio_native_tls::TlsConne
     }
     let ntls = b
         .build()
-        .map_err(|e| format!("构建 TLS connector 失败: {e}"))?;
+        .map_err(stage(AccountDetailCode::TlsFailed, "构建 TLS connector 失败"))?;
     Ok(tokio_native_tls::TlsConnector::from(ntls))
 }
 
@@ -1496,10 +1718,10 @@ async fn ensure_selected(
     selected: &mut Selected,
     name: &str,
     condstore: bool,
-) -> Result<(), String> {
+) -> Result<(), ReceiveError> {
     select_mailbox(session, selected, name, condstore)
         .await
-        .map_err(|error| format!("SELECT {name} 失败: {error}"))
+        .map_err(sync_stage(format!("SELECT {name} 失败")))
 }
 
 /// IMAP 错误 → op 终态（ADR-0027 决策 2）。
@@ -1620,15 +1842,15 @@ struct ListedFolder {
 /// `LIST` 的结果必须先收完再释放对 session 的可变借用，之后才能发别的命令。
 async fn list_mailboxes(
     session: &mut async_imap::Session<Conn>,
-) -> Result<Vec<ListedFolder>, String> {
+) -> Result<Vec<ListedFolder>, ReceiveError> {
     let names = session
         .list(Some(""), Some("*"))
         .await
-        .map_err(|error| format!("LIST 失败: {error}"))?;
+        .map_err(sync_stage("LIST 失败"))?;
     futures::pin_mut!(names);
     let mut out = Vec::new();
     while let Some(name) = names.next().await {
-        let name = name.map_err(|error| format!("LIST 流出错: {error}"))?;
+        let name = name.map_err(sync_stage("LIST 流出错"))?;
         let raw = name.name().to_string();
         if raw.is_empty() {
             continue;
@@ -1751,7 +1973,7 @@ impl SyncSession<'_> {
         &mut self,
         session: &mut async_imap::Session<Conn>,
         targets: &[SyncTarget],
-    ) -> Result<(), String> {
+    ) -> Result<(), ReceiveError> {
         for target in targets.iter().skip(1) {
             if let Err(error) = self.sync_folder(session, target, false).await {
                 eprintln!(
@@ -1765,7 +1987,7 @@ impl SyncSession<'_> {
             session
                 .select(&targets[0].name)
                 .await
-                .map_err(|error| format!("SELECT {} 失败: {error}", targets[0].display_name))?;
+                .map_err(sync_stage(format!("SELECT {} 失败", targets[0].display_name)))?;
             // 重新 SELECT 后 UIDVALIDITY 由下一次 sync_folder 重新读取。
             self.selected = None;
         }
@@ -1787,7 +2009,7 @@ impl SyncSession<'_> {
         session: &mut async_imap::Session<Conn>,
         target: &SyncTarget,
         is_primary: bool,
-    ) -> Result<(), String> {
+    ) -> Result<(), ReceiveError> {
         let account = self.account;
         let ctx = self.ctx;
         ensure_selected(session, &mut self.selected, &target.name, self.capabilities.condstore)
@@ -1811,13 +2033,13 @@ impl SyncSession<'_> {
             (Some(store), Some(folder_id)) => {
                 let record = store
                     .folder_by_name(account, &target.name)
-                    .map_err(|error| format!("读取文件夹游标失败: {error}"))?;
+                    .map_err(store_stage("读取文件夹游标失败"))?;
                 if let Some(record) = record {
                     if record.uid_validity.is_some_and(|value| value != uid_validity) {
                         // UIDVALIDITY 翻转 = UID 空间已重编号，旧 UID 与新 UID 没有对应关系。
                         let removed = store
                             .rebuild_folder(folder_id, uid_validity)
-                            .map_err(|error| format!("重建文件夹失败: {error}"))?;
+                            .map_err(store_stage("重建文件夹失败"))?;
                         self.folder_mut(&target.name).recent.reset();
                         eprintln!(
                             "[maild/receive] 账户 {account}: 文件夹 {} UIDVALIDITY 变化，重建 {removed} 行",
@@ -1899,7 +2121,7 @@ impl SyncSession<'_> {
             (Some(store), Some(folder_id)) => {
                 store
                     .advance_folder_cursor(folder_id, uid_validity, last_seen, now_unix())
-                    .map_err(|error| format!("更新文件夹游标失败: {error}"))?;
+                    .map_err(store_stage("更新文件夹游标失败"))?;
                 if batched {
                     // 冷启动 / 大批补拉刚把一大段报文流过内存：收紧页缓存与 WAL，再把空闲堆页还给内核。
                     store.shrink_memory();
@@ -1924,7 +2146,7 @@ impl SyncSession<'_> {
         start_uid: u32,
         exists: u32,
         fresh_uid_next: Option<u32>,
-    ) -> Result<FetchPlan, String> {
+    ) -> Result<FetchPlan, ReceiveError> {
         if let Some(uid_next) = fresh_uid_next {
             // UIDNEXT ≤ start：游标之后不可能有邮件。
             if uid_next <= start_uid || exists == 0 {
@@ -1998,7 +2220,10 @@ impl SyncSession<'_> {
         folder: &str,
         uid: u32,
     ) -> Result<Option<MailMessage>, String> {
-        ensure_selected(session, &mut self.selected, folder, self.capabilities.condstore).await?;
+        // 按需拉取是 RPC，报错仍是协议 `error.message`（ADR-0048 L6 不涉及）。
+        ensure_selected(session, &mut self.selected, folder, self.capabilities.condstore)
+            .await
+            .map_err(|error| error.to_string())?;
         let role = match targets.iter().find(|target| target.name == folder) {
             Some(target) => target.role,
             None => store_of(self.ctx)
@@ -2043,7 +2268,7 @@ async fn list_uids_for_cold_start(
     session: &mut async_imap::Session<Conn>,
     exists: u32,
     limit: usize,
-) -> Result<Vec<u32>, String> {
+) -> Result<Vec<u32>, ReceiveError> {
     let from_seq = (exists as usize).saturating_sub(limit).saturating_add(1);
     if let Ok(hits) = session.uid_search(format!("{from_seq}:*")).await {
         let mut uids: Vec<u32> = hits.into_iter().collect();
@@ -2064,7 +2289,7 @@ async fn list_uids_for_cold_start(
 async fn list_uids_from(
     session: &mut async_imap::Session<Conn>,
     start_uid: u32,
-) -> Result<Vec<u32>, String> {
+) -> Result<Vec<u32>, ReceiveError> {
     let range = format!("{start_uid}:*");
     let mut uids: Vec<u32> = match session.uid_search(format!("UID {range}")).await {
         Ok(hits) if !hits.is_empty() => hits.into_iter().collect(),
@@ -2080,15 +2305,15 @@ async fn list_uids_from(
 async fn fetch_uid_list(
     session: &mut async_imap::Session<Conn>,
     range: &str,
-) -> Result<Vec<u32>, String> {
+) -> Result<Vec<u32>, ReceiveError> {
     let fetches = session
         .uid_fetch(range, "(UID)")
         .await
-        .map_err(|error| format!("UID 清单 FETCH 失败: {error}"))?;
+        .map_err(sync_stage("UID 清单 FETCH 失败"))?;
     futures::pin_mut!(fetches);
     let mut uids = Vec::new();
     while let Some(fetch) = fetches.next().await {
-        let fetch = fetch.map_err(|error| format!("UID 清单 FETCH 流出错: {error}"))?;
+        let fetch = fetch.map_err(sync_stage("UID 清单 FETCH 流出错"))?;
         if let Some(uid) = fetch.uid {
             uids.push(uid);
         }
@@ -2112,15 +2337,15 @@ async fn fetch_and_deliver(
     is_primary: bool,
     notify_from: u32,
     highest: &mut u32,
-) -> Result<(), String> {
+) -> Result<(), ReceiveError> {
     let fetches = session
         .uid_fetch(uid_set, "(UID FLAGS INTERNALDATE BODY.PEEK[])")
         .await
-        .map_err(|error| format!("UID FETCH 失败: {error}"))?;
+        .map_err(sync_stage("UID FETCH 失败"))?;
     futures::pin_mut!(fetches);
     let now = now_unix();
     while let Some(fetch) = fetches.next().await {
-        let fetch = fetch.map_err(|error| format!("FETCH 流出错: {error}"))?;
+        let fetch = fetch.map_err(sync_stage("FETCH 流出错"))?;
         let Some(uid) = fetch.uid else { continue };
         // RFC 3501 的 `N:*`：当 N 大于最大 UID 时服务器仍会返回最大 UID 那一条。
         // 不过滤就会每次重复处理最后一封。
@@ -2317,7 +2542,6 @@ async fn run_provider_loop(spec: ProviderReceiveSpec, ctx: Context, receive: Rec
             } else {
                 AccountStateKind::Reconnecting
             },
-            "",
         );
         first = false;
         match provider_drain(&spec, &ctx, &receive).await {
@@ -2328,7 +2552,7 @@ async fn run_provider_loop(spec: ProviderReceiveSpec, ctx: Context, receive: Rec
                 );
             }
             Err(error) => {
-                receive.set_state(&ctx, AccountStateKind::Offline, &error);
+                receive.set_offline(&ctx, &error);
                 receive.set_online(false);
                 eprintln!(
                     "[maild/provider] 委托收信 account={} provider={} outcome=failed detail={error}",
@@ -2355,20 +2579,25 @@ async fn provider_drain(
     spec: &ProviderReceiveSpec,
     ctx: &Context,
     receive: &Receive,
-) -> Result<usize, String> {
+) -> Result<usize, ReceiveError> {
     let registry = ctx
         .get::<crate::provider::ProviderRegistry>()
-        .ok_or_else(|| "provider 注册表未装配".to_string())?;
-    let endpoint = registry
-        .endpoint_of(&spec.provider_id)
-        .ok_or_else(|| format!("provider {} 未注册", spec.provider_id))?;
-    let store = ctx.get::<Store>().ok_or_else(|| "store 服务未装配".to_string())?;
+        .ok_or_else(|| ReceiveError::new(AccountDetailCode::Internal, "provider 注册表未装配"))?;
+    let endpoint = registry.endpoint_of(&spec.provider_id).ok_or_else(|| {
+        ReceiveError::new(
+            AccountDetailCode::ProviderUnavailable,
+            format!("provider {} 未注册", spec.provider_id),
+        )
+    })?;
+    let store = ctx
+        .get::<Store>()
+        .ok_or_else(|| ReceiveError::new(AccountDetailCode::Internal, "store 服务未装配"))?;
     let mut since = store
         .max_numeric_uid(&spec.account)
-        .map_err(|error| format!("游标查询失败: {error}"))?
+        .map_err(store_stage("游标查询失败"))?
         .unwrap_or(0);
 
-    receive.set_state(ctx, AccountStateKind::Online, "");
+    receive.set_state(ctx, AccountStateKind::Online);
     receive.set_online(true);
 
     let deadline = std::time::Instant::now() + PROVIDER_DRAIN_BUDGET;
@@ -2384,7 +2613,7 @@ async fn provider_drain(
                     max: PROVIDER_RECEIVE_BATCH_MAX,
                 })
                 .expect("transport receive DTO is serializable"),
-                crate::provider::receive_call_budget(),
+                provider_call_budget(),
             )
             .await
             .map_err(provider_call_detail)?;
@@ -2415,33 +2644,45 @@ async fn provider_drain(
 }
 
 /// 反向调用失败 → 循环可展示的 detail（不含插件消息体内容）。
-fn provider_call_detail(error: crate::provider::ProviderCallError) -> String {
+///
+/// `Unavailable` 的说明是 provider 模块自己写的（连接已关闭、端点已失效），不是插件原文，
+/// 不作为 `server_detail` 透出；`Upstream` 的消息来自插件，脱敏后透出。
+fn provider_call_detail(error: crate::provider::ProviderCallError) -> ReceiveError {
     match error {
-        crate::provider::ProviderCallError::Unavailable(detail) => format!("provider 不可用: {detail}"),
-        crate::provider::ProviderCallError::Timeout => "provider 响应超时".into(),
-        crate::provider::ProviderCallError::Upstream { code, message } => {
-            format!(
-                "provider 上报失败({code}): {}",
-                crate::probe::sanitize_detail(&message)
-            )
+        crate::provider::ProviderCallError::Unavailable(detail) => ReceiveError::new(
+            AccountDetailCode::ProviderUnavailable,
+            format!("provider 不可用: {detail}"),
+        ),
+        crate::provider::ProviderCallError::Timeout => {
+            ReceiveError::new(AccountDetailCode::ProviderTimeout, "provider 响应超时")
         }
+        crate::provider::ProviderCallError::Upstream { code, message } => ReceiveError::with_detail(
+            AccountDetailCode::ProviderFailed,
+            format!("provider 上报失败({code})"),
+            crate::probe::sanitize_detail(&message),
+        ),
     }
 }
 
 /// 校验并转换 transport/receive 应答。uid 必须是不超过 20 位十进制数字；
 /// 字段长度沿用协议上限；account 由内核覆盖（不信任载荷中的同名键）。
-fn parse_provider_messages(account: &str, value: &serde_json::Value) -> Result<Vec<MailMessage>, String> {
+fn parse_provider_messages(
+    account: &str,
+    value: &serde_json::Value,
+) -> Result<Vec<MailMessage>, ReceiveError> {
+    let invalid =
+        |message: &str| ReceiveError::new(AccountDetailCode::ProviderResponseInvalid, message);
     let response: TransportReceiveResponse = serde_json::from_value(value.clone())
-        .map_err(|_| "provider receive 应答结构无效".to_string())?;
+        .map_err(|_| invalid("provider receive 应答结构无效"))?;
     let now = now_unix();
     let mut out = Vec::with_capacity(response.messages.len());
     for item in response.messages {
         let uid = item.uid;
         if uid.is_empty() || uid.len() > 20 || !uid.bytes().all(|byte| byte.is_ascii_digit()) {
-            return Err("provider 返回非法 uid（必须是十进制数字）".into());
+            return Err(invalid("provider 返回非法 uid（必须是十进制数字）"));
         }
         if item.received_at > mime::LATEST_PLAUSIBLE_DATE_SECS {
-            return Err("provider 返回非法 received_at".into());
+            return Err(invalid("provider 返回非法 received_at"));
         }
         let received_at = if item.received_at >= mime::EARLIEST_PLAUSIBLE_DATE_SECS {
             mime::sanitize_arrival_secs(item.received_at, now)
@@ -2454,7 +2695,7 @@ fn parse_provider_messages(account: &str, value: &serde_json::Value) -> Result<V
         let subject = sanitize_detail_owned(&item.subject);
         let mut body = item.body;
         if body.len() > maild_client::MAX_BODY_BYTES {
-            return Err("provider 消息正文超过协议上限".into());
+            return Err(invalid("provider 消息正文超过协议上限"));
         }
         mime::truncate_utf8_bytes(&mut body, mime::MAX_STORED_TEXT_BYTES);
         // ADR-0025：provider 合同新增的可选头部键，缺省保持既有行为。
@@ -2557,7 +2798,7 @@ mod tests {
                 "received_at": 1_795_000_000_000_u64
             }]
         });
-        let err = parse_provider_messages("acc", &bad).unwrap_err();
+        let err = parse_provider_messages("acc", &bad).unwrap_err().to_string();
         assert!(err.contains("received_at"), "{err}");
 
         let now = now_unix();
@@ -2572,5 +2813,473 @@ mod tests {
         });
         let parsed = parse_provider_messages("acc", &future).unwrap();
         assert!(parsed[0].received_at <= now.saturating_add(60));
+    }
+
+    // —— ADR-0048 L6：每个 detail code 至少一条真实触发路径，整句与改造前逐字节一致 ——
+
+    use tokio::io::AsyncBufReadExt;
+
+    /// 本线程临时缩短分阶段超时；guard 释放时恢复。`#[tokio::test]` 是 current_thread，
+    /// 被测 future 与它 spawn 的任务都跑在测试线程上。
+    struct ShortTimeouts;
+
+    impl ShortTimeouts {
+        fn apply(patch: impl FnOnce(&mut StageTimeouts)) -> ShortTimeouts {
+            let mut timeouts = STAGE_TIMEOUTS;
+            patch(&mut timeouts);
+            TEST_STAGE_TIMEOUTS.with(|cell| cell.set(Some(timeouts)));
+            ShortTimeouts
+        }
+    }
+
+    impl Drop for ShortTimeouts {
+        fn drop(&mut self) {
+            TEST_STAGE_TIMEOUTS.with(|cell| cell.set(None));
+        }
+    }
+
+    const SHORT: Duration = Duration::from_millis(200);
+
+    /// 单连接脚本化 IMAP 服务器：先写 `greeting`，之后每读到一行命令就写回
+    /// `reply(tag, 命令名)`；`None` 表示不应答（模拟半开连接）。连接保持到客户端挂断。
+    async fn scripted_server(greeting: &'static str, reply: fn(&str, &str) -> Option<String>) -> u16 {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let Ok((stream, _)) = listener.accept().await else { return };
+            let (read, mut write) = stream.into_split();
+            if write.write_all(greeting.as_bytes()).await.is_err() {
+                return;
+            }
+            let mut lines = tokio::io::BufReader::new(read).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                let mut parts = line.splitn(3, ' ');
+                let tag = parts.next().unwrap_or_default().to_string();
+                let command = parts.next().unwrap_or_default().to_ascii_uppercase();
+                if let Some(text) = reply(&tag, &command) {
+                    if write.write_all(text.as_bytes()).await.is_err() {
+                        return;
+                    }
+                }
+            }
+        });
+        port
+    }
+
+    /// 接受连接后一言不发、只读不写（TLS 握手卡住）。
+    async fn silent_server() -> u16 {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let Ok((mut stream, _)) = listener.accept().await else { return };
+            let mut sink = [0u8; 512];
+            while matches!(stream.read(&mut sink).await, Ok(n) if n > 0) {}
+        });
+        port
+    }
+
+    /// 能走到 IDLE 的应答：CAPABILITY、SELECT 正常，其余交给 `rest`。
+    fn session_reply(tag: &str, command: &str) -> Option<String> {
+        match command {
+            "LOGIN" => Some(format!("{tag} OK LOGIN completed\r\n")),
+            "CAPABILITY" => Some(format!("* CAPABILITY IMAP4rev1 IDLE\r\n{tag} OK done\r\n")),
+            "SELECT" => Some(format!(
+                "* 0 EXISTS\r\n* OK [UIDVALIDITY 7] ok\r\n* OK [UIDNEXT 1] ok\r\n{tag} OK [READ-WRITE] done\r\n"
+            )),
+            "LOGOUT" => Some(format!("* BYE\r\n{tag} OK bye\r\n")),
+            _ => None,
+        }
+    }
+
+    fn config(port: u16, tls: &str) -> ReceiveConfig {
+        ReceiveConfig {
+            account: "acc".into(),
+            server: "127.0.0.1".into(),
+            port,
+            username: "dev".into(),
+            password: "dev".into(),
+            tls: tls.into(),
+            reconnect_secs: 3600,
+            ..ReceiveConfig::default()
+        }
+    }
+
+    async fn serve_once(cfg: &ReceiveConfig, secret: &[u8]) -> ReceiveError {
+        let ctx = Context::new();
+        let receive = Receive::new(&cfg.account);
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(10),
+            serve(cfg, &ctx, &receive, None, SecretBuffer::new(secret.to_vec())),
+        )
+        .await
+        .expect("serve 必须在时限内失败");
+        outcome.expect_err("serve 应失败")
+    }
+
+    fn assert_fixed(error: &ReceiveError, code: AccountDetailCode, sentence: &str) {
+        assert_eq!(error.code(), code, "{error}");
+        assert_eq!(error.to_string(), sentence);
+        assert_eq!(error.server_detail(), "", "我们自己写的整句不透出原文: {error}");
+    }
+
+    /// 整句 = `前缀: 原文`，`server_detail` 就是原文。
+    fn assert_prefixed(error: &ReceiveError, code: AccountDetailCode, prefix: &str) {
+        assert_eq!(error.code(), code, "{error}");
+        assert!(!error.server_detail().is_empty(), "{error}");
+        assert_eq!(error.to_string(), format!("{prefix}: {}", error.server_detail()));
+    }
+
+    #[test]
+    fn detail_codes_serialize_as_their_stable_names() {
+        let mut seen = std::collections::BTreeSet::new();
+        for code in AccountDetailCode::ALL {
+            assert_eq!(serde_json::to_value(code).unwrap(), code.as_str());
+            assert!(seen.insert(code.as_str()), "重复的 code {}", code.as_str());
+        }
+        let info = AccountStateInfo {
+            detail: "IMAP 登录失败: no response: bad".into(),
+            detail_code: Some(AccountDetailCode::LoginFailed),
+            server_detail: "no response: bad".into(),
+            ..AccountStateInfo::plain("acc", AccountStateKind::Offline)
+        };
+        assert_eq!(
+            serde_json::to_value(&info).unwrap(),
+            serde_json::json!({
+                "account": "acc",
+                "state": "offline",
+                "detail": "IMAP 登录失败: no response: bad",
+                "detail_code": "login_failed",
+                "server_detail": "no response: bad",
+            })
+        );
+        // 在线状态不带这两个键，老客户端看到的帧与以前相同。
+        assert_eq!(
+            serde_json::to_value(AccountStateInfo::plain("acc", AccountStateKind::Online)).unwrap(),
+            serde_json::json!({"account": "acc", "state": "online", "detail": ""})
+        );
+    }
+
+    #[test]
+    fn server_detail_is_sanitized_but_the_sentence_is_not() {
+        let raw = format!("line\r\nbreak {}", "x".repeat(400));
+        let error = ReceiveError::with_detail(AccountDetailCode::SyncFailed, "LIST 失败", &raw);
+        assert_eq!(error.to_string(), format!("LIST 失败: {raw}"), "整句逐字节保留");
+        assert!(error.server_detail().len() <= 160);
+        assert!(!error.server_detail().contains('\n'));
+    }
+
+    #[tokio::test]
+    async fn connect_failed_reaches_the_account_state_with_code_and_os_text() {
+        // 先占一个端口再关掉：连接被拒绝。
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        let cfg = config(port, "none");
+        let ctx = Context::new();
+        let receive = Receive::new(&cfg.account);
+        let task = tokio::spawn(run_loop(cfg, ctx, receive.clone(), None, None));
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        while receive.state().state != AccountStateKind::Offline {
+            assert!(tokio::time::Instant::now() < deadline, "应进入离线");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let state = receive.state();
+        receive.shutdown();
+        task.await.unwrap();
+        assert_eq!(state.detail_code, Some(AccountDetailCode::ConnectFailed));
+        assert!(!state.server_detail.is_empty());
+        assert_eq!(
+            state.detail,
+            format!("连接 127.0.0.1:{port} 失败: {}", state.server_detail),
+            "detail 整句与改造前相同"
+        );
+    }
+
+    #[tokio::test]
+    async fn connect_timeout_when_the_connect_budget_is_spent() {
+        let _short = ShortTimeouts::apply(|t| t.connect_total = Duration::ZERO);
+        let error = connect_client(&config(1, "none")).await.err().unwrap();
+        assert_fixed(&error, AccountDetailCode::ConnectTimeout, "连接 127.0.0.1:1 失败: 连接超时");
+    }
+
+    #[tokio::test]
+    async fn tls_failed_when_the_server_does_not_speak_tls() {
+        let port = scripted_server("* OK plain text, not TLS\r\n", |_, _| None).await;
+        let error = connect_client(&config(port, "implicit")).await.err().unwrap();
+        assert_prefixed(&error, AccountDetailCode::TlsFailed, "TLS 握手失败");
+    }
+
+    #[tokio::test]
+    async fn tls_timeout_when_the_handshake_hangs() {
+        let _short = ShortTimeouts::apply(|t| t.handshake = SHORT);
+        let port = silent_server().await;
+        let error = connect_client(&config(port, "implicit")).await.err().unwrap();
+        assert_fixed(&error, AccountDetailCode::TlsTimeout, "TLS / STARTTLS 握手超时");
+    }
+
+    #[tokio::test]
+    async fn greeting_invalid_and_starttls_unsupported_carry_the_server_line() {
+        let port = scripted_server("* BYE go away\r\n", |_, _| None).await;
+        let error = connect_client(&config(port, "starttls")).await.err().unwrap();
+        assert_prefixed(&error, AccountDetailCode::GreetingInvalid, "IMAP greeting 异常");
+        assert_eq!(error.server_detail(), "* BYE go away");
+
+        let port = scripted_server("* OK ready\r\n", |tag, _| Some(format!("{tag} BAD no tls\r\n"))).await;
+        let error = connect_client(&config(port, "starttls")).await.err().unwrap();
+        assert_prefixed(&error, AccountDetailCode::StarttlsUnsupported, "服务器不支持 STARTTLS");
+        assert_eq!(error.server_detail(), "a0 BAD no tls");
+    }
+
+    /// 对端在 greeting 行尾前关闭：`read_line_exact` 自己写的中文不作为原文透出。
+    #[tokio::test]
+    async fn greeting_cut_off_hides_our_own_eof_text() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            if let Ok((mut stream, _)) = listener.accept().await {
+                let _ = stream.write_all(b"* OK").await;
+            }
+        });
+        let error = connect_client(&config(port, "starttls")).await.err().unwrap();
+        assert_fixed(
+            &error,
+            AccountDetailCode::GreetingInvalid,
+            "读 greeting 失败: 连接在行尾前关闭",
+        );
+    }
+
+    #[tokio::test]
+    async fn login_failed_carries_the_server_response() {
+        let port = scripted_server("* OK ready\r\n", |tag, command| match command {
+            "LOGIN" => Some(format!("{tag} NO [AUTHENTICATIONFAILED] bad credentials\r\n")),
+            _ => None,
+        })
+        .await;
+        let error = serve_once(&config(port, "none"), b"wrong").await;
+        assert_prefixed(&error, AccountDetailCode::LoginFailed, "IMAP 登录失败");
+        assert!(error.server_detail().contains("bad credentials"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn login_timeout_when_login_is_never_answered() {
+        let _short = ShortTimeouts::apply(|t| t.login = SHORT);
+        let port = scripted_server("* OK ready\r\n", |_, _| None).await;
+        let error = serve_once(&config(port, "none"), b"dev").await;
+        assert_fixed(&error, AccountDetailCode::LoginTimeout, "IMAP 登录超时");
+    }
+
+    #[tokio::test]
+    async fn credential_invalid_when_the_secret_is_not_utf8() {
+        let port = scripted_server("* OK ready\r\n", |_, _| None).await;
+        let error = serve_once(&config(port, "none"), &[0xff, 0xfe]).await;
+        assert_fixed(&error, AccountDetailCode::CredentialInvalid, "账户密码不是有效的 UTF-8 文本");
+    }
+
+    #[tokio::test]
+    async fn credential_unavailable_reaches_the_account_state_without_our_text() {
+        let cfg = config(1, "none");
+        let ctx = Context::new();
+        let receive = Receive::new(&cfg.account);
+        let fetcher: SecretFetcher = Arc::new(|| {
+            Err(ReceiveError::new(
+                AccountDetailCode::CredentialUnavailable,
+                "凭据读取失败: 钥匙串已锁定",
+            ))
+        });
+        let task = tokio::spawn(run_loop(cfg, ctx, receive.clone(), None, Some(fetcher)));
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        while receive.state().state != AccountStateKind::Offline {
+            assert!(tokio::time::Instant::now() < deadline, "应进入离线");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let state = receive.state();
+        receive.shutdown();
+        task.await.unwrap();
+        assert_eq!(state.detail, "凭据读取失败: 钥匙串已锁定");
+        assert_eq!(state.detail_code, Some(AccountDetailCode::CredentialUnavailable));
+        assert_eq!(state.server_detail, "");
+    }
+
+    #[tokio::test]
+    async fn sync_failed_when_the_primary_folder_cannot_be_selected() {
+        let port = scripted_server("* OK ready\r\n", |tag, command| match command {
+            "SELECT" => Some(format!("{tag} NO no such mailbox\r\n")),
+            _ => session_reply(tag, command),
+        })
+        .await;
+        let error = serve_once(&config(port, "none"), b"dev").await;
+        assert_prefixed(&error, AccountDetailCode::SyncFailed, "SELECT INBOX 失败");
+        assert!(error.server_detail().contains("no such mailbox"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn idle_failed_when_the_server_refuses_idle() {
+        let port = scripted_server("* OK ready\r\n", |tag, command| match command {
+            "IDLE" => Some(format!("{tag} BAD idle refused\r\n")),
+            _ => session_reply(tag, command),
+        })
+        .await;
+        let error = serve_once(&config(port, "none"), b"dev").await;
+        assert_prefixed(&error, AccountDetailCode::IdleFailed, "IDLE 失败");
+        assert!(error.server_detail().contains("idle refused"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn idle_timeout_when_idle_is_never_acknowledged() {
+        let _short = ShortTimeouts::apply(|t| t.idle_init = SHORT);
+        let port = scripted_server("* OK ready\r\n", session_reply).await;
+        let error = serve_once(&config(port, "none"), b"dev").await;
+        assert_fixed(&error, AccountDetailCode::IdleTimeout, "IDLE 启动超时");
+    }
+
+    #[tokio::test]
+    async fn poll_failed_without_a_scheduler() {
+        let port = scripted_server("* OK ready\r\n", session_reply).await;
+        let cfg = ReceiveConfig {
+            idle: false,
+            ..config(port, "none")
+        };
+        let error = serve_once(&cfg, b"dev").await;
+        assert_fixed(&error, AccountDetailCode::PollFailed, "轮询 receive 缺少 scheduler 服务");
+    }
+
+    // —— 委托收信 ——
+
+    fn provider_spec() -> ProviderReceiveSpec {
+        ProviderReceiveSpec {
+            account: "acc".into(),
+            address: "acc@example.test".into(),
+            provider_id: "org.example.provider".into(),
+            poll_secs: 60,
+        }
+    }
+
+    /// 装配好 store 与注册表，注册一个端点；返回端点与它的出站帧接收端。
+    fn provider_context() -> (
+        Context,
+        Arc<crate::provider::ProviderEndpoint>,
+        mpsc::Receiver<String>,
+    ) {
+        let ctx = Context::new();
+        ctx.provide::<Store>(Arc::new(Store::open("").unwrap()));
+        let registry = crate::provider::ProviderRegistry::new();
+        let (output, frames) = mpsc::channel(8);
+        let endpoint = Arc::new(crate::provider::ProviderEndpoint::new(
+            "org.example.provider".into(),
+            output,
+            crate::provider::SessionCallState::new(),
+        ));
+        registry.register(Arc::clone(&endpoint));
+        ctx.provide::<crate::provider::ProviderRegistry>(registry);
+        (ctx, endpoint, frames)
+    }
+
+    /// 回答下一帧反向调用。
+    fn answer_next(
+        endpoint: Arc<crate::provider::ProviderEndpoint>,
+        mut frames: mpsc::Receiver<String>,
+        reply: crate::provider::ProviderReply,
+    ) {
+        tokio::spawn(async move {
+            let frame = frames.recv().await.expect("反向调用帧");
+            let value: serde_json::Value = serde_json::from_str(&frame).unwrap();
+            let id = value["id"].to_string();
+            assert!(endpoint.calls().route(id.trim_matches('"'), reply));
+            // 保持接收端存活，后续帧不至于变成「连接已关闭」。
+            while frames.recv().await.is_some() {}
+        });
+    }
+
+    async fn drain_once(ctx: &Context) -> ReceiveError {
+        let receive = Receive::new("acc");
+        tokio::time::timeout(Duration::from_secs(10), provider_drain(&provider_spec(), ctx, &receive))
+            .await
+            .expect("provider_drain 必须在时限内返回")
+            .expect_err("provider_drain 应失败")
+    }
+
+    #[tokio::test]
+    async fn internal_and_provider_unavailable_for_missing_registry_or_endpoint() {
+        let error = drain_once(&Context::new()).await;
+        assert_fixed(&error, AccountDetailCode::Internal, "provider 注册表未装配");
+
+        let ctx = Context::new();
+        ctx.provide::<crate::provider::ProviderRegistry>(crate::provider::ProviderRegistry::new());
+        let error = drain_once(&ctx).await;
+        assert_fixed(
+            &error,
+            AccountDetailCode::ProviderUnavailable,
+            "provider org.example.provider 未注册",
+        );
+
+        // 端点的连接已断：provider 模块自己写的说明不透出。
+        let (ctx, _endpoint, frames) = provider_context();
+        drop(frames);
+        let error = drain_once(&ctx).await;
+        assert_fixed(
+            &error,
+            AccountDetailCode::ProviderUnavailable,
+            "provider 不可用: provider 连接已关闭",
+        );
+    }
+
+    #[tokio::test]
+    async fn provider_timeout_when_the_plugin_never_answers() {
+        let _short = ShortTimeouts::apply(|t| t.provider_call = Some(SHORT));
+        let (ctx, _endpoint, _frames) = provider_context();
+        let error = drain_once(&ctx).await;
+        assert_fixed(&error, AccountDetailCode::ProviderTimeout, "provider 响应超时");
+    }
+
+    #[tokio::test]
+    async fn provider_failed_carries_the_sanitized_plugin_message() {
+        let (ctx, endpoint, frames) = provider_context();
+        answer_next(
+            endpoint,
+            frames,
+            crate::provider::ProviderReply::Err {
+                code: -32020,
+                message: "mailbox\nlocked".into(),
+            },
+        );
+        let error = drain_once(&ctx).await;
+        assert_eq!(error.code(), AccountDetailCode::ProviderFailed);
+        assert_eq!(error.to_string(), "provider 上报失败(-32020): mailboxlocked");
+        assert_eq!(error.server_detail(), "mailboxlocked");
+    }
+
+    #[tokio::test]
+    async fn provider_response_invalid_for_a_malformed_batch() {
+        let (ctx, endpoint, frames) = provider_context();
+        answer_next(
+            endpoint,
+            frames,
+            crate::provider::ProviderReply::Ok(serde_json::json!({"messages": [{"uid": "x1"}]})),
+        );
+        let error = drain_once(&ctx).await;
+        assert_fixed(
+            &error,
+            AccountDetailCode::ProviderResponseInvalid,
+            "provider receive 应答结构无效",
+        );
+    }
+
+    #[test]
+    fn op_failure_texts_split_into_prefix_and_server_text() {
+        assert_eq!(
+            op_failure_server_text("INBOX", "APPEND 失败: no response: quota"),
+            Some("no response: quota")
+        );
+        assert_eq!(
+            op_failure_server_text("Work/Old", "SELECT Work/Old 失败: no response: gone"),
+            Some("no response: gone")
+        );
+        assert_eq!(
+            op_failure_server_text("INBOX", "已复制并标记删除，EXPUNGE 失败: connection lost"),
+            Some("connection lost")
+        );
+        for ours in ["用户放弃", "flag 载荷无法解析", "文件夹记录已丢失", "SELECT Other 失败: x"] {
+            assert_eq!(op_failure_server_text("INBOX", ours), None, "{ours}");
+        }
     }
 }

@@ -267,8 +267,11 @@ pub(crate) fn management_error(error: maild_client::ClientError) -> UiError {
         message: message.into(),
     }
 }
+/// 账户页只拿成文所需的部分：daemon 拼的中文整句 `detail` 照旧不过桥；离线原因的稳定 code 与
+/// 服务器原文（ADR-0048 L6）过桥，原文同探测诊断一样再去控制字符、限长。
 fn profile(mut p: AccountProfileView) -> AccountProfileView {
     p.runtime.detail.clear();
+    p.runtime.server_detail = safe_probe_detail(&p.runtime.server_detail);
     p
 }
 
@@ -554,6 +557,27 @@ mod tests {
         let bounded = safe_probe_detail(&long);
         assert!(bounded.len() <= MAX_PROBE_DETAIL_BYTES);
         assert!(bounded.chars().all(|ch| ch == '长'));
+    }
+
+    /// ADR-0048 L6：账户页拿到离线原因的 code 与有界的服务器原文；中文整句仍不过桥。
+    #[test]
+    fn profile_projection_keeps_the_detail_code_and_bounds_server_text() {
+        let view: AccountProfileView = serde_json::from_value(json!({
+            "id": "acct_abcdefghijklmnopqrstuvwxyz23", "revision": 1, "display_name": "Main",
+            "address": "u@example.test", "enabled": true, "source": "managed", "editable": true,
+            "incoming": {"kind": "imap", "server": "imap.example.test", "port": 993,
+                "security": "implicit", "username": "u", "mailbox": "INBOX", "idle": true,
+                "poll_secs": 60},
+            "credentials": {"incoming": "saved"},
+            "runtime": {"state": "error", "detail": "IMAP 登录失败: no\r\nresponse",
+                "detail_code": "login_failed", "server_detail": format!("no\r\nresponse{}", "x".repeat(400))}
+        }))
+        .unwrap();
+        let projected = profile(view);
+        assert_eq!(projected.runtime.detail, "");
+        assert_eq!(projected.runtime.detail_code.as_deref(), Some("login_failed"));
+        assert!(projected.runtime.server_detail.starts_with("noresponse"));
+        assert!(projected.runtime.server_detail.len() <= MAX_PROBE_DETAIL_BYTES);
     }
 
     /// 新后台：缺省值在内核侧不序列化，桥据 `persisted` 键补成明确值，界面才知道该显示开关。

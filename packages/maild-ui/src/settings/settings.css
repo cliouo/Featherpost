@@ -194,6 +194,11 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+/* 账户离线原因（ADR-0048 L6）：按 code 成文的一句，服务器原文在它下面。 */
+.account-alert .account-reason {
+  display: block;
+  margin-top: 4px;
+}
 /* 添加账户向导 */
 .provider-pills {
   display: flex;

@@ -1,7 +1,7 @@
 import { m } from "@featherpost/i18n/messages";
 import { useEffect, useState } from "react";
 
-import { folderLabel, uiLocale, useUiLocale } from "../i18n";
+import { accountReasonLine, folderLabel, uiLocale, useUiLocale } from "../i18n";
 import type { UiAccount, UiFolder } from "../bridge/types";
 import { Icon } from "../app/Icon";
 import { useStore } from "../host/hooks";
@@ -167,7 +167,7 @@ export function FolderNav({
             </button>
             {issue && (
               <div className="account-issue" role="status">
-                <span className="nav-text" title={account.detail || issue}>
+                <span className="nav-text" title={accountReasonLine(account) ?? issue}>
                   {issue}
                 </span>
                 {onRepair && (

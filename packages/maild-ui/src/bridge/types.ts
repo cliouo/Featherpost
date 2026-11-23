@@ -17,6 +17,10 @@ export interface UiAccount {
   account: string;
   state: string;
   detail: string;
+  /** 离线原因的稳定 code（ADR-0048 L6）；老壳或老后台没有。按 `accountReason` 成文。 */
+  detail_code?: string | null;
+  /** 服务器或系统原文（不含后台写的前缀），作为次要信息原样显示。 */
+  server_detail?: string;
 }
 
 export interface UiSnapshot {

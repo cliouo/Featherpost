@@ -2570,19 +2570,26 @@ fn pending_op_summary_json(op: &crate::pending::PendingOp, subject: Option<&str>
     value.as_object_mut().unwrap().remove("payload");
     value["subject"] = json!(subject);
     // ADR-0048 决策 3：摘要的 `detail` 是内核拼的固定句子，另给稳定 `detail_code` 让前端按界面
-    // 语言成文；`detail` 照旧保留，老前端不受影响。服务器原文只在非摘要形态里作为数据出现。
+    // 语言成文；`detail` 照旧保留，老前端不受影响。
+    // L6：服务器命令失败（`APPEND 失败: …` 等）另给 `server_rejected` 与去掉前缀的服务器原文
+    // `server_detail`（有界脱敏，作为数据展示）；其他失败仍是 `rejected`。
+    let server_text = crate::receive::op_failure_server_text(&op.folder, &op.detail);
+    const REJECTED: &str = "服务器明确拒绝或重试次数已达上限，请核对账户与目标文件夹。";
     let (detail, code) = match op.state {
         OpState::Failed if op.detail == "用户放弃" => ("用户放弃", Some("discarded")),
-        OpState::Failed => (
-            "服务器明确拒绝或重试次数已达上限，请核对账户与目标文件夹。",
-            Some("rejected"),
-        ),
+        OpState::Failed if server_text.is_some() => (REJECTED, Some("server_rejected")),
+        OpState::Failed => (REJECTED, Some("rejected")),
         OpState::Unknown => ("未收到最终回执，请先核对目标文件夹。", Some("unconfirmed")),
         _ => ("", None),
     };
     value["detail"] = json!(detail);
     if let Some(code) = code {
         value["detail_code"] = json!(code);
+        if let Some(text) = server_text.map(crate::probe::sanitize_detail) {
+            if !text.is_empty() {
+                value["server_detail"] = json!(text);
+            }
+        }
     }
     if op.kind != crate::pending::OpKind::Append {
         if let Ok(payload) = serde_json::from_str::<Value>(&op.payload) {
@@ -4333,6 +4340,7 @@ fn mail_notification(mut msg: MailMessage) -> String {
 fn account_notification(mut info: AccountStateInfo) -> String {
     truncate_utf8(&mut info.account, MAX_PUSH_TEXT_BYTES);
     truncate_utf8(&mut info.detail, MAX_PUSH_TEXT_BYTES);
+    truncate_utf8(&mut info.server_detail, MAX_PUSH_TEXT_BYTES);
     notification(
         "account/state",
         serde_json::to_value(info).unwrap_or(Value::Null),
@@ -5343,8 +5351,32 @@ mod tests {
             let summary = pending_op_summary_json(&op(state, detail), None);
             assert_eq!(summary.get("detail_code").and_then(Value::as_str), code, "{summary}");
             assert!(!summary["detail"].as_str().unwrap().contains("TRYCREATE"));
+            assert!(summary.get("server_detail").is_none(), "{summary}");
         }
         assert!(pending_op_json(&op(OpState::Failed, "x")).get("detail_code").is_none());
+
+        // ADR-0048 L6：收信循环写下的服务器命令失败给 `server_rejected` 与去掉前缀的原文；
+        // `detail` 仍是老前端看到的固定句子。
+        for (state, detail, code, server) in [
+            (OpState::Failed, "APPEND 失败: No Response: [TRYCREATE] gone", "server_rejected", "No Response: [TRYCREATE] gone"),
+            (OpState::Failed, "STORE 失败: Bad Response: bad flag", "server_rejected", "Bad Response: bad flag"),
+            (OpState::Failed, "MOVE 失败: No Response: quota", "server_rejected", "No Response: quota"),
+            (OpState::Failed, "COPY 失败: No Response: quota", "server_rejected", "No Response: quota"),
+            (OpState::Failed, "SELECT INBOX 失败: No Response: missing", "server_rejected", "No Response: missing"),
+            (OpState::Unknown, "COPY 已成功但标记删除失败: connection lost", "unconfirmed", "connection lost"),
+        ] {
+            let summary = pending_op_summary_json(&op(state, detail), None);
+            assert_eq!(summary["detail_code"], code, "{summary}");
+            assert_eq!(summary["server_detail"], server, "{summary}");
+            assert!(!summary["detail"].as_str().unwrap().contains(server), "{summary}");
+        }
+        // 文件夹名不同的 SELECT 前缀不是这个 op 的服务器失败。
+        let other = pending_op_summary_json(&op(OpState::Failed, "SELECT Other 失败: x"), None);
+        assert_eq!(other["detail_code"], "rejected");
+        assert_eq!(
+            pending_op_summary_json(&op(OpState::Failed, "APPEND 失败: No"), None)["detail"],
+            "服务器明确拒绝或重试次数已达上限，请核对账户与目标文件夹。"
+        );
     }
 
     #[test]
@@ -7583,11 +7615,10 @@ mod tests {
         tokio::task::yield_now().await;
 
         ctx.emit::<FrontendIntentQueued>(maild_brand::BUNDLED_FRONTEND_ID.into());
-        ctx.emit::<AccountState>(AccountStateInfo {
-            account: "marker".into(),
-            state: crate::events::AccountStateKind::Online,
-            detail: String::new(),
-        });
+        ctx.emit::<AccountState>(AccountStateInfo::plain(
+            "marker",
+            crate::events::AccountStateKind::Online,
+        ));
         let mut lines = BufReader::new(client).lines();
         let first = tokio::time::timeout(Duration::from_secs(1), lines.next_line())
             .await

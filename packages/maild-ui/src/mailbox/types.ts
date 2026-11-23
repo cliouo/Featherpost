@@ -43,8 +43,10 @@ export interface Operation extends MessageIdentity {
   created_at: number;
   updated_at: number;
   detail: string;
-  /** ADR-0048 决策 3：内核固定说明的稳定 code（`discarded` / `rejected` / `unconfirmed`）；老后台没有，回落 `detail`。 */
+  /** ADR-0048 决策 3：内核固定说明的稳定 code（`discarded` / `rejected` / `server_rejected` / `unconfirmed`）；老后台没有，回落 `detail`。 */
   detail_code?: string;
+  /** ADR-0048 L6：`server_rejected` 时服务器给的原文（后台已有界脱敏），作为数据显示。 */
+  server_detail?: string;
   needs_decision: boolean;
   target: string | null;
   flag: string | null;

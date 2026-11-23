@@ -15,6 +15,7 @@ import {
   type ProviderPreset,
 } from "./providers";
 import { BRAND } from "../brand";
+import { AccountReason } from "./AccountReason";
 import { packageText, providerName, useUiLocale } from "../i18n";
 
 export function Field({
@@ -721,7 +722,7 @@ export function Accounts({ controller }: { controller: SettingsController }) {
                 {p.runtime.state === "needs_credentials"
                   ? m.settings_account_alert_credentials()
                   : m.settings_account_alert_error()}
-                {p.runtime.detail && <code>{p.runtime.detail}</code>}
+                <AccountReason source={p.runtime} />
               </p>
             )}
           </div>

@@ -239,12 +239,19 @@ pub struct LocalePreferenceChanged {
     pub effective: Vec<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
 pub struct AccountState {
     pub account: String,
     pub state: String,
     #[serde(default)]
     pub detail: String,
+    /// `detail` 的稳定 code（ADR-0048 L6，如 `login_failed`）；老 daemon 没有。客户端按它用界面
+    /// 语言成文，认不出的 code 显示通用文案加 `server_detail`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail_code: Option<String>,
+    /// 服务器或系统原文（不含 daemon 写的前缀），可空；作为数据原样展示。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub server_detail: String,
 }
 
 /// 附件元数据（ADR-0025）。字节不过协议帧——附件内容走独立取回路径（M4.5-04）。
@@ -3545,12 +3552,17 @@ pub struct CredentialsView {
     pub outgoing: Option<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
 pub struct RuntimeView {
     /// connecting | online | reconnecting | disabled | needs_credentials | error
     pub state: String,
     #[serde(default)]
     pub detail: String,
+    /// 与 [`AccountState::detail_code`] 同一套（ADR-0048 L6）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail_code: Option<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub server_detail: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
@@ -4667,8 +4679,28 @@ mod tests {
                 account: "personal".into(),
                 state: "online".into(),
                 detail: String::new(),
+                ..Default::default()
             })
         );
+
+        // ADR-0048 L6：离线原因带稳定 code 与服务器原文；老 daemon 没有这两个键（上例）。
+        let offline = Notification {
+            method: "account/state".into(),
+            params: json!({
+                "account": "personal",
+                "state": "offline",
+                "detail": "IMAP 登录失败: no response: bad",
+                "detail_code": "login_failed",
+                "server_detail": "no response: bad"
+            }),
+        };
+        let ServerNotification::AccountState(offline) = offline.into_server_notification().unwrap()
+        else {
+            panic!("account/state 应解成类型化事件");
+        };
+        assert_eq!(offline.detail_code.as_deref(), Some("login_failed"));
+        assert_eq!(offline.server_detail, "no response: bad");
+        assert_eq!(offline.detail, "IMAP 登录失败: no response: bad");
 
         let intent = Notification {
             method: "frontend/intent".into(),

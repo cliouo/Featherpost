@@ -65,6 +65,65 @@ export function identityFailureText(snapshot: {
     : m.common_identity_failure_unknown();
 }
 
+/**
+ * 账户状态原因的稳定 code（ADR-0048 L6）→ 当前界面语言的文案。键与 `crates/maild/src/events.rs`
+ * 里 `AccountDetailCode::as_str` 一一对应，`test/statusTexts.test.ts` 核对两边没有遗漏。
+ */
+export const ACCOUNT_DETAIL_CODES: Readonly<Record<string, () => string>> = {
+  connect_failed: m.common_account_detail_connect_failed,
+  connect_timeout: m.common_account_detail_connect_timeout,
+  credential_invalid: m.common_account_detail_credential_invalid,
+  credential_unavailable: m.common_account_detail_credential_unavailable,
+  greeting_invalid: m.common_account_detail_greeting_invalid,
+  idle_failed: m.common_account_detail_idle_failed,
+  idle_timeout: m.common_account_detail_idle_timeout,
+  internal: m.common_account_detail_internal,
+  login_failed: m.common_account_detail_login_failed,
+  login_timeout: m.common_account_detail_login_timeout,
+  poll_failed: m.common_account_detail_poll_failed,
+  provider_failed: m.common_account_detail_provider_failed,
+  provider_response_invalid: m.common_account_detail_provider_response_invalid,
+  provider_timeout: m.common_account_detail_provider_timeout,
+  provider_unavailable: m.common_account_detail_provider_unavailable,
+  starttls_unsupported: m.common_account_detail_starttls_unsupported,
+  sync_failed: m.common_account_detail_sync_failed,
+  tls_failed: m.common_account_detail_tls_failed,
+  tls_timeout: m.common_account_detail_tls_timeout,
+};
+
+/** 带账户状态原因的对象：快照里的账户与账户页的 `runtime` 同形。 */
+export interface AccountReasonSource {
+  detail?: string | null;
+  detail_code?: string | null;
+  server_detail?: string | null;
+}
+
+/**
+ * 账户离线原因（ADR-0048 L6）：有 code 时按 code 用界面语言成文，服务器原文作为次要信息原样给出；
+ * 认不出的 code 给通用说明加原文；没有 code（老后台）时照旧用 `detail`。没有原因时为 `null`。
+ */
+export function accountReason(source: AccountReasonSource): { text: string; server: string | null } | null {
+  const server = source.server_detail?.trim() || null;
+  const code = source.detail_code;
+  if (code) {
+    const text = Object.prototype.hasOwnProperty.call(ACCOUNT_DETAIL_CODES, code)
+      ? ACCOUNT_DETAIL_CODES[code]()
+      : m.common_account_detail_unknown();
+    return { text, server };
+  }
+  const legacy = source.detail?.trim();
+  return legacy ? { text: legacy, server: null } : null;
+}
+
+/** 单行形式（悬停提示等）：原因后接服务器原文。 */
+export function accountReasonLine(source: AccountReasonSource): string | null {
+  const reason = accountReason(source);
+  if (!reason) return null;
+  return reason.server
+    ? m.common_account_detail_with_server({ reason: reason.text, detail: reason.server })
+    : reason.text;
+}
+
 /** 账户的收信插件名：在扩展清单里按 ID 找到就按界面语言成文，找不到就显示 ID。 */
 export function providerName(
   plugins: ReadonlyArray<LocalizablePackage & { id: string }> | undefined,

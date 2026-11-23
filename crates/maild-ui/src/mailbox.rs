@@ -52,9 +52,13 @@ pub struct UiOperation {
     pub created_at: u64,
     pub updated_at: u64,
     pub detail: String,
-    /// ADR-0048 决策 3：摘要 detail 的稳定 code（`discarded` / `rejected` / `unconfirmed`）；老 daemon 没有。
+    /// ADR-0048 决策 3：摘要 detail 的稳定 code（`discarded` / `rejected` / `server_rejected` /
+    /// `unconfirmed`）；老 daemon 没有。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail_code: Option<String>,
+    /// ADR-0048 L6：服务器命令失败时服务器给的原文（daemon 已有界脱敏），作为数据显示。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_detail: Option<String>,
     pub needs_decision: bool,
     pub target: Option<String>,
     pub flag: Option<String>,

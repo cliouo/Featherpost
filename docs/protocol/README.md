@@ -151,10 +151,11 @@ M3.7 账户方法（ADR-0015 §9）的完整契约：
 
 - **profile 视图**只含非秘密字段：`{id, revision, display_name, address, enabled,
   archived_at?, source: managed|legacy, editable, incoming, outgoing?,
-  credentials: {incoming, outgoing?}, runtime: {state, detail}}`。`credentials.*`
+  credentials: {incoming, outgoing?}, runtime: {state, detail, detail_code?, server_detail?}}`。`credentials.*`
   取值 `saved | missing | unknown | shared | embedded`；`runtime.state` 取值
   `connecting | online | reconnecting | disabled | needs_credentials | error`。
   客户端必须把未知状态字符串按原文展示，不得让整个账户页解码失败。
+  `runtime.detail_code` / `runtime.server_detail` 与账户状态对象同义（见下节），只在有离线原因时出现。
 - **秘密只写不读**：`credentials` 形如 `{"incoming": "…", "outgoing": "…"}`，任何响应、
   通知与错误 `data` 都不回显。受管账户不允许明文（`security` 仅 `implicit|starttls`），
   也不存在自签开关；首版上限：64 个未归档账户、display name 128 字节、地址/用户名
@@ -183,6 +184,26 @@ M3.7 账户方法（ADR-0015 §9）的完整契约：
 
 `state` 当前可能为 `connecting`、`online`、`offline` 或 `reconnecting`。未装配
 accounts 或 store 时，`status` 分别返回空数组和 `message_count: 0`。
+
+离线原因（ADR-0048 L6，additive）：`state = offline` 时，`detail` 仍是收信循环拼的中文整句
+（日志同一句，老客户端照旧显示），另带两个可选键：
+
+```json
+{"account":"personal","state":"offline","detail":"IMAP 登录失败: no response: [AUTHENTICATIONFAILED] bad",
+ "detail_code":"login_failed","server_detail":"no response: [AUTHENTICATIONFAILED] bad"}
+```
+
+- `detail_code`：稳定 snake_case，客户端按它用界面语言成文，**不要**解析 `detail`。首批取值：
+  `credential_unavailable`（从凭据库取回秘密失败）、`credential_invalid`（秘密不是 UTF-8 文本）、
+  `connect_failed`、`connect_timeout`、`tls_failed`、`tls_timeout`、`starttls_unsupported`、
+  `greeting_invalid`、`login_failed`、`login_timeout`、`idle_failed`、`idle_timeout`、
+  `sync_failed`（LIST / SELECT / FETCH / 对账 / 游标 / 写队列命令在连接层失败）、`poll_failed`、
+  `provider_unavailable`、`provider_timeout`、`provider_failed`、`provider_response_invalid`，
+  兜底 `internal`。新增取值不算破坏性变更：认不出的 code 显示通用文案加 `server_detail`；没有
+  `detail_code`（老 daemon）时照旧显示 `detail`。
+- `server_detail`：服务器或系统的原文（去掉 daemon 写的前缀，去控制字符、≤160 字节），作为数据原样
+  展示、不翻译。原因全由 daemon 判断（超时、凭据库、本地库、装配缺失、provider 连接已断）时省略。
+- 在线、连接中与重连中不带这两个键。
 
 `status.runtime`（ADR-0041 决策 6，additive）：`rss_bytes`、`phys_footprint_bytes`（macOS
 Activity Monitor「内存」口径；其他平台 `null`）、`store_db_bytes`、`store_wal_bytes`、
@@ -621,8 +642,10 @@ ADR-0037 扩展列表参数：`limit` 1..200（默认 200），`before_id` 为�
 `summary_only:true` 返回安全摘要，额外要求 `messages_read`，与原有 `mailbox_write` 同时满足；
 缺任一项为 -32016。摘要无 payload，APPEND 原文在 SQL 查询中就被跳过；其他操作仅投影
 已知 target/flag/value，错误 detail 映射为受控文案（保留可信“用户放弃”标记），并附稳定的
-`detail_code`（`discarded` / `rejected` / `unconfirmed`，ADR-0048 决策 3）：前端按 code 用界面语言成文，
-`detail` 的中文只是兼容老前端的兜底。源消息存在时
+`detail_code`（`discarded` / `rejected` / `server_rejected` / `unconfirmed`，ADR-0048 决策 3）：前端按 code 用界面语言成文，
+`detail` 的中文只是兼容老前端的兜底。收信循环写下的服务器命令失败（`APPEND 失败: …`、`STORE 失败: …`、
+`SELECT <文件夹> 失败: …` 等）给 `server_rejected`，并在 `server_detail` 附去掉前缀的服务器原文（有界脱敏，
+作为数据展示）；`unconfirmed` 的说明里有服务器原文时同样附上（ADR-0048 L6）。源消息存在时
 另查最多 512 字符 subject，源消息消失或 APPEND 无源 UID 时为 null。这个通道不读取正文。
 省略 summary_only 保留原有原始队列接口及授权，供原有受信任客户端使用。
 
@@ -1070,7 +1093,7 @@ stdio、Unix socket 与 named pipe 连接可收到无 `id` 的服务端通知。
 | method | `params` |
 |---|---|
 | `message/received` | 消息对象（**不含** `body_html` 与 `attachments`） |
-| `account/state` | 账户状态对象 |
+| `account/state` | 账户状态对象（离线时可带 `detail_code` 与 `server_detail`，见 `status` / `listAccounts`） |
 | `frontend/intent` | `{"frontend":"<id>"}`——只投给主体**恰好**是 `frontend:<id>` 的已认证长连接（ADR-0045） |
 | `agent/stopping` | `{}`——只投给主体为 `frontend:*` 的已认证长连接；守护进程接受 `stopManagedAgent` 后、停机前发出（ADR-0046） |
 | `preferences/locale` | `{"effective":[...]}`——投给**所有**流式连接；`setLocalePreference` 成功且 `effective` 变化时发出（ADR-0048） |

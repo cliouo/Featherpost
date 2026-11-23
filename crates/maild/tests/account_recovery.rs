@@ -442,6 +442,15 @@ async fn revoked_password_keeps_profile_and_recovers_after_rotation() {
             if profile.runtime.state == "error"
                 && profile.runtime.detail.contains("登录失败")
             {
+                // ADR-0048 L6：同一原因带稳定 code，服务器原文不含我们写的中文前缀。
+                assert_eq!(profile.runtime.detail_code.as_deref(), Some("login_failed"));
+                assert!(!profile.runtime.server_detail.is_empty());
+                assert!(!profile.runtime.server_detail.contains("登录失败"));
+                assert_eq!(
+                    profile.runtime.detail,
+                    format!("IMAP 登录失败: {}", profile.runtime.server_detail),
+                    "detail 整句与改造前相同"
+                );
                 saw_auth_error = true;
                 break;
             }

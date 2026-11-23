@@ -1157,7 +1157,9 @@ fn notification_bytes(notification: &ServerNotification) -> usize {
         ServerNotification::AccountState(update) => OVERHEAD
             .saturating_add(update.account.len())
             .saturating_add(update.state.len())
-            .saturating_add(update.detail.len()),
+            .saturating_add(update.detail.len())
+            .saturating_add(update.detail_code.as_deref().map_or(0, str::len))
+            .saturating_add(update.server_detail.len()),
         ServerNotification::MessageReceived(message) => OVERHEAD
             .saturating_add(message.account.len())
             .saturating_add(message.uid.len())
@@ -1194,6 +1196,10 @@ fn validate_accounts(accounts: &[crate::AccountState]) -> Result<(), ClientError
         validate_text("账户名", &account.account, MAX_NOTIFICATION_TEXT_BYTES)?;
         validate_text("账户状态", &account.state, MAX_NOTIFICATION_TEXT_BYTES)?;
         validate_text("账户详情", &account.detail, MAX_NOTIFICATION_TEXT_BYTES)?;
+        if let Some(code) = &account.detail_code {
+            validate_text("账户详情 code", code, MAX_NOTIFICATION_TEXT_BYTES)?;
+        }
+        validate_text("账户服务器原文", &account.server_detail, MAX_NOTIFICATION_TEXT_BYTES)?;
     }
     Ok(())
 }
@@ -1247,6 +1253,14 @@ fn validate_notification(notification: &ServerNotification) -> Result<(), Client
             validate_text(
                 "account/state detail",
                 &update.detail,
+                MAX_NOTIFICATION_TEXT_BYTES,
+            )?;
+            if let Some(code) = &update.detail_code {
+                validate_text("account/state detail_code", code, MAX_NOTIFICATION_TEXT_BYTES)?;
+            }
+            validate_text(
+                "account/state server_detail",
+                &update.server_detail,
                 MAX_NOTIFICATION_TEXT_BYTES,
             )
         }
@@ -2044,6 +2058,7 @@ mod tests {
             account: "personal".into(),
             state: "online".into(),
             detail: String::new(),
+            ..Default::default()
         });
         state.total_messages = 4;
         for uid in ["1", "2", "3"] {
@@ -2121,6 +2136,7 @@ mod tests {
                 account: "unknown".into(),
                 state: "online".into(),
                 detail: String::new(),
+                ..Default::default()
             }),
             2,
             true,
@@ -2169,6 +2185,7 @@ mod tests {
                 account: format!("account-{index}"),
                 state: "online".into(),
                 detail: String::new(),
+                ..Default::default()
             }));
         }
         assert_eq!(snapshot.buffered.len(), MAX_BUFFERED_NOTIFICATIONS);

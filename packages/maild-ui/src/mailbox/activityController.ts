@@ -156,16 +156,21 @@ export function operationDiscarded(op: Operation): boolean {
   // i18n-lint-allow-cjk: 老后台写入 pending_ops.detail 的放弃标记（store.rs），是协议数据不是文案
   return op.detail === "用户放弃";
 }
-/** 内核固定说明按 code 用界面语言成文；没有 code（老后台）时原样显示 `detail`。 */
+/**
+ * 内核固定说明按 code 用界面语言成文；没有 code（老后台）时原样显示 `detail`。服务器命令失败
+ * （`server_rejected`，ADR-0048 L6）另附服务器原文，作为数据原样接在后面。
+ */
 const DETAIL_TEXTS: Record<string, () => string> = {
   rejected: m.mailbox_activity_detail_rejected,
+  server_rejected: m.mailbox_activity_detail_server_rejected,
   unconfirmed: m.mailbox_activity_detail_unconfirmed,
 };
 export function operationDetail(op: Operation): string {
   const code = op.detail_code;
-  return code !== undefined && Object.prototype.hasOwnProperty.call(DETAIL_TEXTS, code)
-    ? DETAIL_TEXTS[code]()
-    : op.detail;
+  if (code === undefined || !Object.prototype.hasOwnProperty.call(DETAIL_TEXTS, code)) return op.detail;
+  const detail = DETAIL_TEXTS[code]();
+  const server = op.server_detail?.trim();
+  return server ? m.mailbox_activity_detail_with_server({ detail, server }) : detail;
 }
 export function operationLabel(op: Operation) {
   if (op.kind === "move") return m.mailbox_activity_operation_move();

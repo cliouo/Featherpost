@@ -137,11 +137,10 @@ async fn unauthenticated_streams_never_see_agent_stopping() {
     tokio::task::yield_now().await;
 
     ctx.emit_agent_stopping();
-    ctx.emit::<AccountState>(AccountStateInfo {
-        account: "marker".into(),
-        state: crate::events::AccountStateKind::Online,
-        detail: String::new(),
-    });
+    ctx.emit::<AccountState>(AccountStateInfo::plain(
+        "marker",
+        crate::events::AccountStateKind::Online,
+    ));
     let mut lines = BufReader::new(client).lines();
     let first = tokio::time::timeout(Duration::from_secs(1), lines.next_line())
         .await
