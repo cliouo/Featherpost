@@ -246,8 +246,109 @@ pub enum AccountStateKind {
 pub struct AccountStateInfo {
     pub account: String,
     pub state: AccountStateKind,
-    /// 附加信息（如断线原因）。
+    /// 附加信息（如断线原因）。同步循环拼的中文整句，日志与老前端照旧使用（ADR-0048 L6）。
     pub detail: String,
+    /// `detail` 的稳定 code（ADR-0048 L6）：前端按它用界面语言成文。只在离线原因上出现。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail_code: Option<AccountDetailCode>,
+    /// 服务器或系统的原文（去掉我们写的前缀、经 `sanitize_detail`）；原因全由我们判断时为空。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub server_detail: String,
+}
+
+impl AccountStateInfo {
+    /// 没有原因的状态（连接中、在线、重连中）。
+    pub fn plain(account: impl Into<String>, state: AccountStateKind) -> Self {
+        AccountStateInfo {
+            account: account.into(),
+            state,
+            detail: String::new(),
+            detail_code: None,
+            server_detail: String::new(),
+        }
+    }
+}
+
+/// 账户状态原因的稳定 code（ADR-0048 L6）。新增 code 不算破坏性变更：前端遇到不认识的 code
+/// 显示通用文案加 `server_detail`。`as_str` 与 serde 名一致（单测核对），前端测试按 `as_str`
+/// 的分支核对每个 code 都有两种语言的文案。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountDetailCode {
+    /// 从凭据库取回秘密失败（钥匙串锁定、条目缺失等）。
+    CredentialUnavailable,
+    /// 取回的秘密不能用于登录（不是 UTF-8 文本）。
+    CredentialInvalid,
+    ConnectFailed,
+    ConnectTimeout,
+    TlsFailed,
+    TlsTimeout,
+    StarttlsUnsupported,
+    GreetingInvalid,
+    LoginFailed,
+    LoginTimeout,
+    IdleFailed,
+    IdleTimeout,
+    /// LIST / SELECT / FETCH / 对账 / 游标 / 写队列命令在连接层失败。
+    SyncFailed,
+    /// 轮询调度失败（注册任务、调度通道关闭）。
+    PollFailed,
+    /// 委托收信的 provider 未注册、连接已断或被顶替。
+    ProviderUnavailable,
+    ProviderTimeout,
+    /// provider 应答了业务失败（`server_detail` 是插件给的消息）。
+    ProviderFailed,
+    ProviderResponseInvalid,
+    /// 装配缺失等内部错误。
+    Internal,
+}
+
+impl AccountDetailCode {
+    pub const ALL: [AccountDetailCode; 19] = [
+        AccountDetailCode::CredentialUnavailable,
+        AccountDetailCode::CredentialInvalid,
+        AccountDetailCode::ConnectFailed,
+        AccountDetailCode::ConnectTimeout,
+        AccountDetailCode::TlsFailed,
+        AccountDetailCode::TlsTimeout,
+        AccountDetailCode::StarttlsUnsupported,
+        AccountDetailCode::GreetingInvalid,
+        AccountDetailCode::LoginFailed,
+        AccountDetailCode::LoginTimeout,
+        AccountDetailCode::IdleFailed,
+        AccountDetailCode::IdleTimeout,
+        AccountDetailCode::SyncFailed,
+        AccountDetailCode::PollFailed,
+        AccountDetailCode::ProviderUnavailable,
+        AccountDetailCode::ProviderTimeout,
+        AccountDetailCode::ProviderFailed,
+        AccountDetailCode::ProviderResponseInvalid,
+        AccountDetailCode::Internal,
+    ];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            AccountDetailCode::CredentialUnavailable => "credential_unavailable",
+            AccountDetailCode::CredentialInvalid => "credential_invalid",
+            AccountDetailCode::ConnectFailed => "connect_failed",
+            AccountDetailCode::ConnectTimeout => "connect_timeout",
+            AccountDetailCode::TlsFailed => "tls_failed",
+            AccountDetailCode::TlsTimeout => "tls_timeout",
+            AccountDetailCode::StarttlsUnsupported => "starttls_unsupported",
+            AccountDetailCode::GreetingInvalid => "greeting_invalid",
+            AccountDetailCode::LoginFailed => "login_failed",
+            AccountDetailCode::LoginTimeout => "login_timeout",
+            AccountDetailCode::IdleFailed => "idle_failed",
+            AccountDetailCode::IdleTimeout => "idle_timeout",
+            AccountDetailCode::SyncFailed => "sync_failed",
+            AccountDetailCode::PollFailed => "poll_failed",
+            AccountDetailCode::ProviderUnavailable => "provider_unavailable",
+            AccountDetailCode::ProviderTimeout => "provider_timeout",
+            AccountDetailCode::ProviderFailed => "provider_failed",
+            AccountDetailCode::ProviderResponseInvalid => "provider_response_invalid",
+            AccountDetailCode::Internal => "internal",
+        }
+    }
 }
 
 /// `account/state`：账户连接状态变化。
