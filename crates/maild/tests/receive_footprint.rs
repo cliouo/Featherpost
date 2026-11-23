@@ -388,13 +388,13 @@ async fn manual_sync_rejects_failed_and_incomplete_folder_lists() {
         .unwrap();
     tracked_sync(&ctx, Some("Archive")).await;
     server.remove_mailbox("Archive");
-    server.add_mailbox("Projects", "");
+    server.add_mailbox("Projects", "\\NoSelect");
 
     for (reply, expected_error) in [
         (ListReply::Rejected, "Fixture LIST rejected"),
         (ListReply::PartialRejected, "Fixture LIST rejected"),
-        (ListReply::Empty, "LIST 未返回可选的 INBOX"),
-        (ListReply::WithoutInbox, "LIST 未返回可选的 INBOX"),
+        (ListReply::Empty, "LIST 未返回可选文件夹"),
+        (ListReply::WithoutInbox, "LIST 未返回可选文件夹"),
     ] {
         server.set_list_reply(reply);
         let started = sync_call(&ctx, json!({"account": "e2e", "track": true})).await;
@@ -445,6 +445,32 @@ async fn manual_sync_rejects_failed_and_incomplete_folder_lists() {
             .unwrap()
             .unwrap()
             .present
+    );
+    assert_eq!(server.imap_connections(), 1);
+    assembly.dispose().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn successful_list_without_inbox_syncs_selectable_folders() {
+    let server = FakeMail::start().await.unwrap();
+    server.set_list_reply(ListReply::WithoutInbox);
+    server.add_mailbox("Archive", "");
+    server.deliver_to("Archive", "", raw_mail("Startup mail", "body"));
+    let ctx = Context::new();
+    let mut assembly =
+        maild::assemble(&ctx, &assembly_toml(server.imap_addr.port(), "")).expect("装配成功");
+    let store = ctx.get::<Store>().expect("store 服务");
+    wait_until("启动同步归档邮件", Duration::from_secs(5), || {
+        store.count_messages(Some("e2e"), Some("Archive")).unwrap() == 1
+    })
+    .await;
+
+    server.add_mailbox("Projects", "");
+    server.deliver_to("Projects", "", raw_mail("New folder mail", "body"));
+    tracked_sync(&ctx, None).await;
+    assert_eq!(
+        store.count_messages(Some("e2e"), Some("Projects")).unwrap(),
+        1
     );
     assert_eq!(server.imap_connections(), 1);
     assembly.dispose().await;

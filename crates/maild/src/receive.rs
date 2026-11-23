@@ -1890,13 +1890,10 @@ async fn discover_folders(
     let listed = tokio::time::timeout(Duration::from_secs(30), list_mailboxes(session))
         .await
         .map_err(fixed(AccountDetailCode::SyncFailed, "LIST 超时"))??;
-    if !listed
-        .iter()
-        .any(|entry| entry.selectable && entry.name.eq_ignore_ascii_case("INBOX"))
-    {
+    if !listed.iter().any(|entry| entry.selectable) {
         return Err(ReceiveError::new(
             AccountDetailCode::SyncFailed,
-            "LIST 未返回可选的 INBOX",
+            "LIST 未返回可选文件夹",
         ));
     }
 
