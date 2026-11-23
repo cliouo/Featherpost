@@ -229,7 +229,7 @@ async fn tauri_frontend_syncs_discovers_and_pulls_server_history_into_an_isolate
     })
     .await;
 
-    // ADR-0048 决策 7：回复引用块跟随桥传来的界面语言；不传时按 daemon 偏好（缺省中文）。
+    // ADR-0048 决策 7：回复引用块跟随桥传来的界面语言；不传时按 daemon 偏好（跟随系统语言）。
     let english = bridge
         .reply_draft("legacy", "INBOX", "4", "reply", Some("en"))
         .await
@@ -240,11 +240,16 @@ async fn tauri_frontend_syncs_discovers_and_pulls_server_history_into_an_isolate
         .await
         .unwrap();
     assert!(chinese.body.contains("写道："), "{}", chinese.body);
+    // 不传 locale 时用 daemon 的 effective，跟随本机系统语言，所以只比较两者一致，不假定中文。
+    let preferred = bridge
+        .reply_draft("legacy", "INBOX", "4", "reply", None)
+        .await
+        .unwrap();
     let invalid = bridge
         .reply_draft("legacy", "INBOX", "4", "reply", Some("not a tag"))
         .await
         .unwrap();
-    assert!(invalid.body.contains("写道："), "非法标签按旧后台处理：去掉 locale 重试");
+    assert_eq!(invalid.body, preferred.body, "非法标签按旧后台处理：去掉 locale 重试");
 
     // 2. 服务商识别：预设命中零网络；无法识别的输入投影为 None 而不是错误。
     let qq = bridge

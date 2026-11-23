@@ -124,10 +124,10 @@ impl NativeController {
 
     fn daemon_locale(&self) -> Option<Vec<String>> {
         let client = self.client.as_ref()?;
-        let answer = self.runtime.block_on(tokio::time::timeout(
-            Duration::from_secs(2),
-            client.locale_preference(),
-        ));
+        // Build the timeout inside the runtime: `tokio::time::timeout` needs a reactor at creation.
+        let answer = self.runtime.block_on(async {
+            tokio::time::timeout(Duration::from_secs(2), client.locale_preference()).await
+        });
         Some(answer.ok()?.ok()?.effective)
     }
 

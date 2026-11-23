@@ -450,11 +450,22 @@ pub(crate) fn ui_settings_cancel_package(state: State<'_,AppState>,token: String
 #[tauri::command]
 pub(crate) async fn ui_settings_pick_package(app: tauri::AppHandle,state: State<'_,AppState>,kind: String) -> Result<Option<crate::settings_packages::PackageChoice>,UiError> {
     crate::settings::check_kind(&kind)?;
+    let effective=state.locale.current().effective.unwrap_or_default();
+    let title=package_folder_title(maild_l10n::negotiate(&effective));
     let (tx,rx)=tokio::sync::oneshot::channel();
-    app.run_on_main_thread(move || { let _=tx.send(rfd::FileDialog::new().set_title(format!("选择完整的 {} 扩展包目录", maild_brand::PRODUCT_NAME)).pick_folder()); })
+    app.run_on_main_thread(move || { let _=tx.send(rfd::FileDialog::new().set_title(title).pick_folder()); })
         .map_err(|_|UiError::invalid("folder_picker_failed", "无法打开目录选择器。"))?;
     let Some(path)=rx.await.map_err(|_|UiError::invalid("folder_picker_no_result", "目录选择器未返回。"))? else {return Ok(None)};
     state.packages.select(&state.bridge,&path,&kind).await.map(Some)
+}
+
+/// 扩展包目录选择器的标题跟随壳的界面语言（ADR-0048）。
+fn package_folder_title(locale: maild_l10n::Locale) -> String {
+    let product = maild_brand::PRODUCT_NAME;
+    match locale {
+        maild_l10n::Locale::ZhHans => format!("选择完整的 {product} 扩展包目录"),
+        maild_l10n::Locale::En => format!("Choose the complete {product} extension package folder"),
+    }
 }
 
 // —— 日常收信与登录向导（T4 契约：`packages/maild-ui/src/bridge/tauri.ts`）——
@@ -516,4 +527,19 @@ pub(crate) async fn ui_discover_provider(
 pub(crate) fn ui_open_external_url(url: String) -> Result<(), UiError> {
     system::open_web_url(&url)
         .map_err(|error| UiError::failed("ui_open_external_url", error, "external_link_failed", "无法打开这个链接。"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::package_folder_title;
+    use maild_l10n::Locale;
+
+    #[test]
+    fn package_folder_picker_title_follows_the_shell_language() {
+        assert_eq!(package_folder_title(Locale::ZhHans), "选择完整的 Featherpost 扩展包目录");
+        assert_eq!(
+            package_folder_title(Locale::En),
+            "Choose the complete Featherpost extension package folder"
+        );
+    }
 }
