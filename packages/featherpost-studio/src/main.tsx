@@ -11,6 +11,7 @@ import { Studio } from "./Shell";
 import { ChoiceRenderer } from "../../maild-ui/src/settings/Choice";
 import { StudioSelect } from "./StudioSelect";
 import "../../maild-ui/src/styles/tokens.css";
+import "../../maild-ui/src/styles/scrollbars.css";
 import "./settings/forms.css";
 import "../../maild-ui/src/compose/compose.css";
 import "./studio.css";

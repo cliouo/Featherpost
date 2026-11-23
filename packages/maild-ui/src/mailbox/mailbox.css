@@ -211,10 +211,12 @@
 .mail-dialog {
   width: min(560px, calc(100vw - 40px));
   max-height: 85vh;
-  overflow: auto;
+  overflow-y: scroll;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
   border: 1px solid var(--line);
   border-radius: var(--r-lg);
-  padding: 24px;
+  padding: 24px calc(24px - var(--scrollbar-size, 10px)) 24px 24px;
   background: var(--surface);
   color: var(--ink);
   box-shadow: 0 16px 64px #0003;
@@ -249,7 +251,9 @@
   padding: 0;
   margin: 0 0 20px;
   max-height: 180px;
-  overflow: auto;
+  overflow-y: scroll;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
   border-block: 1px solid var(--line);
 }
 .action-message-list li {
@@ -291,7 +295,9 @@
 }
 .thread-list {
   max-height: 160px;
-  overflow: auto;
+  overflow-y: scroll;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
 }
 .thread-item {
   width: 100%;
@@ -407,7 +413,9 @@
   color: var(--muted);
   white-space: pre-wrap;
   max-height: 100px;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
 }
 .operation-actions {
   display: flex;
@@ -471,11 +479,13 @@
 .welcome {
   flex: 1;
   min-height: 0;
-  overflow-y: auto;
+  overflow-y: scroll;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 40px 24px;
+  padding: 40px calc(24px - var(--scrollbar-size, 10px)) 40px 24px;
 }
 .welcome-card {
   width: min(560px, 100%);

@@ -23,6 +23,11 @@
   width: 100%;
   box-sizing: border-box;
 }
+.settings-field textarea {
+  overflow-y: scroll;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+}
 .settings-field small {
   font-weight: 400;
   color: var(--muted);

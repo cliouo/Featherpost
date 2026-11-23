@@ -15,6 +15,7 @@ import { ComposeController } from './compose/controller';
 import { composeModule } from './compose/module';
 import './compose/compose.css';
 import './styles/tokens.css';
+import './styles/scrollbars.css';
 import './styles/app.css';
 
 // 装配：内置模块与示例扩展走同一个注册底座（ADR-0031 决策 5）。

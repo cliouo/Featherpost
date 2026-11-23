@@ -65,7 +65,7 @@ body[data-studio-settings] .studio > .studio-workspace {
 .studio-settings .settings-nav {
   display: flex;
   flex-direction: column;
-  padding: 31px 14px 21px;
+  padding: 31px calc(14px - var(--scrollbar-size, 10px)) 21px 14px;
   background: var(--studio-sidebar);
 }
 .studio-settings .settings-nav h1 { font-size: 23px; font-weight: 580; letter-spacing: -.6px; padding: 0 14px; margin-bottom: 29px; }
@@ -84,7 +84,7 @@ body[data-studio-settings] .studio > .studio-workspace {
 .studio-settings .status-dot { width: 5px; height: 5px; background: var(--studio-mark); flex: 0 0 auto; border-radius: 50%; display: inline-block; }
 .studio-settings .status-dot.warn { background: var(--studio-danger); }
 .studio-settings .settings-content { background: var(--studio-canvas); overscroll-behavior: contain; }
-.studio-settings .settings-content .page-column { padding: 35px 44px 28px; max-width: 1440px; width: 100%; margin: 0; }
+.studio-settings .settings-content .page-column { padding: 35px calc(44px - var(--scrollbar-size, 10px)) 28px 44px; max-width: 1440px; width: 100%; margin: 0; }
 .studio-settings-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-bottom: 28px; }
 .studio-settings-title { display: flex; align-items: baseline; gap: 13px; }
 .studio-settings-title h2 { font-size: 28px; line-height: 1.3; font-weight: 580; letter-spacing: -.5px; }
@@ -278,16 +278,16 @@ body[data-studio-settings] .studio > .studio-workspace {
 .comfortable .studio-density-lines i { height: 39px; align-items: flex-start; padding-top: 6px; }
 .comfortable .studio-density-lines i::after { position: absolute; top: 16px; left: 0; width: 88%; }
 .studio-appearance-note { font-size: 10px; color: var(--studio-muted); line-height: 1.8; margin-top: 25px; padding-top: 20px; border-top: 1px solid var(--studio-soft-border); }
-.studio-settings dialog.mail-dialog { border: 1px solid var(--studio-border); background: var(--studio-surface); color: var(--studio-text); border-radius: 10px; padding: 26px; max-width: min(520px,calc(100vw - 40px)); box-shadow: 0 16px 70px #00000025; }
+.studio-settings dialog.mail-dialog { border: 1px solid var(--studio-border); background: var(--studio-surface); color: var(--studio-text); border-radius: 10px; padding: 26px calc(26px - var(--scrollbar-size, 10px)) 26px 26px; max-width: min(520px,calc(100vw - 40px)); box-shadow: 0 16px 70px #00000025; }
 .studio-settings dialog.mail-dialog::backdrop { background: #11111866; }
 .studio-settings dialog .settings-confirm-copy { font-size: 13px; color: var(--studio-secondary); line-height: 1.9; margin-top: 18px; }
 .studio-settings dialog .settings-actions { justify-content: flex-end; }
 .studio-settings dialog.mail-dialog > header { border-bottom: 1px solid var(--studio-border); padding-bottom: 16px; }
-@media (min-width: 1450px) { .studio-settings .settings-content .page-column { padding-right: 64px; padding-left: 64px; } }
+@media (min-width: 1450px) { .studio-settings .settings-content .page-column { padding-right: calc(64px - var(--scrollbar-size, 10px)); padding-left: 64px; } }
 @media (max-width: 1040px) {
   .studio-settings .settings-layout { grid-template-columns: 196px minmax(0,1fr); }
   .studio-settings-topbar { grid-template-columns: 224px minmax(0,1fr) auto; }
-  .studio-settings .settings-content .page-column { padding: 30px 28px; }
+  .studio-settings .settings-content .page-column { padding: 30px calc(28px - var(--scrollbar-size, 10px)) 30px 28px; }
   .studio-settings .account-row { padding: 19px; gap: 10px; }
   .studio-account-state { margin-right: 9px; }
   .studio-theme-preview { height: 130px; }
@@ -297,12 +297,12 @@ body[data-studio-settings] .studio > .studio-workspace {
 }
 @media (max-width: 760px) {
   .studio-settings .settings-layout { grid-template-columns: 155px minmax(0,1fr); }
-  .studio-settings .settings-nav { padding-left: 9px; padding-right: 9px; }
+  .studio-settings .settings-nav { padding-left: 9px; padding-right: 0; }
   .studio-settings .settings-nav h1 { font-size: 21px; padding-left: 9px; }
   .studio-settings .settings-nav button { padding: 10px 9px; font-size: 12px; }
   .studio-settings-nav-group > p { padding-left: 9px; }
   .studio-settings-nav-footer { padding-left: 9px; }
-  .studio-settings .settings-content .page-column { padding: 26px 20px; }
+  .studio-settings .settings-content .page-column { padding: 26px calc(20px - var(--scrollbar-size, 10px)) 26px 20px; }
   .studio-settings-heading { align-items: flex-start; flex-direction: column; }
   .studio-settings-title h2 { font-size: 21px; }
   .studio-settings .account-row { flex-wrap: wrap; }
