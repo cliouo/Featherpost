@@ -29,7 +29,7 @@ toml = { version = "0.9", features = ["preserve_order"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = { version = "0.6.2", default-features = false, features = ["alloc"] }
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "libc", "block2", "NSApplication", "NSAlert", "NSRunningApplication", "NSWorkspace"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "libc", "block2", "NSApplication", "NSAlert", "NSResponder", "NSRunningApplication", "NSWindow", "NSWorkspace"] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSError", "NSString", "NSURL"] }
 objc2-service-management = { version = "0.3.2", default-features = false, features = ["std", "objc2", "objc2-foundation", "SMAppService"] }
 
