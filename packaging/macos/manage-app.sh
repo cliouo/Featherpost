@@ -180,6 +180,7 @@ validate_source() {
 
 validate_bundle() {
     local bundle=$1 verify_work verifier short_version build_version version
+    shift
     [ "${bundle#/}" != "$bundle" ] || die 'bundle path must be absolute'
     [ -d "$bundle" ] && [ ! -L "$bundle" ] || die 'source must be a non-symlink bundle'
     if [ "$(basename -- "$bundle")" != "$BRAND_APP_BUNDLE" ]; then
@@ -189,7 +190,7 @@ validate_bundle() {
             rm -rf -- "$verify_work"
             die "cannot copy bundle for verification: $bundle"
         }
-        if ! (validate_bundle "$verify_work/$BRAND_APP_BUNDLE"); then
+        if ! (validate_bundle "$verify_work/$BRAND_APP_BUNDLE" "$@"); then
             rm -rf -- "$verify_work"
             die "bundle verification failed: $bundle"
         fi
@@ -204,15 +205,19 @@ validate_bundle() {
         build_version=$(plist_value "$bundle/Contents/Info.plist" CFBundleVersion) ||
             die 'cannot read candidate build version'
         env "$short_version_env=$short_version" "$build_version_env=$build_version" \
-            "$verifier" "$bundle" >/dev/null || die "bundle verification failed: $bundle"
+            "$verifier" "$@" "$bundle" >/dev/null || die "bundle verification failed: $bundle"
     else
         verifier="$script_dir/verify-release.sh"
         [ -x "$verifier" ] || die "required verifier is unavailable: $verifier"
         version=$(plist_value "$bundle/Contents/Info.plist" CFBundleShortVersionString) ||
             die 'cannot read candidate release version'
-        "$verifier" --app "$bundle" --version "$version" --stapled \
+        "$verifier" --app "$bundle" --version "$version" --stapled "$@" \
             >/dev/null || die "release verification failed: $bundle"
     fi
+}
+
+validate_existing_bundle() {
+    validate_bundle "$1" --allow-missing-agent-icon
 }
 
 bundle_app_id() {
@@ -388,26 +393,26 @@ recover_transaction() {
             ;;
         upgrade)
             if [ -d "$target" ] && [ -e "$staged" ] && [ ! -L "$staged" ] && [ ! -e "$old" ]; then
-                validate_bundle "$target"
+                validate_existing_bundle "$target"
                 remove_staged "$staged"
             elif [ -d "$target" ] && [ ! -e "$staged" ] && [ ! -e "$old" ]; then
-                validate_bundle "$target"
+                validate_existing_bundle "$target"
             elif [ ! -e "$target" ] && [ -d "$staged" ] && [ -d "$old" ]; then
                 validate_bundle "$staged"
-                validate_bundle "$old"
+                validate_existing_bundle "$old"
                 mv -- "$old" "$target" || die 'cannot restore old bundle'
-                validate_bundle "$target"
+                validate_existing_bundle "$target"
                 remove_staged "$staged"
             elif [ -d "$target" ] && [ ! -e "$staged" ] && [ -d "$old" ] && [ ! -e "$rollback" ]; then
                 validate_bundle "$target"
-                validate_bundle "$old"
+                validate_existing_bundle "$old"
                 validate_identity_pair "$old" "$target"
                 mv -- "$old" "$rollback" || die 'cannot preserve rollback bundle'
-                validate_bundle "$rollback"
+                validate_existing_bundle "$rollback"
                 validate_identity_pair "$rollback" "$target"
             elif [ -d "$target" ] && [ -d "$rollback" ] && [ ! -e "$staged" ] && [ ! -e "$old" ]; then
                 validate_bundle "$target"
-                validate_bundle "$rollback"
+                validate_existing_bundle "$rollback"
                 validate_identity_pair "$rollback" "$target"
             else
                 die 'ambiguous upgrade transaction; no files changed'
@@ -415,20 +420,20 @@ recover_transaction() {
             ;;
         rollback)
             if [ ! -e "$target" ] && [ -d "$current" ] && [ -d "$rollback" ]; then
-                validate_bundle "$current"
-                validate_bundle "$rollback"
+                validate_existing_bundle "$current"
+                validate_existing_bundle "$rollback"
                 mv -- "$current" "$target" || die 'cannot restore current bundle'
-                validate_bundle "$target"
+                validate_existing_bundle "$target"
             elif [ -d "$target" ] && [ -d "$current" ] && [ ! -e "$rollback" ]; then
-                validate_bundle "$target"
-                validate_bundle "$current"
+                validate_existing_bundle "$target"
+                validate_existing_bundle "$current"
                 validate_identity_pair "$current" "$target"
                 mv -- "$current" "$rollback" || die 'cannot preserve replaced bundle'
-                validate_bundle "$rollback"
+                validate_existing_bundle "$rollback"
                 validate_identity_pair "$rollback" "$target"
             elif [ -d "$target" ] && [ -d "$rollback" ] && [ ! -e "$current" ]; then
-                validate_bundle "$target"
-                validate_bundle "$rollback"
+                validate_existing_bundle "$target"
+                validate_existing_bundle "$rollback"
                 validate_identity_pair "$rollback" "$target"
             else
                 die 'ambiguous rollback transaction; no files changed'
@@ -459,7 +464,7 @@ case "$command" in
         [ -d "$target" ] && [ ! -L "$target" ] || die "$BRAND_APP_BUNDLE is not installed"
         [ ! -e "$rollback" ] && [ ! -L "$rollback" ] ||
             die 'rollback already exists; run rollback or finalize first'
-        validate_bundle "$target"
+        validate_existing_bundle "$target"
         acquire_maintenance_lease
         validate_source "$source_bundle"
         validate_upgrade_pair "$target" "$source_bundle"
@@ -477,7 +482,7 @@ case "$command" in
             die 'published candidate failed verification; old bundle recovery attempted'
         fi
         mv -- "$old" "$rollback" || die 'candidate published; run recover to preserve rollback'
-        validate_bundle "$rollback"
+        validate_existing_bundle "$rollback"
         validate_identity_pair "$rollback" "$target"
         finish_transaction
         ;;
@@ -485,8 +490,8 @@ case "$command" in
         ensure_applications
         [ -d "$target" ] && [ ! -L "$target" ] || die "$BRAND_APP_BUNDLE is not installed"
         [ -d "$rollback" ] && [ ! -L "$rollback" ] || die 'no rollback bundle exists'
-        validate_bundle "$target"
-        validate_bundle "$rollback"
+        validate_existing_bundle "$target"
+        validate_existing_bundle "$rollback"
         validate_identity_pair "$target" "$rollback"
         acquire_maintenance_lease
         begin_transaction rollback
@@ -495,13 +500,13 @@ case "$command" in
             mv -- "$current" "$target" || true
             die 'cannot publish rollback; current bundle recovery attempted'
         }
-        if ! (validate_bundle "$target"); then
+        if ! (validate_existing_bundle "$target"); then
             mv -- "$target" "$rollback" || true
             mv -- "$current" "$target" || true
             die 'published rollback failed verification; current bundle recovery attempted'
         fi
         mv -- "$current" "$rollback" || die 'rollback published; run recover to preserve replaced bundle'
-        validate_bundle "$rollback"
+        validate_existing_bundle "$rollback"
         validate_identity_pair "$rollback" "$target"
         finish_transaction
         ;;
@@ -533,7 +538,7 @@ case "$command" in
         [ ! -e "$transaction" ] && [ ! -L "$transaction" ] ||
             die 'unfinished transaction exists; run recover'
         [ -d "$rollback" ] && [ ! -L "$rollback" ] || die 'no rollback bundle exists'
-        validate_bundle "$rollback"
+        validate_existing_bundle "$rollback"
         ensure_trash
         [ ! -e "$rollback_trash" ] && [ ! -L "$rollback_trash" ] ||
             die "~/.Trash/$app_stem Rollback.app already exists"
@@ -546,7 +551,7 @@ case "$command" in
             die 'unfinished transaction exists; run recover'
         [ ! -e "$rollback" ] && [ ! -L "$rollback" ] ||
             die 'rollback exists; run finalize before uninstall'
-        validate_bundle "$target"
+        validate_existing_bundle "$target"
         acquire_maintenance_lease
         ensure_trash
         [ ! -e "$trash" ] && [ ! -L "$trash" ] || die "~/.Trash/$BRAND_APP_BUNDLE already exists"
@@ -562,13 +567,13 @@ case "$command" in
         fi
         validate_directory_chain "$applications"
         if [ -d "$target" ] && [ ! -L "$target" ]; then
-            validate_bundle "$target"
+            validate_existing_bundle "$target"
             printf 'installed=%s\n' "$(bundle_version "$target")"
         else
             printf 'installed=none\n'
         fi
         if [ -d "$rollback" ] && [ ! -L "$rollback" ]; then
-            validate_bundle "$rollback"
+            validate_existing_bundle "$rollback"
             printf 'rollback=%s\n' "$(bundle_version "$rollback")"
         else
             printf 'rollback=none\n'

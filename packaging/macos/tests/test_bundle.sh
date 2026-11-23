@@ -410,10 +410,16 @@ mv -- "$agent_icon" "$work/agent-icon-original.icns"
 if "$packaging_dir/verify-bundle.sh" "$bundle" >/dev/null 2>&1; then
     fail "verifier accepted a bundle without the Agent icon"
 fi
+if "$packaging_dir/verify-bundle.sh" --allow-missing-agent-icon "$bundle" >/dev/null 2>&1; then
+    fail 'legacy verification accepted an incomplete Agent icon'
+fi
 mv -- "$work/agent-icon-original.icns" "$agent_icon"
 plutil -replace CFBundleIconFile -string "$BRAND_ICON_NAME-drift" "$agent_plist"
 if "$packaging_dir/verify-bundle.sh" "$bundle" >/dev/null 2>&1; then
     fail 'verifier accepted a drifted Agent CFBundleIconFile'
+fi
+if "$packaging_dir/verify-bundle.sh" --allow-missing-agent-icon "$bundle" >/dev/null 2>&1; then
+    fail 'legacy verification accepted a drifted Agent CFBundleIconFile'
 fi
 plutil -replace CFBundleIconFile -string "$BRAND_ICON_NAME" "$agent_plist"
 "$packaging_dir/verify-bundle.sh" "$bundle" >/dev/null
