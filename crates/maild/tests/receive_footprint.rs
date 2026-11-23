@@ -501,10 +501,23 @@ action = "drop"
 
 #[tokio::test(flavor = "current_thread")]
 async fn localized_inbox_without_inbox_runs_filters_and_notifies() {
+    assert_localized_inbox_runs_filters_and_notifies(None).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn declared_inbox_wins_over_an_earlier_inbox_like_folder() {
+    assert_localized_inbox_runs_filters_and_notifies(Some("Nested/INBOX")).await;
+}
+
+async fn assert_localized_inbox_runs_filters_and_notifies(guessed_inbox: Option<&str>) {
     let server = FakeMail::start().await.unwrap();
     server.set_list_reply(ListReply::WithoutInbox);
     server.add_mailbox("Archive", "\\Archive");
     let inbox = "Posteingang";
+    if let Some(guessed_inbox) = guessed_inbox {
+        server.add_mailbox(guessed_inbox, "");
+        server.deliver_to(guessed_inbox, "", raw_mail("Drop this", "body"));
+    }
     server.add_mailbox(inbox, "\\Inbox");
     for subject in ["Drop this", "Keep this"] {
         server.deliver_to(
@@ -536,6 +549,12 @@ notify_new_mail = true
     tracked_sync(&ctx, None).await;
 
     let store = ctx.get::<Store>().expect("store 服务");
+    if let Some(guessed_inbox) = guessed_inbox {
+        assert_eq!(
+            store.count_messages(Some("e2e"), Some(guessed_inbox)).unwrap(),
+            1
+        );
+    }
     let messages = store
         .list_message_summaries(Some("e2e"), Some(inbox), 10, 0)
         .unwrap();

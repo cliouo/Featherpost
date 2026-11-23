@@ -1909,6 +1909,7 @@ async fn discover_folders(
         .map_err(store_stage("标记缺席文件夹失败"))?;
 
     let mut targets = Vec::new();
+    let mut special_use_inbox = None;
     for entry in listed {
         let folder_id = store
             .upsert_folder(&cfg.account, &entry.name, &entry.display_name, entry.role)
@@ -1916,6 +1917,9 @@ async fn discover_folders(
         // `\NoSelect` 是纯层级节点：登记但不同步。
         if !entry.selectable {
             continue;
+        }
+        if entry.is_special_use_inbox {
+            special_use_inbox.get_or_insert(targets.len());
         }
         targets.push(SyncTarget {
             name: entry.name,
@@ -1939,6 +1943,7 @@ async fn discover_folders(
                 .iter()
                 .position(|target| target.name.eq_ignore_ascii_case("INBOX"))
         })
+        .or(special_use_inbox)
         .or_else(|| targets.iter().position(|target| target.role == Some(FolderRole::Inbox)))
     {
         targets[primary].is_primary = true;
@@ -1952,6 +1957,7 @@ struct ListedFolder {
     display_name: String,
     role: Option<FolderRole>,
     selectable: bool,
+    is_special_use_inbox: bool,
 }
 
 /// async-imap 的 LIST 流丢弃 tagged 状态，需读到对应的 OK 才能使用结果。
@@ -2009,6 +2015,7 @@ async fn list_mailboxes(
                     display_name,
                     role,
                     selectable: !name_attributes.contains(&NameAttribute::NoSelect),
+                    is_special_use_inbox: attributes.iter().any(|attribute| attribute == "\\Inbox"),
                 });
             }
             _ => {}
