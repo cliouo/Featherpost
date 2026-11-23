@@ -489,6 +489,15 @@ pub(crate) async fn ui_sync_mailbox_scope(
 }
 
 #[tauri::command(rename_all = "snake_case")]
+pub(crate) async fn ui_mailbox_sync_status(
+    state: State<'_, AppState>,
+    account: String,
+    sync_id: u64,
+) -> Result<bool, UiError> {
+    state.bridge.mailbox_sync_status(&account, sync_id).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
 pub(crate) async fn ui_server_search(
     state: State<'_, AppState>,
     account: String,

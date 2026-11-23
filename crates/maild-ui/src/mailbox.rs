@@ -288,10 +288,6 @@ impl Bridge {
         struct Started {
             sync_id: u64,
         }
-        #[derive(serde::Deserialize)]
-        struct Status {
-            done: bool,
-        }
         let deadline = Instant::now() + maild_client::REQUEST_TIMEOUT;
         let Started { sync_id } = self
             .compose_call(
@@ -299,16 +295,19 @@ impl Bridge {
                 json!({ "account": account, "folder": folder, "track": true }),
             )
             .await?;
-        wait_for_mailbox_sync(deadline, || async {
-            let status: Status = self
-                .compose_call(
-                    "syncMessages",
-                    json!({ "account": account, "sync_id": sync_id }),
-                )
-                .await?;
-            Ok(status.done)
-        })
-        .await
+        wait_for_mailbox_sync(deadline, sync_id, || self.mailbox_sync_status(&account, sync_id))
+            .await
+    }
+
+    pub async fn mailbox_sync_status(&self, account: &str, sync_id: u64) -> Result<bool, UiError> {
+        #[derive(serde::Deserialize)]
+        struct Status {
+            done: bool,
+        }
+        let status: Status = self
+            .compose_call("syncMessages", json!({ "account": account, "sync_id": sync_id }))
+            .await?;
+        Ok(status.done)
     }
 
     /// 在服务器上检索本地缓存窗口之外的历史（`searchMessages` 的 `scope: "server"` 分支）。
@@ -389,11 +388,12 @@ impl Bridge {
 #[serde(rename_all = "snake_case")]
 pub enum UiMailboxSyncOutcome {
     Complete,
-    Background,
+    Background { sync_id: u64 },
 }
 
 async fn wait_for_mailbox_sync<F>(
     deadline: Instant,
+    sync_id: u64,
     mut status: impl FnMut() -> F,
 ) -> Result<UiMailboxSyncOutcome, UiError>
 where
@@ -410,7 +410,7 @@ where
     .await
     {
         Ok(result) => result,
-        Err(_) => Ok(UiMailboxSyncOutcome::Background),
+        Err(_) => Ok(UiMailboxSyncOutcome::Background { sync_id }),
     }
 }
 
@@ -421,16 +421,19 @@ mod tests {
 
     #[tokio::test]
     async fn expired_sync_wait_returns_background() {
-        let outcome = wait_for_mailbox_sync(Instant::now(), || async { Ok(false) })
+        let outcome = wait_for_mailbox_sync(Instant::now(), 42, || async { Ok(false) })
             .await
             .unwrap();
-        assert_eq!(outcome, UiMailboxSyncOutcome::Background);
-        assert_eq!(serde_json::to_value(outcome).unwrap(), json!("background"));
+        assert_eq!(outcome, UiMailboxSyncOutcome::Background { sync_id: 42 });
+        assert_eq!(
+            serde_json::to_value(outcome).unwrap(),
+            json!({ "background": { "sync_id": 42 } })
+        );
     }
 
     #[tokio::test]
     async fn sync_wait_preserves_poll_errors() {
-        let error = wait_for_mailbox_sync(Instant::now() + Duration::from_secs(1), || async {
+        let error = wait_for_mailbox_sync(Instant::now() + Duration::from_secs(1), 42, || async {
             Err(UiError::failed(
                 "syncMessages",
                 "LIST rejected",

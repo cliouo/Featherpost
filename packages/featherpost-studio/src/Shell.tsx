@@ -147,7 +147,7 @@ export function Studio({
         searchInput.current?.select();
       }),
     sync: (folder) => void mailbox.syncNow({ account: folder.account, folder: folder.name }),
-    canSync: (folder) => online && !mailbox.isSyncing(folder.account),
+    canSync: (folder) => online && !mailbox.isSyncPending(folder.account),
     syncing: (folder) => mail.syncingScopes.get(folder.account)?.folder === folder.name,
   };
   const syncing = mailbox.isSyncing();
@@ -265,7 +265,7 @@ export function Studio({
           </div>
           <button
             className={`sync-status ${syncing ? "spinning" : ""}`}
-            disabled={!online || syncing}
+            disabled={!online || mailbox.isSyncPending()}
             title={m.studio_sync_now()}
             onClick={() => void mailbox.syncNow()}
           >

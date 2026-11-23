@@ -309,7 +309,7 @@ export function MailboxNavigation({
                               .foldersOf(id)
                               .some((f) => f.present),
                             sync: () => void mailbox.syncNow({ account: id }),
-                            canSync: mail.snapshot.phase === "online" && !mailbox.isSyncing(id),
+                            canSync: mail.snapshot.phase === "online" && !mailbox.isSyncPending(id),
                             groups: grouping.groups,
                             group: grouping.assignments[id] ?? OTHER_GROUP,
                             assign: (group) =>

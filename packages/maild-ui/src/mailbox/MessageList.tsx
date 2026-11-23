@@ -212,7 +212,7 @@ export function MessageList({ controller }: { controller: MailboxController }) {
         </label>
         <button
           className="text-button"
-          disabled={s.loadingRows || syncing || s.snapshot.phase !== "online"}
+          disabled={s.loadingRows || controller.isSyncPending() || s.snapshot.phase !== "online"}
           title={m.mailbox_list_sync_title()}
           aria-busy={syncing}
           onClick={() => void controller.syncNow()}

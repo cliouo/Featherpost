@@ -1,9 +1,10 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { MessageIdentity, UiSummary } from "../src/bridge/types";
 import { MailboxController, messageKey } from "../src/mailbox/controller";
+import type { MailboxBridge } from "../src/mailbox/types";
 import { FolderNav } from "../src/mailbox/FolderNav";
 import { runShortcut, SHORTCUT_COMMANDS } from "../src/mailbox/keyboard";
 import { isEditableTarget, shortcutFor, type ShortcutAction } from "../src/mailbox/shortcuts";
@@ -21,7 +22,12 @@ import { deferred, FakeBridge, flush, folder, message, offlineError, online, sum
 import { FakeSettings, account, rules } from "./fakeSettings";
 
 const controllers: MailboxController[] = [];
-afterEach(() => controllers.splice(0).forEach((c) => c.stop()));
+afterEach(() => {
+  controllers.splice(0).forEach((c) => c.stop());
+  vi.useRealTimers();
+});
+
+type SyncOutcome = Awaited<ReturnType<NonNullable<MailboxBridge["syncScope"]>>>;
 
 async function ready(rows: UiSummary[] = []) {
   const bridge = new FakeBridge();
@@ -130,7 +136,7 @@ describe("立即同步", () => {
   it.each([undefined, "Archive"])("tracks an explicit sidebar sync (%s) through completion and suppresses duplicates", async (name) => {
     const { bridge, c } = await ready();
     const originalScope = c.state.scope;
-    const sync = deferred<"complete" | "background">();
+    const sync = deferred<SyncOutcome>();
     const asked: Array<[string, string | undefined]> = [];
     bridge.mailbox.syncScope = (account, folder) => {
       asked.push([account, folder]);
@@ -158,15 +164,17 @@ describe("立即同步", () => {
     expect(c.state.syncNotice).toBeNull();
   });
 
-  it("shows a non-error background sync notice and clears the spinner before refreshing", async () => {
+  it("clears the spinner, then refreshes folders and the open list when background sync completes", async () => {
     const { bridge, c } = await ready();
-    const sync = deferred<"complete" | "background">();
-    bridge.mailbox.syncScope = () => sync.promise;
+    vi.useFakeTimers();
+    const sync = deferred<SyncOutcome>();
+    bridge.mailbox.syncScope = (account) => account === "demo" ? sync.promise : Promise.resolve("complete");
+    bridge.mailbox.syncStatus = vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true);
     const run = c.syncNow({ account: "demo" });
     expect(c.isSyncing("demo")).toBe(true);
 
-    sync.resolve("background");
-    await flush();
+    sync.resolve({ background: { sync_id: 42 } });
+    await vi.advanceTimersByTimeAsync(0);
     expect(c.isSyncing("demo")).toBe(false);
     expect(c.state.syncNotice).toBe("同步已启动，仍在后台进行。");
     expect(c.state.syncError).toBeNull();
@@ -175,12 +183,65 @@ describe("立即同步", () => {
     bridge.mailbox.queries.at(-1)!.d.resolve({ messages: [], total: 0 });
     await run;
     expect(c.state.syncNotice).toBe("同步已启动，仍在后台进行。");
+
+    await c.syncNow({ account: "demo" });
+    expect(c.isSyncPending("demo")).toBe(true);
+    const independent = c.syncNow({ account: "other" });
+    expect(c.isSyncing("other")).toBe(true);
+    await vi.advanceTimersByTimeAsync(0);
+    bridge.folderRequests.at(-1)!.d.resolve([folder("INBOX", "inbox")]);
+    bridge.mailbox.queries.at(-1)!.d.resolve({ messages: [], total: 0 });
+    await independent;
+    expect(c.state.syncNotice).toBe("同步已启动，仍在后台进行。");
+
+    const foldersBefore = bridge.folderRequests.length;
+    const queriesBefore = bridge.mailbox.queries.length;
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(bridge.mailbox.syncStatus).toHaveBeenCalledWith("demo", 42);
+    expect(bridge.folderRequests).toHaveLength(foldersBefore);
+    expect(bridge.mailbox.queries).toHaveLength(queriesBefore);
+
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(bridge.folderRequests).toHaveLength(foldersBefore + 1);
+    expect(bridge.mailbox.queries).toHaveLength(queriesBefore + 1);
+    bridge.folderRequests.at(-1)!.d.resolve([folder("INBOX", "inbox"), folder("Renamed")]);
+    bridge.mailbox.queries.at(-1)!.d.resolve({ messages: [summary("INBOX", "2")], total: 1 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(c.foldersOf("demo").map((f) => f.name)).toEqual(["INBOX", "Renamed"]);
+    expect(c.state.rows.map((row) => row.uid)).toEqual(["2"]);
+    expect(c.state.syncNotice).toBeNull();
+    expect(c.state.syncError).toBeNull();
+    expect(c.isSyncPending("demo")).toBe(false);
+  });
+
+  it.each(["failure", "stop"] as const)("ends background tracking on %s", async (end) => {
+    const { bridge, c } = await ready();
+    vi.useFakeTimers();
+    bridge.mailbox.syncScope = async () => ({ background: { sync_id: 42 } });
+    bridge.mailbox.syncStatus = vi.fn().mockRejectedValue(offlineError());
+    const run = c.syncNow({ account: "demo" });
+    await vi.advanceTimersByTimeAsync(0);
+    bridge.folderRequests.at(-1)!.d.resolve([folder("INBOX", "inbox")]);
+    bridge.mailbox.queries.at(-1)!.d.resolve({ messages: [], total: 0 });
+    await run;
+
+    if (end === "stop") c.stop();
+    await vi.advanceTimersByTimeAsync(1000);
+    if (end === "failure") {
+      bridge.folderRequests.at(-1)!.d.resolve([folder("INBOX", "inbox")]);
+      bridge.mailbox.queries.at(-1)!.d.resolve({ messages: [], total: 0 });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(c.state.syncError).toContain("后台连接不可用");
+    } else {
+      expect(bridge.mailbox.syncStatus).not.toHaveBeenCalled();
+    }
+    expect(c.state.syncNotice).toBeNull();
   });
 
   it("lets another account finish while a scoped sync is stalled", async () => {
     const { bridge, c } = await ready();
-    const stalled = deferred<"complete" | "background">();
-    const independent = deferred<"complete" | "background">();
+    const stalled = deferred<SyncOutcome>();
+    const independent = deferred<SyncOutcome>();
     bridge.mailbox.syncScope = (account) => account === "demo" ? stalled.promise : independent.promise;
     const first = c.syncNow({ account: "demo", folder: "Archive" });
     const second = c.syncNow({ account: "other" });

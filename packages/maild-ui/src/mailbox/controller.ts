@@ -27,6 +27,8 @@ import type {
 const PAGE_SIZE = 50,
   MAX_ROWS = 1000;
 const MARK_READ_DWELL_MS = 1500;
+const BACKGROUND_SYNC_POLL_MS = 1000;
+const BACKGROUND_SYNC_WAIT_MS = 5 * 60 * 1000;
 export const folderKey = ({ account, folder }: FolderIdentity) =>
   JSON.stringify([account, folder]);
 export const messageKey = ({ account, folder, uid }: MessageIdentity) =>
@@ -229,6 +231,7 @@ export class MailboxController {
   private openingReads = new Map<string, Promise<void>>();
   private manualSeen = new Set<string>();
   private folderLoads = new Map<string, Promise<void>>();
+  private backgroundSyncs = new Map<string, { timer: ReturnType<typeof setTimeout> }>();
   private context = 0;
   private stopped = false;
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
@@ -327,6 +330,7 @@ export class MailboxController {
   }
   stop() {
     this.stopped = true;
+    this.cancelBackgroundSyncs();
     this.invalidate();
     if (this.refreshTimer) clearTimeout(this.refreshTimer);
   }
@@ -360,6 +364,8 @@ export class MailboxController {
     const reconnect =
       snapshot.connection_epoch !== before.connection_epoch ||
       before.phase !== "online";
+    if (snapshot.connection_epoch !== before.connection_epoch)
+      this.cancelBackgroundSyncs();
     if (snapshot.phase !== "online" || reconnect) this.invalidate();
     this.patch({ snapshot });
     if (snapshot.phase === "online") {
@@ -878,16 +884,64 @@ export class MailboxController {
     const scopes = this.state.syncingScopes;
     return scopes.has(undefined) || (account === undefined ? scopes.size > 0 : scopes.has(account));
   };
+  isSyncPending = (account = queryOf(this.state.scope).account) =>
+    this.isSyncing(account) ||
+    (account === undefined ? this.backgroundSyncs.size > 0 : this.backgroundSyncs.has(account));
+
+  private cancelBackgroundSyncs() {
+    for (const sync of this.backgroundSyncs.values()) clearTimeout(sync.timer);
+    this.backgroundSyncs.clear();
+    if (this.state.syncNotice !== null) this.patch({ syncNotice: null });
+  }
+
+  private async refreshAfterSync(account?: string) {
+    if (account !== undefined) await this.folderLoads.get(account);
+    await this.refresh();
+  }
+
+  private trackBackgroundSync(account: string, syncId: number) {
+    const mailbox = this.bridge.mailbox;
+    const status = mailbox.syncStatus?.bind(mailbox);
+    if (!status) return;
+    const deadline = Date.now() + BACKGROUND_SYNC_WAIT_MS;
+    const current = () => this.backgroundSyncs.get(account) === sync;
+    const poll = async () => {
+      if (!current()) return;
+      let result: { syncError?: string } = {};
+      try {
+        if (Date.now() < deadline && !(await status(account, syncId))) {
+          if (current()) sync.timer = setTimeout(poll, BACKGROUND_SYNC_POLL_MS);
+          return;
+        }
+      } catch (e) {
+        result = { syncError: describe(e, m.mailbox_error_sync()) };
+      }
+      if (!current()) return;
+      try {
+        await this.refreshAfterSync(account);
+      } finally {
+        if (current()) {
+          this.backgroundSyncs.delete(account);
+          this.patch({
+            syncNotice: this.backgroundSyncs.size ? m.mailbox_sync_background() : null,
+            ...result,
+          });
+        }
+      }
+    };
+    const sync = { timer: setTimeout(poll, BACKGROUND_SYNC_POLL_MS) };
+    this.backgroundSyncs.set(account, sync);
+  }
   /**
    * 「立即同步」：先敲醒后台检查新邮件（后台不支持时静默降级），再刷新当前列表。
    */
   syncNow = async (scope?: { account: string; folder?: string }) => {
     const account = scope?.account ?? queryOf(this.state.scope).account;
-    if (this.state.snapshot.phase !== "online" || this.stopped || this.isSyncing(account)) return;
+    if (this.state.snapshot.phase !== "online" || this.stopped || this.isSyncPending(account)) return;
+    const epoch = this.state.snapshot.connection_epoch;
     this.patch({
       syncingScopes: new Map(this.state.syncingScopes).set(account, { folder: scope?.folder }),
       syncError: null,
-      syncNotice: null,
     });
     const finish = (result: { syncError?: string; syncNotice?: string }) => {
       if (this.stopped) return;
@@ -899,7 +953,15 @@ export class MailboxController {
     let background = false;
     try {
       if (scope && this.bridge.mailbox.syncScope) {
-        background = (await this.bridge.mailbox.syncScope(scope.account, scope.folder)) === "background";
+        const outcome = await this.bridge.mailbox.syncScope(scope.account, scope.folder);
+        if (
+          outcome !== "complete" &&
+          !this.stopped &&
+          epoch === this.state.snapshot.connection_epoch
+        ) {
+          background = true;
+          this.trackBackgroundSync(scope.account, outcome.background.sync_id);
+        }
       } else {
         await this.bridge.mailbox.syncNow?.(account);
       }
@@ -908,8 +970,7 @@ export class MailboxController {
     }
     if (background) finish({ syncNotice: m.mailbox_sync_background() });
     try {
-      if (scope) await this.folderLoads.get(scope.account);
-      await this.refresh();
+      await this.refreshAfterSync(scope?.account);
     } finally {
       if (!background) finish(syncError === null ? {} : { syncError });
     }

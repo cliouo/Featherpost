@@ -90,7 +90,8 @@ export interface MailboxBridge {
    * 后台尚未提供时实现应静默降级；调用方随后照常刷新列表。
    */
   syncNow?(account?: string): Promise<void>;
-  syncScope?(account: string, folder?: string): Promise<"complete" | "background">;
+  syncScope?(account: string, folder?: string): Promise<"complete" | { background: { sync_id: number } }>;
+  syncStatus?(account: string, syncId: number): Promise<boolean>;
   /** 可选：在服务器上搜索更早的邮件（本地缓存有界）。返回远端摘要，不写本地库。 */
   serverSearch?(
     account: string,
