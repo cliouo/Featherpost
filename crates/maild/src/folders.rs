@@ -74,7 +74,9 @@ pub struct FolderRecord {
 /// 语义上最接近归档。`\Flagged` 是视图而不是容器，不映射。
 pub fn role_from_special_use(attribute: &str) -> Option<FolderRole> {
     let attribute = attribute.trim_start_matches('\\');
-    if attribute.eq_ignore_ascii_case("Sent") {
+    if attribute.eq_ignore_ascii_case("Inbox") {
+        Some(FolderRole::Inbox)
+    } else if attribute.eq_ignore_ascii_case("Sent") {
         Some(FolderRole::Sent)
     } else if attribute.eq_ignore_ascii_case("Drafts") {
         Some(FolderRole::Drafts)

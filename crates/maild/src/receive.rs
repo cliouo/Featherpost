@@ -1862,6 +1862,7 @@ fn special_use_token(attribute: &async_imap::types::NameAttribute<'_>) -> Option
         NameAttribute::Junk => "\\Junk",
         NameAttribute::Sent => "\\Sent",
         NameAttribute::Trash => "\\Trash",
+        NameAttribute::Extension(value) if value.eq_ignore_ascii_case("\\Inbox") => "\\Inbox",
         _ => return None,
     }
     .to_string())
@@ -1938,6 +1939,7 @@ async fn discover_folders(
                 .iter()
                 .position(|target| target.name.eq_ignore_ascii_case("INBOX"))
         })
+        .or_else(|| targets.iter().position(|target| target.role == Some(FolderRole::Inbox)))
     {
         targets[primary].is_primary = true;
         targets.swap(0, primary);

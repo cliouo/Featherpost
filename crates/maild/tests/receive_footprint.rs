@@ -14,6 +14,7 @@ use common::fake_mail::{FakeMail, ListReply};
 use cordis::Context;
 use maild::api::{dispatch, JsonRpcRequest};
 use maild::events::{AccountStateKind, MailAttachment, MailMessage};
+use maild::notify::Notifier;
 use maild::receive::{Receive, FETCH_BATCH_SIZE};
 use maild::store::Store;
 use maild::Accounts;
@@ -495,6 +496,58 @@ action = "drop"
         1
     );
     assert_eq!(server.imap_connections(), 1);
+    assembly.dispose().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn localized_inbox_without_inbox_runs_filters_and_notifies() {
+    let server = FakeMail::start().await.unwrap();
+    server.set_list_reply(ListReply::WithoutInbox);
+    server.add_mailbox("Archive", "\\Archive");
+    let inbox = "Posteingang";
+    server.add_mailbox(inbox, "\\Inbox");
+    for subject in ["Drop this", "Keep this"] {
+        server.deliver_to(
+            inbox,
+            "",
+            format!("From: sender@test.local\r\nSubject: {subject}\r\n\r\nbody\r\n").into_bytes(),
+        );
+    }
+
+    let ctx = Context::new();
+    let config = assembly_toml(
+        server.imap_addr.port(),
+        r#"
+[plugins.filters]
+[plugins.filters.config]
+[[plugins.filters.config.rules]]
+field = "subject"
+pattern = "Drop"
+action = "drop"
+
+[plugins.notify]
+[plugins.rules]
+[plugins.rules.config]
+notify_new_mail = true
+"#,
+    );
+    let mut assembly = maild::assemble(&ctx, &config).expect("装配成功");
+    assert!(assembly.errors.is_empty(), "装配错误: {:?}", assembly.errors);
+    tracked_sync(&ctx, None).await;
+
+    let store = ctx.get::<Store>().expect("store 服务");
+    let messages = store
+        .list_message_summaries(Some("e2e"), Some(inbox), 10, 0)
+        .unwrap();
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].subject, "Keep this");
+    let notifier = ctx.get::<Notifier>().expect("notifier 服务");
+    wait_until("收件箱新邮件通知", Duration::from_secs(5), || {
+        !notifier.sent().is_empty()
+    })
+    .await;
+    assert_eq!(notifier.sent().len(), 1);
+    assert!(notifier.sent()[0].body.contains("Keep this"));
     assembly.dispose().await;
 }
 
