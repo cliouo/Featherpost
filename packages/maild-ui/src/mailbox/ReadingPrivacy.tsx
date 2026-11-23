@@ -117,7 +117,7 @@ export function ReadingPrivacySection({ host, onChanged }: { host: Host; onChang
             <strong>{entry.value}</strong>
             <p>{entry.kind === 'domain' ? m.mailbox_reading_trusted_kind_domain() : m.mailbox_reading_trusted_kind_address()}</p>
           </div>
-          <button type="button" className="text-button" disabled={busy} onClick={() => void apply({ untrust: [entry.value] })}>
+          <button type="button" className="text-button danger" disabled={busy} onClick={() => void apply({ untrust: [entry.value] })}>
             {m.mailbox_reading_trusted_remove()}
           </button>
         </div>

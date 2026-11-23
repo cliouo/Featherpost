@@ -630,6 +630,7 @@ export function AccountMore({ profile, controller, disabled = false }: { profile
       onOpenChange={setOpen}
       forceClosed={s.closeLocked}
       triggerLabel={m.studio_account_more_label({ account: profile.display_name })}
+      triggerTitle={m.studio_account_more_label({ account: profile.display_name })}
       trigger={<>{m.studio_account_more()} <Icon name="more" /></>}
     >
       <button type="button" disabled={disabled || !s.online || s.busy || s.closeLocked} onClick={() => confirm(false)}>{profile.enabled ? m.studio_account_pause() : m.studio_account_enable()}</button>

@@ -76,6 +76,7 @@ function Row({
       <button
         className={`message-star${row.flagged ? " starred" : ""}`}
         disabled={s.busy || s.snapshot.phase !== "online"}
+        title={row.flagged ? m.mailbox_star_remove() : m.mailbox_star_add()}
         aria-label={row.flagged ? m.mailbox_star_remove() : m.mailbox_star_add()}
         aria-pressed={row.flagged}
         onClick={() =>

@@ -170,7 +170,7 @@ export function Activity({
                           {m.mailbox_activity_retry()}
                         </button>
                         <button
-                          className="text-button"
+                          className="text-button danger"
                           disabled={!s.online || s.busy !== null}
                           onClick={() =>
                             setDecision({ op, resolution: "discard" })
@@ -233,7 +233,11 @@ export function Activity({
               {m.mailbox_action_cancel()}
             </button>
             <button
-              className="primary-button"
+              className={
+                decision.resolution === "discard"
+                  ? "primary-button danger-button"
+                  : "primary-button"
+              }
               disabled={!s.online || s.busy !== null}
               onClick={async () => {
                 await controller.resolve(decision.op, decision.resolution);

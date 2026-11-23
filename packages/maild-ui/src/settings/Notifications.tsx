@@ -272,7 +272,7 @@ export function Notifications({
                 </Field>
                 <button
                   type="button"
-                  className="text-button"
+                  className="text-button danger"
                   aria-label={m.settings_quiet_hours_remove_label({ index: i + 1 })}
                   onClick={() =>
                     edit({

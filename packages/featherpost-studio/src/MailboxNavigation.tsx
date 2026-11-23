@@ -227,6 +227,7 @@ export function MailboxNavigation({
       />
       {filter ? (
         <button
+          title={m.studio_nav_filter_clear()}
           aria-label={m.studio_nav_filter_clear()}
           onClick={() => setFilter("")}
         >
@@ -405,7 +406,7 @@ export function MailboxNavigation({
             <strong>
               {m.studio_nav_directory_title({ count: ids.length })}
             </strong>
-            <span>⌄</span>
+            <span className="chevron" aria-hidden="true">⌄</span>
           </summary>
           <p>{m.studio_nav_directory_hint()}</p>
           <div className="directory-body">
@@ -610,6 +611,7 @@ function GroupManager({
           {editing && (
             <button
               type="button"
+              className="text-button"
               onClick={() => {
                 setEditing(null);
                 setName("");
@@ -639,6 +641,7 @@ function GroupManager({
               </button>
               {g.id !== OTHER_GROUP && (
                 <button
+                  className="danger-text"
                   title={m.studio_group_delete_hint()}
                   onClick={() => {
                     change((previous) => removeGroup(previous, g.id));

@@ -448,7 +448,7 @@ export function Editor({
             </span>
             <button
               type="button"
-              className="icon-button"
+              className="icon-button danger-action"
               aria-label={
                 sent ? m.compose_discard_sent() : m.compose_discard()
               }
@@ -535,7 +535,15 @@ function Confirm({ controller }: { controller: ComposeController }) {
           >
             {m.compose_confirm_back()}
           </button>
-          <button type="button" className="primary-button" onClick={action}>
+          <button
+            type="button"
+            className={
+              confirm === "discard"
+                ? "primary-button danger-button"
+                : "primary-button"
+            }
+            onClick={action}
+          >
             {labels[confirm][1]()}
           </button>
         </div>
