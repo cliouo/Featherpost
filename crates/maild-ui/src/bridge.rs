@@ -531,7 +531,8 @@ pub struct UiReadingPolicyPatch {
     pub untrust: Vec<String>,
 }
 
-/// ADR-0048：[`LOCALE_EVENT`] 的载荷与 `ui_locale` 的结果。`effective` 是 daemon 解析后的有序偏好；
+/// ADR-0048：[`LOCALE_EVENT`] 的载荷与 `ui_locale` 的结果。`effective` 是壳的有序语言列表：显式模式下
+/// 即 daemon 的 `effective`，跟随系统时是本进程的首选语言（M2，见 `shell_locale`）；
 /// `None` = 尚未取到或 daemon 不提供，webview 回落基础语言。协商由 webview 自己做。
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct UiLocale {
@@ -1042,8 +1043,8 @@ impl Bridge {
         Ok(UiReadingPolicy::from(result))
     }
 
-    /// ADR-0048：actor 手里当前的 `effective` 列表（连接快照或 `preferences/locale` 推送）。
-    /// 不发请求，离线也能读；webview 启动时先取一次，之后跟 [`LOCALE_EVENT`]。
+    /// ADR-0048：actor 手里当前 daemon 的 `effective` 列表（连接快照或 `preferences/locale` 推送）。
+    /// 不发请求，离线也能读。webview 拿到的是壳据此再解析的列表（M2，`shell_locale`）。
     pub fn locale(&self) -> UiLocale {
         UiLocale {
             effective: self.handle.state().locale,

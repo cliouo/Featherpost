@@ -179,29 +179,31 @@ pub(crate) async fn ui_set_reading_policy(
     state.bridge.set_reading_policy(&patch).await
 }
 
-/// ADR-0048：actor 手里当前的偏好列表；不发请求。webview 启动时取一次，之后跟 `maild://locale`。
+/// ADR-0048：壳手里当前的语言列表（M2：跟随系统时是本进程的语言）；不发请求。webview 启动时取
+/// 一次，之后跟 `maild://locale`。
 #[tauri::command]
 pub(crate) fn ui_locale(state: State<'_, AppState>) -> UiLocale {
-    state.bridge.locale()
+    state.locale.current()
 }
 
+/// 设置页的完整偏好；`effective` 换成壳的列表（M2）。
 #[tauri::command]
 pub(crate) async fn ui_locale_preference(
     state: State<'_, AppState>,
 ) -> Result<UiLocalePreference, UiError> {
-    state.bridge.locale_preference().await
+    crate::shell_locale::for_settings(state.bridge.locale_preference().await).await
 }
 
 #[tauri::command]
 pub(crate) async fn ui_set_locale_preference(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     update: UiLocaleUpdate,
 ) -> Result<UiLocalePreference, UiError> {
     let result = state.bridge.set_locale_preference(&update).await;
-    // ADR-0048 决策 8（M1）：系统画的文字下次启动跟随；`effective` 不变时没有推送，这里直接同步。
-    #[cfg(target_os = "macos")]
-    crate::macos_app_languages::sync_after_set(&result).await;
-    result
+    // ADR-0048 决策 8：系统画的文字下次启动跟随（M1 镜像）；`effective` 不变时没有推送，这里直接
+    // 同步，并把应答的 `effective` 换成壳的列表（M2），webview 按应答立即切换。
+    crate::shell_locale::after_set(&app, result).await
 }
 
 // ADR-0036: compose commands. No generic RPC or local-path entry point is exposed.
