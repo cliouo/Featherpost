@@ -331,6 +331,8 @@ pub struct UiFolder {
     pub role: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub is_primary: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_search_inbox: Option<bool>,
     pub present: bool,
     pub total: i64,
     pub unseen: i64,
@@ -348,6 +350,7 @@ impl From<MailFolder> for UiFolder {
             name: folder.name,
             role: folder.role,
             is_primary: folder.is_primary,
+            is_search_inbox: folder.is_search_inbox,
             present: folder.present,
             total: folder.total,
             unseen: folder.unseen,

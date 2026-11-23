@@ -326,7 +326,7 @@ struct ReceiveInner {
     /// 「立即同步」计数（ADR-0041 决策 4）：打断 IDLE / 轮询等待 / 断线退避睡眠。
     sync_wake: watch::Sender<u64>,
     manual_sync: Mutex<Option<ManualSync>>,
-    primary_folder: Mutex<Option<Option<String>>>,
+    inbox_folders: Mutex<Option<InboxFolders>>,
     /// 按需单封拉取的投递口（ADR-0041 决策 4），与 `search` 同构。
     fetch: mpsc::Sender<FetchByUidRequest>,
     fetch_rx: tokio::sync::Mutex<mpsc::Receiver<FetchByUidRequest>>,
@@ -337,6 +337,12 @@ struct ManualSync {
     queued: bool,
     folder: Option<String>,
     outcome: Option<Result<(), String>>,
+}
+
+#[derive(Clone)]
+pub(crate) struct InboxFolders {
+    pub primary: Option<String>,
+    pub search: Option<String>,
 }
 
 static NEXT_MANUAL_SYNC: AtomicU64 = AtomicU64::new(1);
@@ -447,7 +453,7 @@ impl Receive {
                 search_rx: tokio::sync::Mutex::new(search_rx),
                 sync_wake,
                 manual_sync: Mutex::new(None),
-                primary_folder: Mutex::new(None),
+                inbox_folders: Mutex::new(None),
                 fetch,
                 fetch_rx: tokio::sync::Mutex::new(fetch_rx),
                 state: Mutex::new(AccountStateInfo::plain(account, AccountStateKind::Connecting)),
@@ -461,9 +467,8 @@ impl Receive {
         self.inner.state.lock().unwrap().clone()
     }
 
-    /// None before the first successful LIST; Some(None) if it found no primary.
-    pub(crate) fn primary_folder(&self) -> Option<Option<String>> {
-        self.inner.primary_folder.lock().unwrap().clone()
+    pub(crate) fn inbox_folders(&self) -> Option<InboxFolders> {
+        self.inner.inbox_folders.lock().unwrap().clone()
     }
 
     /// 等到首次在线（e2e 同步点；超时由调用方包一层 `tokio::time::timeout`）。
@@ -1942,27 +1947,25 @@ async fn discover_folders(
         return Ok(targets);
     }
 
-    // 有主文件夹时排在最前；否则首个文件夹只用于挂 IDLE。
-    if let Some(primary) = targets
+    let inbox = targets
+        .iter()
+        .position(|target| target.name.eq_ignore_ascii_case("INBOX"))
+        .or(special_use_inbox)
+        .or_else(|| targets.iter().position(|target| target.role == Some(FolderRole::Inbox)));
+    let primary = targets
         .iter()
         .position(|target| target.name.eq_ignore_ascii_case(&cfg.mailbox))
-        .or_else(|| {
-            targets
-                .iter()
-                .position(|target| target.name.eq_ignore_ascii_case("INBOX"))
-        })
-        .or(special_use_inbox)
-        .or_else(|| targets.iter().position(|target| target.role == Some(FolderRole::Inbox)))
-    {
+        .or(inbox);
+    let inbox_folders = InboxFolders {
+        primary: primary.map(|index| targets[index].name.clone()),
+        search: inbox.map(|index| targets[index].name.clone()),
+    };
+    // 有主文件夹时排在最前；否则首个文件夹只用于挂 IDLE。
+    if let Some(primary) = primary {
         targets[primary].is_primary = true;
         targets.swap(0, primary);
     }
-    *receive.inner.primary_folder.lock().unwrap() = Some(
-        targets
-            .first()
-            .filter(|target| target.is_primary)
-            .map(|target| target.name.clone()),
-    );
+    *receive.inner.inbox_folders.lock().unwrap() = Some(inbox_folders);
     Ok(targets)
 }
 

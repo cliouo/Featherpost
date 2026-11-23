@@ -1734,13 +1734,13 @@ async fn list_folders(ctx: &Context, params: &Value) -> HandlerResult {
         Some(_) => return Err(invalid_params("`account` 必须是非空字符串或 null")),
     };
     let store = ctx.get::<Store>().ok_or_else(|| unavailable("store"))?;
-    let primary_folders: std::collections::HashMap<_, _> = ctx
+    let inbox_folders: std::collections::HashMap<_, _> = ctx
         .get::<Accounts>()
         .map(|accounts| {
             accounts
                 .snapshot()
                 .into_iter()
-                .filter_map(|(name, _, receive)| receive.primary_folder().map(|folder| (name, folder)))
+                .filter_map(|(name, _, receive)| receive.inbox_folders().map(|folders| (name, folders)))
                 .collect()
         })
         .unwrap_or_default();
@@ -1758,8 +1758,10 @@ async fn list_folders(ctx: &Context, params: &Value) -> HandlerResult {
                 "total": total,
                 "unseen": unseen,
             });
-            if let Some(primary) = primary_folders.get(&record.account) {
-                folder["is_primary"] = json!(primary.as_deref() == Some(record.name.as_str()));
+            if let Some(inboxes) = inbox_folders.get(&record.account) {
+                let name = Some(record.name.as_str());
+                folder["is_primary"] = json!(inboxes.primary.as_deref() == name);
+                folder["is_search_inbox"] = json!(inboxes.search.as_deref() == name);
             }
             out.push(folder);
         }

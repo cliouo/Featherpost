@@ -989,8 +989,14 @@ export class MailboxController {
   serverTargets(): FolderIdentity[] {
     const scope = this.state.scope;
     if (scope.kind !== "search") return [];
-    const inbox = (account: string) =>
-      this.foldersOf(account).find((f) => f.role === "inbox" && f.present)?.name ?? "INBOX";
+    const inbox = (account: string) => {
+      const folders = this.foldersOf(account).filter((f) => f.present);
+      const unknown = folders.filter((f) => f.is_search_inbox === undefined);
+      return folders.find((f) => f.is_search_inbox === true)?.name ??
+        unknown.find((f) => f.name.toUpperCase() === "INBOX")?.name ??
+        unknown.find((f) => f.role === "inbox")?.name ??
+        "INBOX";
+    };
     if (scope.query.account)
       return [{ account: scope.query.account, folder: scope.query.folder ?? inbox(scope.query.account) }];
     return this.state.snapshot.accounts

@@ -548,18 +548,7 @@ notify_new_mail = true
     assert!(assembly.errors.is_empty(), "装配错误: {:?}", assembly.errors);
     tracked_sync(&ctx, None).await;
 
-    let folders = dispatch(
-        &ctx,
-        &JsonRpcRequest {
-            jsonrpc: "2.0".into(),
-            method: "listFolders".into(),
-            params: json!({ "account": "e2e" }),
-            id: json!(1),
-        },
-    )
-    .await
-    .result
-    .unwrap();
+    let folders = folder_list(&ctx).await;
     let listed = folders["folders"].as_array().unwrap();
     let primary: Vec<_> = listed.iter().filter(|folder| folder["is_primary"] == true).collect();
     assert_eq!(primary.len(), 1);
@@ -585,6 +574,44 @@ notify_new_mail = true
     assert_eq!(notifier.sent().len(), 1);
     assert!(notifier.sent()[0].body.contains("Keep this"));
     assembly.dispose().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn configured_primary_does_not_override_the_search_inbox() {
+    let server = FakeMail::start().await.unwrap();
+    server.set_list_reply(ListReply::WithoutInbox);
+    server.add_mailbox("Archive", "\\Archive");
+    server.add_mailbox("Nested/INBOX", "");
+    server.add_mailbox("Posteingang", "\\Inbox");
+    let ctx = Context::new();
+    let config = assembly_toml(server.imap_addr.port(), r#"mailbox = "Archive""#);
+    let mut assembly = maild::assemble(&ctx, &config).expect("装配成功");
+    assert!(assembly.errors.is_empty(), "装配错误: {:?}", assembly.errors);
+    tracked_sync(&ctx, None).await;
+
+    let folders = folder_list(&ctx).await;
+    for folder in folders["folders"].as_array().unwrap() {
+        assert_eq!(folder["is_primary"], folder["name"] == "Archive");
+        assert_eq!(folder["is_search_inbox"], folder["name"] == "Posteingang");
+    }
+    let listed = folders["folders"].as_array().unwrap();
+    assert_eq!(listed.len(), 3);
+    assembly.dispose().await;
+}
+
+async fn folder_list(ctx: &Context) -> Value {
+    dispatch(
+        ctx,
+        &JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            method: "listFolders".into(),
+            params: json!({ "account": "e2e" }),
+            id: json!(1),
+        },
+    )
+    .await
+    .result
+    .unwrap()
 }
 
 #[tokio::test(flavor = "current_thread")]

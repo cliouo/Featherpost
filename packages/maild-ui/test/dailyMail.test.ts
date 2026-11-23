@@ -327,8 +327,13 @@ describe("服务器历史搜索与按需拉取", () => {
     const { bridge, c } = await ready();
     const loading = c.ensureFolders("demo", true);
     bridge.folderRequests.at(-1)!.d.resolve([
+      folder("Nested/INBOX", "inbox"),
       { ...folder("Archive", "archive"), is_primary: true },
-      { ...folder(inbox, "inbox"), is_primary: false },
+      {
+        ...folder(inbox, "inbox"),
+        is_primary: false,
+        ...(inbox === "Posteingang" ? { is_search_inbox: true } : {}),
+      },
     ]);
     await loading;
     expect(c.preferredInbox("demo")?.name).toBe("Archive");
