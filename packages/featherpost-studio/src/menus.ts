@@ -1,3 +1,4 @@
+import { m } from "@featherpost/i18n/messages";
 import { folderLabel } from "../../maild-ui/src/i18n";
 import { compatBlocksWrites } from "../../maild-ui/src/bridge/types";
 import type { UiFolder, UiSummary } from "../../maild-ui/src/bridge/types";
@@ -63,7 +64,7 @@ export function tidy(entries: readonly Maybe[]): MenuEntry[] {
 /** Shortens free text for use inside a menu label. */
 export function quoted(text: string, max = 18): string {
   const flat = text.replace(/\s+/g, " ").trim();
-  return `「${flat.length > max ? `${flat.slice(0, max)}…` : flat}」`;
+  return m.studio_menu_quoted({ text: flat.length > max ? `${flat.slice(0, max)}…` : flat });
 }
 
 /**
@@ -137,21 +138,21 @@ export function messageMenu(row: UiSummary, deps: MailMenuDeps, reading = false)
   const address = addressOnly(row.sender);
   const opened = !!s.selected && messageKey(s.selected) === key;
   return tidy([
-    !opened && !reading && { kind: "item", label: "打开", icon: "mail", run: () => controller.selectMessage(row) },
+    !opened && !reading && { kind: "item", label: m.studio_menu_open(), icon: "mail", run: () => controller.selectMessage(row) },
     separator,
-    { kind: "item", label: "回复", icon: "reply", disabled: !writable, run: () => deps.reply(row, "reply") },
-    { kind: "item", label: "回复全部", disabled: !writable, run: () => deps.reply(row, "reply_all") },
-    { kind: "item", label: "转发", icon: "forward", disabled: !writable, run: () => deps.reply(row, "forward") },
+    { kind: "item", label: m.studio_menu_reply(), icon: "reply", disabled: !writable, run: () => deps.reply(row, "reply") },
+    { kind: "item", label: m.studio_menu_reply_all(), disabled: !writable, run: () => deps.reply(row, "reply_all") },
+    { kind: "item", label: m.studio_menu_forward(), icon: "forward", disabled: !writable, run: () => deps.reply(row, "forward") },
     separator,
     {
       kind: "item",
-      label: row.seen ? "标为未读" : "标为已读",
+      label: row.seen ? m.studio_menu_mark_unread() : m.studio_menu_mark_read(),
       disabled: !writable,
       run: () => void controller.perform({ action: "mark", flag: "seen", value: !row.seen }, rows),
     },
     {
       kind: "item",
-      label: row.flagged ? "取消星标" : "添加星标",
+      label: row.flagged ? m.studio_menu_unstar() : m.studio_menu_star(),
       icon: "star",
       disabled: !writable,
       run: () => void controller.perform({ action: "mark", flag: "flagged", value: !row.flagged }, rows),
@@ -159,46 +160,46 @@ export function messageMenu(row: UiSummary, deps: MailMenuDeps, reading = false)
     separator,
     {
       kind: "item",
-      label: "归档",
+      label: m.studio_menu_archive(),
       icon: "archive",
       disabled: !writable || !hasArchive(deps, row),
       run: () => void controller.perform({ action: "archive" }, rows),
     },
     {
       kind: "submenu",
-      label: "移动到",
+      label: m.studio_menu_move_to(),
       icon: "folder",
       disabled: !writable,
       entries: moveTargets(deps, rows),
-      empty: "没有其他可用文件夹",
+      empty: m.studio_menu_no_other_folders(),
     },
     separator,
     !reading && {
       kind: "check",
-      label: "加入多选",
+      label: m.studio_menu_add_to_selection(),
       checked,
       disabled: s.busy,
       run: () => controller.toggle(row),
     },
     {
       kind: "submenu",
-      label: "复制邮件信息",
+      label: m.studio_menu_copy_info(),
       icon: "clip",
       entries: tidy([
-        !!address && { kind: "item", label: "发件人地址", run: () => deps.copy(address, "发件人地址") },
-        !!row.subject && { kind: "item", label: "邮件主题", run: () => deps.copy(row.subject, "邮件主题") },
+        !!address && { kind: "item", label: m.studio_menu_sender_address(), run: () => deps.copy(address, m.studio_menu_what_sender_address()) },
+        !!row.subject && { kind: "item", label: m.studio_menu_subject(), run: () => deps.copy(row.subject, m.studio_menu_what_subject()) },
       ]),
     },
     !!address && {
       kind: "item",
-      label: `查找 ${displayName(row.sender) || address} 的邮件`,
+      label: m.studio_menu_find_from({ name: displayName(row.sender) || address }),
       icon: "search",
       run: () => deps.findSender(address),
     },
     separator,
     {
       kind: "item",
-      label: "删除",
+      label: m.studio_menu_delete(),
       icon: "trash",
       tone: "danger",
       disabled: !writable,
@@ -216,32 +217,32 @@ export function batchMenu(deps: MailMenuDeps): MenuEntry[] {
     void controller.perform({ action: "mark", flag, value }, rows);
   const oneAccount = new Set(rows.map((r) => r.account)).size === 1;
   return tidy([
-    { kind: "label", label: `已选 ${rows.length} 封邮件` },
-    { kind: "item", label: "全部标为已读", disabled: !writable, run: mark("seen", true) },
-    { kind: "item", label: "全部标为未读", disabled: !writable, run: mark("seen", false) },
-    { kind: "item", label: "添加星标", icon: "star", disabled: !writable, run: mark("flagged", true) },
-    { kind: "item", label: "取消星标", disabled: !writable, run: mark("flagged", false) },
+    { kind: "label", label: m.studio_menu_selected_count({ count: rows.length }) },
+    { kind: "item", label: m.studio_menu_mark_all_read(), disabled: !writable, run: mark("seen", true) },
+    { kind: "item", label: m.studio_menu_mark_all_unread(), disabled: !writable, run: mark("seen", false) },
+    { kind: "item", label: m.studio_menu_star(), icon: "star", disabled: !writable, run: mark("flagged", true) },
+    { kind: "item", label: m.studio_menu_unstar(), disabled: !writable, run: mark("flagged", false) },
     separator,
     {
       kind: "item",
-      label: "归档",
+      label: m.studio_menu_archive(),
       icon: "archive",
       disabled: !writable,
       run: () => void controller.perform({ action: "archive" }, rows),
     },
     {
       kind: "submenu",
-      label: oneAccount ? "移动到" : "移动到（不能跨账户）",
+      label: oneAccount ? m.studio_menu_move_to() : m.studio_menu_move_to_single_account(),
       icon: "folder",
       disabled: !writable || !oneAccount,
       entries: oneAccount ? moveTargets(deps, rows) : [],
-      empty: "没有其他可用文件夹",
+      empty: m.studio_menu_no_other_folders(),
     },
     separator,
-    { kind: "item", label: "取消选择", disabled: controller.state.busy, run: () => controller.selectLoaded(false) },
+    { kind: "item", label: m.studio_menu_deselect(), disabled: controller.state.busy, run: () => controller.selectLoaded(false) },
     {
       kind: "item",
-      label: `删除 ${rows.length} 封邮件`,
+      label: m.studio_menu_delete_count({ count: rows.length }),
       icon: "trash",
       tone: "danger",
       disabled: !writable,
@@ -262,11 +263,11 @@ export function addressMenu(
   const named = !!name && name !== address;
   return tidy([
     named && { kind: "label", label: name },
-    { kind: "item", label: `写邮件给 ${address}`, icon: "drafts", disabled: !writable, run: () => deps.compose(address) },
-    { kind: "item", label: "复制邮件地址", icon: "clip", run: () => deps.copy(address, "邮件地址") },
-    named && { kind: "item", label: "复制名称和地址", run: () => deps.copy(sender.trim(), "名称和地址") },
+    { kind: "item", label: m.studio_menu_compose_to({ address }), icon: "drafts", disabled: !writable, run: () => deps.compose(address) },
+    { kind: "item", label: m.studio_menu_copy_address(), icon: "clip", run: () => deps.copy(address, m.studio_menu_what_address()) },
+    named && { kind: "item", label: m.studio_menu_copy_name_address(), run: () => deps.copy(sender.trim(), m.studio_menu_what_name_address()) },
     separator,
-    { kind: "item", label: "查找来往邮件", icon: "search", run: () => deps.findSender(address) },
+    { kind: "item", label: m.studio_menu_find_exchanged(), icon: "search", run: () => deps.findSender(address) },
   ]);
 }
 
@@ -285,18 +286,18 @@ export interface FolderMenuDeps {
 export function folderMenu(folder: UiFolder, deps: FolderMenuDeps): MenuEntry[] {
   const unavailable = !folder.present;
   return tidy([
-    { kind: "item", label: "打开", icon: folderIcon(folder), disabled: unavailable, run: deps.open },
-    { kind: "item", label: "只看未读", disabled: unavailable, run: deps.openUnread },
-    { kind: "item", label: "在此文件夹中搜索", icon: "search", disabled: unavailable, run: deps.searchIn },
+    { kind: "item", label: m.studio_menu_open(), icon: folderIcon(folder), disabled: unavailable, run: deps.open },
+    { kind: "item", label: m.studio_menu_unread_only(), disabled: unavailable, run: deps.openUnread },
+    { kind: "item", label: m.studio_menu_search_folder(), icon: "search", disabled: unavailable, run: deps.searchIn },
     separator,
     deps.expansion && {
       kind: "item",
-      label: deps.expansion.expanded ? "折叠子文件夹" : "展开子文件夹",
+      label: deps.expansion.expanded ? m.studio_menu_collapse_subfolders() : m.studio_menu_expand_subfolders(),
       run: deps.expansion.toggle,
     },
     separator,
-    { kind: "item", label: "立即同步", icon: "refresh", disabled: !deps.canSync, run: deps.sync },
-    { kind: "item", label: "复制文件夹路径", icon: "clip", run: () => deps.copy(folder.name, "文件夹路径") },
+    { kind: "item", label: m.studio_menu_sync_now(), icon: "refresh", disabled: !deps.canSync, run: deps.sync },
+    { kind: "item", label: m.studio_menu_copy_folder_path(), icon: "clip", run: () => deps.copy(folder.name, m.studio_menu_what_folder_path()) },
   ]);
 }
 
@@ -317,17 +318,17 @@ export interface AccountMenuDeps {
 /** Right-click on a mailbox (account) in the sidebar. */
 export function accountMenu(address: string, deps: AccountMenuDeps): MenuEntry[] {
   return tidy([
-    { kind: "item", label: "打开收件箱", icon: "inbox", disabled: !deps.canOpen, run: deps.open },
-    { kind: "item", label: "只看未读", disabled: !deps.canOpen, run: deps.openUnread },
+    { kind: "item", label: m.studio_menu_open_inbox(), icon: "inbox", disabled: !deps.canOpen, run: deps.open },
+    { kind: "item", label: m.studio_menu_unread_only(), disabled: !deps.canOpen, run: deps.openUnread },
     deps.expansion && {
       kind: "item",
-      label: deps.expansion.expanded ? "收起文件夹" : "展开文件夹",
+      label: deps.expansion.expanded ? m.studio_menu_collapse_folders() : m.studio_menu_expand_folders(),
       run: deps.expansion.toggle,
     },
     separator,
     {
       kind: "submenu",
-      label: "移到分组",
+      label: m.studio_menu_move_to_group(),
       icon: "folder",
       entries: tidy([
         ...deps.groups.map(
@@ -339,12 +340,12 @@ export function accountMenu(address: string, deps: AccountMenuDeps): MenuEntry[]
           }),
         ),
         separator,
-        { kind: "item", label: "管理分组…", run: deps.manageGroups },
+        { kind: "item", label: m.studio_menu_manage_groups(), run: deps.manageGroups },
       ]),
     },
-    { kind: "item", label: "复制邮箱地址", icon: "clip", run: () => deps.copy(address, "邮箱地址") },
+    { kind: "item", label: m.studio_menu_copy_mailbox_address(), icon: "clip", run: () => deps.copy(address, m.studio_menu_what_mailbox_address()) },
     separator,
-    { kind: "item", label: "账户设置…", icon: "settings", run: deps.settings },
+    { kind: "item", label: m.studio_menu_account_settings(), icon: "settings", run: deps.settings },
   ]);
 }
 
@@ -356,15 +357,15 @@ export function groupMenu(deps: {
   expansion?: { expanded: boolean; toggle(): void };
 }): MenuEntry[] {
   return tidy([
-    { kind: "item", label: "查看分组收件箱", icon: "inbox", run: deps.open },
-    { kind: "item", label: "只看未读", run: deps.openUnread },
+    { kind: "item", label: m.studio_menu_group_inbox(), icon: "inbox", run: deps.open },
+    { kind: "item", label: m.studio_menu_unread_only(), run: deps.openUnread },
     deps.expansion && {
       kind: "item",
-      label: deps.expansion.expanded ? "收起分组" : "展开分组",
+      label: deps.expansion.expanded ? m.studio_menu_collapse_group() : m.studio_menu_expand_group(),
       run: deps.expansion.toggle,
     },
     separator,
-    { kind: "item", label: "重命名或管理分组…", run: deps.manage },
+    { kind: "item", label: m.studio_menu_manage_group(), run: deps.manage },
   ]);
 }
 
@@ -376,10 +377,10 @@ export function selectionMenu(
   const query = text.replace(/\s+/g, " ").trim();
   if (!query) return [];
   return tidy([
-    { kind: "item", label: "复制", icon: "clip", hint: "⌘ C", run: () => deps.copy(text, "所选文字") },
+    { kind: "item", label: m.studio_menu_copy(), icon: "clip", hint: "⌘ C", run: () => deps.copy(text, m.studio_menu_what_selection()) },
     !!deps.search && query.length <= 200 && {
       kind: "item",
-      label: `搜索邮件${quoted(query)}`,
+      label: m.studio_menu_search_mail({ query: quoted(query) }),
       icon: "search",
       run: () => deps.search!(query),
     },

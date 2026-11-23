@@ -1,11 +1,14 @@
 import { createElement as h } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { expect, it, vi } from "vitest";
+import { applyEffectiveLocales } from "@featherpost/i18n";
+import { afterEach, expect, it, vi } from "vitest";
 import { ContextMenuHost } from "../../featherpost-studio/src/ContextMenu";
+import { clipboardCopier } from "../../featherpost-studio/src/studioActions";
 import {
   accountMenu,
   addressMenu,
   folderMenu,
+  groupMenu,
   isTextEntry,
   messageMenu,
   selectionMenu,
@@ -171,4 +174,50 @@ it("wraps the Studio root without adding markup", () => {
     h(ContextMenuHost, { selection: () => [], children: h("div", { className: "studio" }, "x") }),
   );
   expect(html).toBe('<div class="studio" data-state="closed" style="-webkit-touch-callout:none">x</div>');
+});
+
+afterEach(() => {
+  applyEffectiveLocales([]);
+});
+
+it("ADR-0048: every Studio menu follows the UI language", () => {
+  applyEffectiveLocales(["en"]);
+  const { d, row } = deps();
+  const flatten = (entries: MenuEntry[]): string[] =>
+    entries.flatMap((e) =>
+      e.kind === "separator" ? [] : e.kind === "submenu" ? [e.label, e.empty ?? "", ...flatten(e.entries)] : [e.label],
+    );
+  const copy = vi.fn();
+  const all = [
+    ...messageMenu({ ...row, sender: "Lin <lin@example.com>", subject: "Agenda" }, d),
+    ...messageMenu(row, deps({ checked: [row, summary("INBOX", "2")] }).d),
+    ...addressMenu("Lin <lin@example.com>", { compose: vi.fn(), copy, findSender: vi.fn() }, true),
+    ...folderMenu(folder("Archive", "archive"), {
+      open: vi.fn(), openUnread: vi.fn(), searchIn: vi.fn(), sync: vi.fn(), copy, canSync: true,
+      expansion: { expanded: true, toggle: vi.fn() },
+    }),
+    ...accountMenu("lin@example.com", {
+      open: vi.fn(), openUnread: vi.fn(), canOpen: true, groups: [], group: "", assign: vi.fn(),
+      manageGroups: vi.fn(), copy, settings: vi.fn(), expansion: { expanded: false, toggle: vi.fn() },
+    }),
+    ...groupMenu({ open: vi.fn(), openUnread: vi.fn(), manage: vi.fn(), expansion: { expanded: true, toggle: vi.fn() } }),
+    ...selectionMenu("quarterly review", { copy, search: vi.fn() }),
+  ];
+  const texts = flatten(all);
+  expect(texts).toContain("Reply All");
+  expect(texts).toContain("Delete 2 Messages");
+  expect(texts).toContain("Search Mail for “quarterly review”");
+  for (const text of texts) expect(text).not.toMatch(/[\u3000-\u303f\u4e00-\u9fff]/);
+  find(addressMenu("Lin <lin@example.com>", { compose: vi.fn(), copy, findSender: vi.fn() }, true), "Copy Email Address").run();
+  expect(copy).toHaveBeenCalledWith("lin@example.com", "email address");
+
+  const notify = vi.fn();
+  const original = globalThis.navigator;
+  Object.defineProperty(globalThis, "navigator", { value: undefined, configurable: true });
+  try {
+    clipboardCopier(notify)("x", "email address");
+  } finally {
+    Object.defineProperty(globalThis, "navigator", { value: original, configurable: true });
+  }
+  expect(notify).toHaveBeenCalledWith("Can't access the clipboard");
 });
