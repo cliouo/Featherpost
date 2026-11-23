@@ -286,17 +286,20 @@ export function MailboxNavigation({
             {open &&
               visible.map((id) => {
                 const opened = !unified && expanded === id;
+                const name = label(id);
+                const email = address(id);
+                const hasAddress = name.trim() !== email.trim();
                 const syncing = mail.syncingScopes.has(id);
                 return (
                   <div
-                    className={`account-tree grouped-account ${opened ? "account-expanded" : ""} ${active && selectedAccount === id ? "account-selected" : ""}`}
+                    className={`account-tree grouped-account ${hasAddress ? "account-has-address" : ""} ${opened ? "account-expanded" : ""} ${active && selectedAccount === id ? "account-selected" : ""}`}
                     key={id}
                   >
                     <button
                       className="account-heading"
                       aria-busy={syncing || undefined}
                       aria-expanded={unified ? undefined : opened}
-                      title={`${label(id)}\n${address(id)}`}
+                      title={hasAddress ? `${name}\n${email}` : name}
                       onClick={() =>
                         opened ? setExpanded(undefined) : selectAccount(id)
                       }
@@ -341,22 +344,31 @@ export function MailboxNavigation({
                         ⌄
                       </span>
                       <span className="account-mark">
-                        {label(id).slice(0, 1).toLocaleUpperCase()}
+                        {name.slice(0, 1).toLocaleUpperCase()}
                       </span>
                       <span className="account-identity">
-                        <strong>{label(id)}</strong>
-                        <small>{address(id)}</small>
+                        <strong>{name}</strong>
+                        {hasAddress && <small>{email}</small>}
                       </span>
                       <SyncCount className="account-count" count={count(id)} busy={syncing} />
                     </button>
-                    {opened &&
-                      (mailbox.foldersOf(id).some((f) => f.present) ? (
-                        folders(id, accountMatches(id) ? "" : needle)
-                      ) : (
-                        <p className="nav-no-results">
-                          {m.studio_nav_folders_missing_check()}
-                        </p>
-                      ))}
+                    {!unified && (
+                      <div
+                        className="account-folders"
+                        aria-hidden={!opened}
+                        inert={!opened}
+                      >
+                        <div>
+                          {mailbox.foldersOf(id).some((f) => f.present) ? (
+                            folders(id, accountMatches(id) ? "" : needle)
+                          ) : (
+                            <p className="nav-no-results">
+                              {m.studio_nav_folders_missing_check()}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -647,7 +659,9 @@ function GroupManager({
           <label className="mailbox-assignment" key={id}>
             <span>
               <strong>{label(id)}</strong>
-              <small>{address(id)}</small>
+              {label(id).trim() !== address(id).trim() && (
+                <small>{address(id)}</small>
+              )}
             </span>
             <Choice
               aria-label={m.studio_group_assignment_label({ mailbox: label(id) })}

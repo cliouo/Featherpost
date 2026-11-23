@@ -6,12 +6,15 @@ import { Icon } from "../app/Icon";
 import { useStore } from "../host/hooks";
 import { messageKey, scopeTitle, type MailboxController } from "./controller";
 import { displayName, fullDate, isoDateTime, plural, shortDate } from "./format";
+import { useSelectedRowScroll } from "./listScroll";
 function Row({
   row,
   controller,
+  selectedRef,
 }: {
   row: UiSummary;
   controller: MailboxController;
+  selectedRef: (el: HTMLLIElement | null) => void;
 }) {
   useUiLocale();
   const s = controller.state,
@@ -19,6 +22,7 @@ function Row({
     checked = s.checked.some((i) => messageKey(i) === messageKey(row));
   return (
     <li
+      ref={selected ? selectedRef : undefined}
       className={`message-row${row.seen ? "" : " unread"}${selected ? " selected" : ""}${checked ? " checked" : ""}${row.deleted ? " deleted" : ""}`}
     >
       <input
@@ -89,9 +93,11 @@ function Row({
 function RemoteRow({
   row,
   controller,
+  selectedRef,
 }: {
   row: UiSummary;
   controller: MailboxController;
+  selectedRef: (el: HTMLLIElement | null) => void;
 }) {
   useUiLocale();
   const s = controller.state,
@@ -100,6 +106,7 @@ function RemoteRow({
     fetched = s.remote.fetched.includes(key);
   return (
     <li
+      ref={selected ? selectedRef : undefined}
       className={`message-row remote-row${selected ? " selected" : ""}`}
     >
       <span className="remote-mark" aria-hidden="true" />
@@ -132,7 +139,13 @@ function RemoteRow({
   );
 }
 /** 搜索结果之后：服务器历史邮件（本地缓存有界）。 */
-function RemoteResults({ controller }: { controller: MailboxController }) {
+function RemoteResults({
+  controller,
+  selectedRef,
+}: {
+  controller: MailboxController;
+  selectedRef: (el: HTMLLIElement | null) => void;
+}) {
   useUiLocale();
   const s = useStore(controller.store);
   const r = s.remote;
@@ -176,7 +189,12 @@ function RemoteResults({ controller }: { controller: MailboxController }) {
       {r.rows.length > 0 && (
         <ul className="remote-list">
           {r.rows.map((row) => (
-            <RemoteRow key={messageKey(row)} row={row} controller={controller} />
+            <RemoteRow
+              key={messageKey(row)}
+              row={row}
+              controller={controller}
+              selectedRef={selectedRef}
+            />
           ))}
         </ul>
       )}
@@ -192,6 +210,19 @@ export function MessageList({ controller }: { controller: MailboxController }) {
       s.rows.every((r) =>
         s.checked.some((i) => messageKey(i) === messageKey(r)),
       );
+  const selectedKey = s.selected ? messageKey(s.selected) : null;
+  const {
+    listRef,
+    setSelectedRowRef,
+    setPendingIntent,
+    revealSelected,
+    cancelScroll,
+  } = useSelectedRowScroll<HTMLUListElement, HTMLLIElement>(
+    selectedKey,
+    s.scope,
+    s.rows,
+    s.remote.rows,
+  );
   return (
     <section className="list-pane" aria-label={m.mailbox_list_label()}>
       <header className="list-title" data-tauri-drag-region="deep">
@@ -255,7 +286,9 @@ export function MessageList({ controller }: { controller: MailboxController }) {
         </div>
       )}
       <ul
+        ref={listRef}
         className="message-list"
+        onWheel={cancelScroll}
         onKeyDown={(e) => {
           if(e.target instanceof HTMLInputElement)return;
           const buttons=Array.from(e.currentTarget.querySelectorAll<HTMLButtonElement>(':scope > .message-row > .message-hit'));
@@ -263,13 +296,25 @@ export function MessageList({ controller }: { controller: MailboxController }) {
           if(e.key===' '&&s.checked.length){e.preventDefault();controller.toggle(s.rows[index],e.shiftKey);return;}
           if(!['ArrowDown','ArrowUp'].includes(e.key))return;
           e.preventDefault();const next=Math.max(0,Math.min(buttons.length-1,index+(e.key==='ArrowDown'?1:-1)));
-          buttons[next]?.focus();controller.selectMessage(s.rows[next]);
+          const intent={repeat:e.repeat,revealGroupHeader:e.key==='ArrowUp'};
+          setPendingIntent(intent);
+          buttons[next]?.focus({preventScroll:true});
+          const before=controller.state.selected?messageKey(controller.state.selected):null;
+          controller.selectMessage(s.rows[next]);
+          if(before===messageKey(s.rows[next])){setPendingIntent(null);revealSelected(intent);}
         }}
       >
         {s.rows.map((row) => (
-          <Row key={messageKey(row)} row={row} controller={controller} />
+          <Row
+            key={messageKey(row)}
+            row={row}
+            controller={controller}
+            selectedRef={setSelectedRowRef}
+          />
         ))}
-        {s.scope.kind === "search" && <RemoteResults controller={controller} />}
+        {s.scope.kind === "search" && (
+          <RemoteResults controller={controller} selectedRef={setSelectedRowRef} />
+        )}
       </ul>
       <footer className="list-foot">
         <span>

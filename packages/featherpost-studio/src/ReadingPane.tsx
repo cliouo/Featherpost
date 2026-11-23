@@ -1,5 +1,6 @@
 import { m } from "@featherpost/i18n/messages";
-import { useState } from "react";
+import { useRef, useState } from "react";
+import { PopoverMenu } from "../../maild-ui/src/app/PopoverMenu";
 import type { Host } from "../../maild-ui/src/host/host";
 import { useDarkShell } from "../../maild-ui/src/app/theme";
 import { readingDocumentUrl } from "./readingTheme";
@@ -37,6 +38,62 @@ import { useContextMenu } from "./ContextMenu";
 import { addressMenu, messageMenu } from "./menus";
 import { useStudioActions } from "./studioActions";
 import { useMailMenu } from "./Workspace";
+
+function ReaderMoreMenu({
+  seen,
+  threadOpen,
+  canToggleSeen,
+  canOpenThread,
+  onToggleSeen,
+  onOpenThread,
+}: {
+  seen?: boolean;
+  threadOpen: boolean;
+  canToggleSeen: boolean;
+  canOpenThread: boolean;
+  onToggleSeen(): void;
+  onOpenThread(): void;
+}) {
+  const [open, setOpen] = useState(false);
+  const openRef = useRef(open);
+  openRef.current = open;
+  const run = (action: () => void) => {
+    if (openRef.current) setOpen(false);
+    action();
+  };
+  return (
+    <PopoverMenu
+      className="reader-menu"
+      triggerClassName="icon-button"
+      panelClassName="reader-menu-panel"
+      panelRole="menu"
+      open={open}
+      onOpenChange={setOpen}
+      triggerLabel={m.studio_reader_more()}
+      triggerTitle={m.studio_reader_more()}
+      trigger={<Icon name="more" />}
+    >
+      <button
+        type="button"
+        role="menuitem"
+        disabled={!canToggleSeen}
+        onClick={() => run(onToggleSeen)}
+      >
+        {seen ? m.studio_reader_mark_unread() : m.studio_reader_mark_read()}
+      </button>
+      <button
+        type="button"
+        role="menuitem"
+        disabled={!canOpenThread}
+        onClick={() => run(onOpenThread)}
+      >
+        {threadOpen
+          ? m.studio_reader_thread_hide()
+          : m.studio_reader_thread_show()}
+      </button>
+    </PopoverMenu>
+  );
+}
 
 export function ReadingPane({
   host,
@@ -127,43 +184,15 @@ export function ReadingPane({
         >
           <Icon name="star" />
         </button>
-        <details
-          className="reader-menu"
+        <ReaderMoreMenu
           key={row ? messageKey(row) : "empty"}
-          data-shortcuts-off
-        >
-          <summary
-            className="icon-button"
-            aria-label={m.studio_reader_more()}
-            title={m.studio_reader_more()}
-          >
-            <Icon name="more" />
-          </summary>
-          <div className="reader-menu-panel">
-            <button
-              disabled={!row || !writable}
-              onClick={(e) => {
-                e.currentTarget.closest("details")?.removeAttribute("open");
-                void controller.toggleSelected("seen");
-              }}
-            >
-              {row?.seen
-                ? m.studio_reader_mark_unread()
-                : m.studio_reader_mark_read()}
-            </button>
-            <button
-              disabled={!row || s.snapshot.phase !== "online"}
-              onClick={(e) => {
-                e.currentTarget.closest("details")?.removeAttribute("open");
-                void controller.openThread();
-              }}
-            >
-              {s.threadOpen
-                ? m.studio_reader_thread_hide()
-                : m.studio_reader_thread_show()}
-            </button>
-          </div>
-        </details>
+          seen={row?.seen}
+          threadOpen={s.threadOpen}
+          canToggleSeen={!!row && writable}
+          canOpenThread={!!row && s.snapshot.phase === "online"}
+          onToggleSeen={() => void controller.toggleSelected("seen")}
+          onOpenThread={() => void controller.openThread()}
+        />
         <span className="spacer" />
         {dark && row && body.mode === "html" && (
           <button
