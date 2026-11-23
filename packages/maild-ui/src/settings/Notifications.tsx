@@ -1,4 +1,5 @@
 import { m } from "@featherpost/i18n/messages";
+import { accountLabel } from "./accountLabel";
 
 import { useStore } from "../host/hooks";
 import { useUiLocale } from "../i18n";
@@ -148,7 +149,7 @@ export function Notifications({
                     }
                   />
                   {m.settings_notifications_mute_account({
-                    name: p.display_name || p.address,
+                    name: accountLabel(p),
                   })}
                   <small>{p.address}</small>
                 </label>

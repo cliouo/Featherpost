@@ -7,6 +7,7 @@ import { useState, type ReactNode } from "react";
 import { useStore } from "../../../maild-ui/src/host/hooks";
 import type { AccountProfile, Endpoint, ProbeStage } from "../../../maild-ui/src/settings/types";
 import { SettingsController, newDraft } from "../../../maild-ui/src/settings/controller";
+import { accountLabel } from "../../../maild-ui/src/settings/accountLabel";
 import {
   CREDENTIAL_LABEL,
   QUICK_PROVIDERS,
@@ -619,7 +620,7 @@ export function AccountMore({ profile, controller, disabled = false }: { profile
     controller.confirmAccount(profile, remove);
   };
   return <details className="account-more">
-    <summary aria-label={m.studio_account_more_label({ account: profile.display_name })}>{m.studio_account_more()} <Icon name="more" /></summary>
+    <summary aria-label={m.studio_account_more_label({ account: accountLabel(profile) })}>{m.studio_account_more()} <Icon name="more" /></summary>
     <div>
       <button type="button" disabled={disabled || !s.online || s.busy || s.closeLocked} onClick={() => confirm(false)}>{profile.enabled ? m.studio_account_pause() : m.studio_account_enable()}</button>
       <button type="button" className="danger" disabled={disabled || !s.online || s.busy || s.closeLocked} onClick={() => confirm(true)}>{m.studio_account_remove()}</button>
@@ -644,9 +645,9 @@ export function Accounts({ controller }: { controller: SettingsController }) {
         const expanded = s.editor?.id === p.id;
         return <article className={`studio-account${expanded ? " expanded" : ""}`} key={p.id}>
           <div className="account-row">
-            <span className="account-monogram" aria-hidden="true">{(p.display_name || p.address).slice(0,1)}</span>
+            <span className="account-monogram" aria-hidden="true">{accountLabel(p).slice(0,1).toUpperCase()}</span>
             <div className="account-details">
-              <strong>{p.display_name || p.address}</strong><p>{p.address}</p>
+              <strong>{accountLabel(p)}</strong>{accountLabel(p) !== p.address.trim() && <p>{p.address}</p>}
               {p.incoming.provider && <small>{providerName(s.packages?.plugins, p.incoming.provider)}</small>}
               {!p.editable && <small>{m.studio_account_readonly()}</small>}
               {needsRepair(p) && <p className="account-alert" role="status">

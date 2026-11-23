@@ -4,6 +4,7 @@ import { useState, type ReactNode } from "react";
 import { useStore } from "../host/hooks";
 import type { AccountProfile, Endpoint, ProbeStage } from "./types";
 import { SettingsController, newDraft } from "./controller";
+import { accountLabel } from "./accountLabel";
 import {
   CREDENTIAL_LABEL,
   QUICK_PROVIDERS,
@@ -315,7 +316,7 @@ function Editor({ controller }: { controller: SettingsController }) {
               ? m.settings_account_editor_manage()
               : m.settings_account_editor_connect()}
           </div>
-          <h2>{e.id ? draft.display_name : m.settings_account_add()}</h2>
+          <h2>{e.id ? accountLabel(draft) : m.settings_account_add()}</h2>
         </div>
         <button
           type="button"
@@ -702,11 +703,11 @@ export function Accounts({ controller }: { controller: SettingsController }) {
       {s.profiles?.map((p) => (
         <article className="account-row" key={p.id}>
           <span className="account-monogram" aria-hidden="true">
-            {(p.display_name || p.address).slice(0, 1)}
+            {accountLabel(p).slice(0, 1).toUpperCase()}
           </span>
           <div className="account-details">
-            <strong>{p.display_name || p.address}</strong>
-            <p>{p.address}</p>
+            <strong>{accountLabel(p)}</strong>
+            {accountLabel(p) !== p.address.trim() && <p>{p.address}</p>}
             <small>
               <span
                 className={`status-dot${p.runtime.state === "online" ? "" : " warn"}`}
@@ -743,7 +744,7 @@ export function Accounts({ controller }: { controller: SettingsController }) {
               <details className="account-more">
                 <summary
                   aria-label={m.settings_account_more_label({
-                    name: p.display_name,
+                    name: accountLabel(p),
                   })}
                 >
                   {m.settings_account_more()}
