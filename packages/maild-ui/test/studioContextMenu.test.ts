@@ -97,6 +97,18 @@ it("offers every other present folder as a direct move target", () => {
   expect(controller.perform).toHaveBeenLastCalledWith({ action: "move", target: "Receipts" }, [row]);
 });
 
+it("distinguishes colliding localized move destinations and preserves their server targets", () => {
+  applyEffectiveLocales(["zh-CN"]);
+  const { d, row, controller } = deps();
+  d.controller.foldersOf = () => [folder("Drafts", "drafts"), folder("草稿箱")];
+  const move = sub(messageMenu(row, d), "移动到");
+  expect(labels(move.entries)).toEqual(["草稿箱 · Drafts", "草稿箱 · 草稿箱"]);
+  (move.entries[0] as Item).run();
+  expect(controller.perform).toHaveBeenLastCalledWith({ action: "move", target: "Drafts" }, [row]);
+  (move.entries[1] as Item).run();
+  expect(controller.perform).toHaveBeenLastCalledWith({ action: "move", target: "草稿箱" }, [row]);
+});
+
 it("disables writes while offline, busy or version-blocked, but keeps reading actions", () => {
   for (const state of [
     { snapshot: { ...online, phase: "connecting" as const } },

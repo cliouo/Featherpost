@@ -38,7 +38,7 @@ const folders: Record<Locale, Record<string, string>> = {
   "zh-CN": {
     inbox: "收件箱",
     sent: "已发送",
-    drafts: "草稿",
+    drafts: "草稿箱",
     archive: "归档",
     trash: "已删除",
     junk: "垃圾邮件",
@@ -93,6 +93,7 @@ describe.each(LOCALES)("folderLabel（%s）", (locale) => {
         { name: "Archive", display_name: "Archive", role: "custom" },
         { name: "INBOX/Finance", display_name: "INBOX/Finance", role: "inbox" },
         { name: "设计项目", display_name: "设计项目", role: "archive" },
+        { name: "草稿", display_name: "草稿", role: "drafts" },
         { name: "Projects", display_name: "Projects", role: "constructor" },
       ])
         expect(folderLabel(folder)).toBe(folder.display_name);

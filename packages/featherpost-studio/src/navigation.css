@@ -36,10 +36,10 @@
   align-items: center;
   gap: 6px;
   width: 100%;
-  min-height: 31px;
+  min-height: 30px;
   text-align: left;
   color: var(--studio-muted);
-  padding: 5px 7px;
+  padding: 5px 3px;
 }
 .group-toggle strong {
   font-size: 11px;
@@ -60,16 +60,16 @@
 .grouped-account {
   margin: 0;
   border: 0;
-  padding: 0 0 0 8px;
+  padding: 0;
 }
 .grouped-account .account-heading {
   display: flex;
   align-items: center;
-  gap: 8px;
-  min-height: 36px;
+  gap: 7px;
+  min-height: 48px;
   width: 100%;
   text-align: left;
-  padding: 7px 4px;
+  padding: 7px 0;
 }
 .grouped-account .account-heading > .chevron {
   font-size: 12px;
@@ -87,26 +87,37 @@
   font-weight: 450;
 }
 .grouped-account .account-identity small {
-  display: none;
+  /* Reserve the address line so expansion cannot recenter the icon or count. */
+  display: block;
+  visibility: hidden;
+  font-size: 9px;
+  margin-top: 3px;
 }
 .grouped-account.account-expanded .account-identity strong {
   font-weight: 600;
 }
 .grouped-account.account-expanded .account-identity small,
 .directory-body .grouped-account .account-identity small {
-  display: block;
-  font-size: 9px;
-  margin-top: 3px;
+  visibility: visible;
+}
+.grouped-account .account-mark {
+  border: 1px solid var(--studio-border);
+  border-radius: 50%;
+  background: none;
+  color: var(--studio-secondary);
 }
 .grouped-account.account-selected .account-mark {
-  background: var(--studio-primary);
-  color: var(--studio-on-primary);
+  color: var(--studio-text);
+  border-color: var(--studio-mark);
 }
-.grouped-account .folder-tree {
-  margin: 2px 0 9px;
+.folder-directory {
+  position: relative;
+  margin: 4px 0 15px 20px;
+  border-left: 1px solid var(--studio-border);
+  padding-left: 13px;
 }
 .empty-group {
-  margin: 3px 8px 12px 24px;
+  margin: 3px 8px 12px 18px;
   font-size: 10px;
   color: var(--studio-muted);
   line-height: 1.6;

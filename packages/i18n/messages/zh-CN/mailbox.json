@@ -153,7 +153,7 @@
   "mailbox_expiry_yesterday": "昨天 {time} 到期",
   "mailbox_folder_all": "全部邮件",
   "mailbox_folder_archive": "归档",
-  "mailbox_folder_drafts": "草稿",
+  "mailbox_folder_drafts": "草稿箱",
   "mailbox_folder_inbox": "收件箱",
   "mailbox_folder_junk": "垃圾邮件",
   "mailbox_folder_sent": "已发送",
