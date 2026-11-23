@@ -168,15 +168,15 @@ export function MailboxNavigation({
       );
   }, [activeGroup, grouping, ids, mail.scope.kind, mailbox]);
 
-  function selectAccount(id: string, unread = false) {
+  function selectAccount(id: string, { unread = false, matchFilter = true } = {}) {
     const available = mailbox.foldersOf(id).filter((f) => f.present);
-    const matches = !accountMatches(id)
+    const matches = matchFilter && !accountMatches(id)
       ? matchingFolderNames(mailbox.foldersOf(id), needle)
       : undefined;
     const firstMatch = matches?.values().next().value;
     const target =
       available.find((f) => f.name === firstMatch) ??
-      available.find((f) => f.role === "inbox") ??
+      mailbox.preferredInbox(id) ??
       available[0];
     if (!target) {
       setExpanded(id);
@@ -303,8 +303,8 @@ export function MailboxNavigation({
                       onContextMenu={(e) =>
                         menu.offer(e, () =>
                           accountMenu(address(id), {
-                            open: () => selectAccount(id),
-                            openUnread: () => selectAccount(id, true),
+                            open: () => selectAccount(id, { matchFilter: false }),
+                            openUnread: () => selectAccount(id, { matchFilter: false, unread: true }),
                             canOpen: mailbox
                               .foldersOf(id)
                               .some((f) => f.present),

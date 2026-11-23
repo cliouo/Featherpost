@@ -1734,12 +1734,22 @@ async fn list_folders(ctx: &Context, params: &Value) -> HandlerResult {
         Some(_) => return Err(invalid_params("`account` 必须是非空字符串或 null")),
     };
     let store = ctx.get::<Store>().ok_or_else(|| unavailable("store"))?;
+    let primary_folders: std::collections::HashMap<_, _> = ctx
+        .get::<Accounts>()
+        .map(|accounts| {
+            accounts
+                .snapshot()
+                .into_iter()
+                .filter_map(|(name, _, receive)| receive.primary_folder().map(|folder| (name, folder)))
+                .collect()
+        })
+        .unwrap_or_default();
     let folders = tokio::task::spawn_blocking(move || {
         let records = store.list_folders(account.as_deref())?;
         let mut out = Vec::with_capacity(records.len());
         for record in records {
             let (total, unseen) = store.folder_counts(record.id)?;
-            out.push(json!({
+            let mut folder = json!({
                 "account": record.account,
                 "name": record.name,
                 "display_name": record.display_name,
@@ -1747,7 +1757,11 @@ async fn list_folders(ctx: &Context, params: &Value) -> HandlerResult {
                 "present": record.present,
                 "total": total,
                 "unseen": unseen,
-            }));
+            });
+            if let Some(primary) = primary_folders.get(&record.account) {
+                folder["is_primary"] = json!(primary.as_deref() == Some(record.name.as_str()));
+            }
+            out.push(folder);
         }
         Ok::<_, rusqlite::Error>(out)
     })

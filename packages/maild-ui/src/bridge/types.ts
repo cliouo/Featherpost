@@ -53,6 +53,7 @@ export interface UiFolder {
   name: string;
   display_name: string;
   role: string;
+  is_primary?: boolean;
   present: boolean;
   total: number;
   unseen: number;

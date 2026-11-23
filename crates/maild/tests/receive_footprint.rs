@@ -548,6 +548,23 @@ notify_new_mail = true
     assert!(assembly.errors.is_empty(), "装配错误: {:?}", assembly.errors);
     tracked_sync(&ctx, None).await;
 
+    let folders = dispatch(
+        &ctx,
+        &JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            method: "listFolders".into(),
+            params: json!({ "account": "e2e" }),
+            id: json!(1),
+        },
+    )
+    .await
+    .result
+    .unwrap();
+    let listed = folders["folders"].as_array().unwrap();
+    let primary: Vec<_> = listed.iter().filter(|folder| folder["is_primary"] == true).collect();
+    assert_eq!(primary.len(), 1);
+    assert_eq!(primary[0]["name"], inbox);
+
     let store = ctx.get::<Store>().expect("store 服务");
     if let Some(guessed_inbox) = guessed_inbox {
         assert_eq!(

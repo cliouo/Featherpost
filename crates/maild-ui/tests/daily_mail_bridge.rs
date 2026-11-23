@@ -237,6 +237,15 @@ async fn tauri_frontend_syncs_discovers_and_pulls_server_history_into_an_isolate
         .unwrap();
     assert_eq!(outcome, UiMailboxSyncOutcome::Complete);
     assert!(bridge.get_message("legacy", "Archive", "1").await.is_ok());
+    let folders = bridge.list_folders("legacy").await.unwrap();
+    assert_eq!(
+        folders.iter().find(|folder| folder.name == "INBOX").unwrap().is_primary,
+        Some(true)
+    );
+    assert_eq!(
+        folders.iter().find(|folder| folder.name == "Archive").unwrap().is_primary,
+        Some(false)
+    );
 
     // ADR-0048 决策 7：回复引用块跟随桥传来的界面语言；不传时按 daemon 偏好（跟随系统语言）。
     let english = bridge

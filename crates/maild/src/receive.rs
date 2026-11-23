@@ -326,6 +326,7 @@ struct ReceiveInner {
     /// 「立即同步」计数（ADR-0041 决策 4）：打断 IDLE / 轮询等待 / 断线退避睡眠。
     sync_wake: watch::Sender<u64>,
     manual_sync: Mutex<Option<ManualSync>>,
+    primary_folder: Mutex<Option<Option<String>>>,
     /// 按需单封拉取的投递口（ADR-0041 决策 4），与 `search` 同构。
     fetch: mpsc::Sender<FetchByUidRequest>,
     fetch_rx: tokio::sync::Mutex<mpsc::Receiver<FetchByUidRequest>>,
@@ -446,6 +447,7 @@ impl Receive {
                 search_rx: tokio::sync::Mutex::new(search_rx),
                 sync_wake,
                 manual_sync: Mutex::new(None),
+                primary_folder: Mutex::new(None),
                 fetch,
                 fetch_rx: tokio::sync::Mutex::new(fetch_rx),
                 state: Mutex::new(AccountStateInfo::plain(account, AccountStateKind::Connecting)),
@@ -457,6 +459,11 @@ impl Receive {
 
     pub fn state(&self) -> AccountStateInfo {
         self.inner.state.lock().unwrap().clone()
+    }
+
+    /// None before the first successful LIST; Some(None) if it found no primary.
+    pub(crate) fn primary_folder(&self) -> Option<Option<String>> {
+        self.inner.primary_folder.lock().unwrap().clone()
     }
 
     /// 等到首次在线（e2e 同步点；超时由调用方包一层 `tokio::time::timeout`）。
@@ -893,7 +900,7 @@ async fn serve(
 
     let capabilities = read_capabilities(&mut session, &cfg.account).await;
     // LIST → 登记文件夹 → 决定本次会话的同步目标。targets[0] 用于挂 IDLE。
-    let mut targets = match discover_folders(&mut session, cfg, ctx).await {
+    let mut targets = match discover_folders(&mut session, cfg, ctx, receive).await {
         Ok(mut targets) if !targets.is_empty() => {
             targets.truncate(MAX_SYNCED_FOLDERS);
             targets
@@ -1885,6 +1892,7 @@ async fn discover_folders(
     session: &mut async_imap::Session<Conn>,
     cfg: &ReceiveConfig,
     ctx: &Context,
+    receive: &Receive,
 ) -> Result<Vec<SyncTarget>, ReceiveError> {
     if store_of(ctx).is_none() {
         return Ok(vec![fallback_target(cfg)]);
@@ -1949,6 +1957,12 @@ async fn discover_folders(
         targets[primary].is_primary = true;
         targets.swap(0, primary);
     }
+    *receive.inner.primary_folder.lock().unwrap() = Some(
+        targets
+            .first()
+            .filter(|target| target.is_primary)
+            .map(|target| target.name.clone()),
+    );
     Ok(targets)
 }
 
@@ -2121,7 +2135,7 @@ impl SyncSession<'_> {
         targets: &mut Vec<SyncTarget>,
     ) -> Option<bool> {
         let request = receive.take_manual_sync();
-        let outcome = match discover_folders(session, cfg, self.ctx).await {
+        let outcome = match discover_folders(session, cfg, self.ctx, receive).await {
             Err(error) => Err(error),
             Ok(mut refreshed) => {
                 self.selected = None;

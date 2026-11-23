@@ -382,6 +382,13 @@ export class MailboxController {
   foldersOf(account: string) {
     return this.folders.get(account) ?? [];
   }
+  preferredInbox(account: string) {
+    const present = this.foldersOf(account).filter((f) => f.present);
+    const unclassified = present.filter((f) => f.is_primary === undefined);
+    return present.find((f) => f.is_primary === true) ??
+      unclassified.find((f) => f.name.toUpperCase() === "INBOX") ??
+      unclassified.find((f) => f.role === "inbox");
+  }
   async ensureFolders(account: string, force = false): Promise<void> {
     if (this.state.snapshot.phase !== "online" || this.stopped) return;
     const existing = this.folderLoads.get(account);
@@ -447,7 +454,7 @@ export class MailboxController {
     const choose = () => {
       const fs = this.foldersOf(account);
       const f =
-        fs.find((f) => f.role === "inbox" && f.present) ??
+        this.preferredInbox(account) ??
         fs.find((f) => f.present) ??
         fs[0];
       if (f) this.selectFolder(f);
@@ -982,8 +989,7 @@ export class MailboxController {
   serverTargets(): FolderIdentity[] {
     const scope = this.state.scope;
     if (scope.kind !== "search") return [];
-    const inbox = (account: string) =>
-      this.foldersOf(account).find((f) => f.role === "inbox" && f.present)?.name ?? "INBOX";
+    const inbox = (account: string) => this.preferredInbox(account)?.name ?? "INBOX";
     if (scope.query.account)
       return [{ account: scope.query.account, folder: scope.query.folder ?? inbox(scope.query.account) }];
     return this.state.snapshot.accounts
