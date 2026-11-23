@@ -1,4 +1,5 @@
 import { m } from "@featherpost/i18n/messages";
+import { accountLabel } from "./accountLabel";
 
 import type { UiSnapshot } from "../bridge/types";
 import { Store } from "../host/store";
@@ -670,7 +671,7 @@ export class SettingsController {
             : [...profiles, p],
           editor: null,
           probe: null,
-          notice: m.settings_account_saved({ name: p.display_name || p.address }),
+          notice: m.settings_account_saved({ name: accountLabel(p) }),
         });
         this.changed();
       },
@@ -685,14 +686,14 @@ export class SettingsController {
     this.ask(
       remove
         ? m.settings_account_confirm_remove_title({
-            name: p.display_name || p.address,
+            name: accountLabel(p),
           })
         : p.enabled
           ? m.settings_account_confirm_pause_title({
-              name: p.display_name || p.address,
+              name: accountLabel(p),
             })
           : m.settings_account_confirm_enable_title({
-              name: p.display_name || p.address,
+              name: accountLabel(p),
             }),
       `${p.address}\n${remove ? m.settings_account_confirm_remove_body() : m.settings_account_confirm_toggle_body()}`,
       remove
@@ -861,7 +862,7 @@ export class SettingsController {
   dependencies(id: string) {
     return (this.store.getSnapshot().profiles ?? [])
       .filter((p) => p.incoming.provider === id || p.outgoing?.provider === id)
-      .map((p) => `${p.display_name || p.address} (${p.address})`);
+      .map((p) => `${accountLabel(p)} (${p.address})`);
   }
   async pickPackage(kind: PackageKind) {
     let selected: PackageChoice | null = null;

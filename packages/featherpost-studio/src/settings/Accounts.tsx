@@ -8,6 +8,7 @@ import { PopoverMenu } from "../../../maild-ui/src/app/PopoverMenu";
 import { useStore } from "../../../maild-ui/src/host/hooks";
 import type { AccountProfile, Endpoint, ProbeStage } from "../../../maild-ui/src/settings/types";
 import { SettingsController, newDraft } from "../../../maild-ui/src/settings/controller";
+import { accountLabel } from "../../../maild-ui/src/settings/accountLabel";
 import {
   CREDENTIAL_LABEL,
   QUICK_PROVIDERS,
@@ -629,8 +630,8 @@ export function AccountMore({ profile, controller, disabled = false }: { profile
       open={open}
       onOpenChange={setOpen}
       forceClosed={s.closeLocked}
-      triggerLabel={m.studio_account_more_label({ account: profile.display_name })}
-      triggerTitle={m.studio_account_more_label({ account: profile.display_name })}
+      triggerLabel={m.studio_account_more_label({ account: accountLabel(profile) })}
+      triggerTitle={m.studio_account_more_label({ account: accountLabel(profile) })}
       trigger={<>{m.studio_account_more()} <Icon name="more" /></>}
     >
       <button type="button" disabled={disabled || !s.online || s.busy || s.closeLocked} onClick={() => confirm(false)}>{profile.enabled ? m.studio_account_pause() : m.studio_account_enable()}</button>
@@ -656,9 +657,9 @@ export function Accounts({ controller }: { controller: SettingsController }) {
         const expanded = s.editor?.id === p.id;
         return <article className={`studio-account${expanded ? " expanded" : ""}`} key={p.id}>
           <div className="account-row">
-            <span className="account-monogram" aria-hidden="true">{(p.display_name || p.address).slice(0,1)}</span>
+            <span className="account-monogram" aria-hidden="true">{accountLabel(p).slice(0,1).toUpperCase()}</span>
             <div className="account-details">
-              <strong>{p.display_name || p.address}</strong><p>{p.address}</p>
+              <strong>{accountLabel(p)}</strong>{accountLabel(p) !== p.address.trim() && <p>{p.address}</p>}
               {p.incoming.provider && <small>{providerName(s.packages?.plugins, p.incoming.provider)}</small>}
               {!p.editable && <small>{m.studio_account_readonly()}</small>}
               {needsRepair(p) && <p className="account-alert" role="status">
