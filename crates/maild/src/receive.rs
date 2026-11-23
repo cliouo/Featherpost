@@ -892,7 +892,7 @@ async fn serve(
     identify_client(&mut session, &cfg.account).await;
 
     let capabilities = read_capabilities(&mut session, &cfg.account).await;
-    // LIST → 登记文件夹 → 决定本次会话的同步目标。主文件夹在 targets[0]。
+    // LIST → 登记文件夹 → 决定本次会话的同步目标。targets[0] 用于挂 IDLE。
     let mut targets = match discover_folders(&mut session, cfg, ctx).await {
         Ok(mut targets) if !targets.is_empty() => {
             targets.truncate(MAX_SYNCED_FOLDERS);
@@ -950,7 +950,7 @@ async fn serve(
                 let _ = session.logout().await;
                 return Ok(());
             }
-            sync.sync_folder(&mut session, &targets[0], true).await?;
+            sync.sync_folder(&mut session, &targets[0]).await?;
             if tokio::time::Instant::now() >= next_sweep {
                 sync.sweep_secondary_folders(&mut session, &targets).await?;
                 next_sweep = tokio::time::Instant::now() + sweep_interval;
@@ -959,7 +959,7 @@ async fn serve(
             // IMAP 会话的选中状态不需要并发保护（ADR-0027 决策 8）。
             drain_pending_ops(&mut session, &cfg.account, ctx, &mut sync.selected, capabilities)
                 .await?;
-            // 清完队列可能已经离开主文件夹，IDLE 必须挂回去。
+            // 清完队列可能已经离开首个文件夹，IDLE 必须挂回去。
             ensure_selected(
                 &mut session,
                 &mut sync.selected,
@@ -1043,7 +1043,7 @@ async fn serve(
         }
     } else {
         // 每次连接先立即抓取一次，之后由共享 scheduler 产生固定延迟 tick。
-        sync.sync_folder(&mut session, &targets[0], true).await?;
+        sync.sync_folder(&mut session, &targets[0]).await?;
         drain_pending_ops(&mut session, &cfg.account, ctx, &mut sync.selected, capabilities)
             .await?;
         let scheduler = scheduler.ok_or_else(|| {
@@ -1077,7 +1077,7 @@ async fn serve(
 
         loop {
             drain_unsolicited(&session);
-            // 轮询路径的一轮完整同步：主文件夹 → 到期则 sweep → 清写队列。
+            // 轮询路径的一轮完整同步：首个文件夹 → 到期则 sweep → 清写队列。
             let full_round = tokio::select! {
                 tick = tick_rx.recv() => {
                     if tick.is_none() {
@@ -1140,7 +1140,7 @@ async fn serve(
             if !full_round {
                 continue;
             }
-            sync.sync_folder(&mut session, &targets[0], true).await?;
+            sync.sync_folder(&mut session, &targets[0]).await?;
             if tokio::time::Instant::now() >= next_sweep {
                 sync.sweep_secondary_folders(&mut session, &targets).await?;
                 next_sweep = tokio::time::Instant::now() + sweep_interval;
@@ -1741,6 +1741,7 @@ struct SyncTarget {
     display_name: String,
     role: Option<FolderRole>,
     folder_id: Option<i64>,
+    is_primary: bool,
 }
 
 /// 当前已选中的 mailbox 及其 `UIDVALIDITY` / `HIGHESTMODSEQ`。
@@ -1875,6 +1876,7 @@ fn fallback_target(cfg: &ReceiveConfig) -> SyncTarget {
         display_name: folders::decode_modified_utf7(&cfg.mailbox),
         role: Some(FolderRole::Inbox),
         folder_id: None,
+        is_primary: true,
     }
 }
 
@@ -1919,6 +1921,7 @@ async fn discover_folders(
             display_name: entry.display_name,
             role: entry.role,
             folder_id: Some(folder_id),
+            is_primary: false,
         });
     }
     drop(store);
@@ -1926,13 +1929,19 @@ async fn discover_folders(
         return Ok(targets);
     }
 
-    // 主文件夹：配置指定的 mailbox 优先，其次 role=inbox，最后第一个。
-    let primary = targets
+    // 有主文件夹时排在最前；否则首个文件夹只用于挂 IDLE。
+    if let Some(primary) = targets
         .iter()
         .position(|target| target.name.eq_ignore_ascii_case(&cfg.mailbox))
-        .or_else(|| targets.iter().position(|t| t.role == Some(FolderRole::Inbox)))
-        .unwrap_or(0);
-    targets.swap(0, primary);
+        .or_else(|| {
+            targets
+                .iter()
+                .position(|target| target.name.eq_ignore_ascii_case("INBOX"))
+        })
+    {
+        targets[primary].is_primary = true;
+        targets.swap(0, primary);
+    }
     Ok(targets)
 }
 
@@ -2109,19 +2118,13 @@ impl SyncSession<'_> {
                 self.selected = None;
                 let result = match &request {
                     Some((_, Some(name))) => {
-                        match refreshed
-                            .iter()
-                            .enumerate()
-                            .find(|(_, target)| &target.name == name)
-                        {
-                            Some((index, target)) => {
-                                self.sync_folder(session, target, index == 0).await
-                            }
+                        match refreshed.iter().find(|target| &target.name == name) {
+                            Some(target) => self.sync_folder(session, target).await,
                             None => Ok(()),
                         }
                     }
                     Some((_, None)) if !refreshed.is_empty() => {
-                        match self.sync_folder(session, &refreshed[0], true).await {
+                        match self.sync_folder(session, &refreshed[0]).await {
                             Ok(()) => self
                                 .sweep_secondary_folders(session, &refreshed)
                                 .await
@@ -2160,7 +2163,7 @@ impl SyncSession<'_> {
         self.folders.get_mut(name).expect("刚插入")
     }
 
-    /// 逐个增量同步非主文件夹，结束后回到主文件夹（IDLE 必须挂在它上面）。
+    /// 逐个增量同步剩余文件夹，结束后回到首个文件夹（IDLE 挂在它上面）。
     ///
     /// 单个文件夹失败不终止整轮：一个权限受限或刚被删掉的 mailbox 不该让整账户掉线。
     async fn sweep_secondary_folders(
@@ -2170,7 +2173,7 @@ impl SyncSession<'_> {
     ) -> Result<Option<ReceiveError>, ReceiveError> {
         let mut first_error = None;
         for target in targets.iter().skip(1) {
-            if let Err(error) = self.sync_folder(session, target, false).await {
+            if let Err(error) = self.sync_folder(session, target).await {
                 eprintln!(
                     "[maild/receive] 账户 {}: 同步文件夹 {} 失败（继续）: {error}",
                     self.account, target.display_name
@@ -2204,7 +2207,6 @@ impl SyncSession<'_> {
         &mut self,
         session: &mut async_imap::Session<Conn>,
         target: &SyncTarget,
-        is_primary: bool,
     ) -> Result<(), ReceiveError> {
         let account = self.account;
         let ctx = self.ctx;
@@ -2264,7 +2266,14 @@ impl SyncSession<'_> {
                 let query = format!("{start_uid}:*");
                 let state = self.folder_mut(&target.name);
                 fetch_and_deliver(
-                    session, ctx, account, target, state, &query, start_uid, is_primary, 0,
+                    session,
+                    ctx,
+                    account,
+                    target,
+                    state,
+                    &query,
+                    start_uid,
+                    0,
                     &mut highest,
                 )
                 .await?;
@@ -2279,8 +2288,15 @@ impl SyncSession<'_> {
                 for chunk in uids.chunks(FETCH_BATCH_SIZE) {
                     let set = chunk.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
                     fetch_and_deliver(
-                        session, ctx, account, target, state, &set, start_uid, is_primary,
-                        notify_from, &mut highest,
+                        session,
+                        ctx,
+                        account,
+                        target,
+                        state,
+                        &set,
+                        start_uid,
+                        notify_from,
+                        &mut highest,
                     )
                     .await?;
                 }
@@ -2530,7 +2546,6 @@ async fn fetch_and_deliver(
     state: &mut FolderSession,
     uid_set: &str,
     start_uid: u32,
-    is_primary: bool,
     notify_from: u32,
     highest: &mut u32,
 ) -> Result<(), ReceiveError> {
@@ -2559,7 +2574,7 @@ async fn fetch_and_deliver(
         message.folder_role = FolderRole::to_column(target.role).to_string();
         apply_flags(&mut message, &fetch);
 
-        if is_primary && uid >= notify_from {
+        if target.is_primary && uid >= notify_from {
             // `mail/received` waterfall 过滤链；R4 无 filters 插件，终端默认 Accept
             let decision = ctx
                 .waterfall::<MailReceived, _>(message.clone(), |_m| {

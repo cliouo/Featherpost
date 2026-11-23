@@ -457,13 +457,35 @@ async fn successful_list_without_inbox_syncs_selectable_folders() {
     server.add_mailbox("Archive", "");
     server.deliver_to("Archive", "", raw_mail("Startup mail", "body"));
     let ctx = Context::new();
-    let mut assembly =
-        maild::assemble(&ctx, &assembly_toml(server.imap_addr.port(), "")).expect("装配成功");
+    let config = assembly_toml(
+        server.imap_addr.port(),
+        r#"
+[plugins.filters]
+[plugins.filters.config]
+[[plugins.filters.config.rules]]
+field = "subject"
+pattern = "mail"
+action = "drop"
+"#,
+    );
+    let mut assembly = maild::assemble(&ctx, &config).expect("装配成功");
+    assert!(
+        assembly.errors.is_empty(),
+        "装配错误: {:?}",
+        assembly.errors
+    );
     let store = ctx.get::<Store>().expect("store 服务");
     wait_until("启动同步归档邮件", Duration::from_secs(5), || {
         store.count_messages(Some("e2e"), Some("Archive")).unwrap() == 1
     })
     .await;
+
+    server.deliver_to("Archive", "", raw_mail("Manual sync mail", "body"));
+    tracked_sync(&ctx, Some("Archive")).await;
+    assert_eq!(
+        store.count_messages(Some("e2e"), Some("Archive")).unwrap(),
+        2
+    );
 
     server.add_mailbox("Projects", "");
     server.deliver_to("Projects", "", raw_mail("New folder mail", "body"));
