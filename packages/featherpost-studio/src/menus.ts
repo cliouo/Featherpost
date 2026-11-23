@@ -1,5 +1,4 @@
 import { m } from "@featherpost/i18n/messages";
-import { folderLabel } from "../../maild-ui/src/i18n";
 import { compatBlocksWrites } from "../../maild-ui/src/bridge/types";
 import type { UiFolder, UiSummary } from "../../maild-ui/src/bridge/types";
 import type { IconName } from "../../maild-ui/src/host/types";
@@ -9,7 +8,7 @@ import {
   type MailboxState,
 } from "../../maild-ui/src/mailbox/controller";
 import { addressOnly, displayName } from "../../maild-ui/src/mailbox/format";
-import { folderIcon } from "./navigation";
+import { folderIcon, folderNavigationLabels } from "./navigation";
 
 /**
  * Studio context menus are plain data: each surface builds entries from the
@@ -105,12 +104,13 @@ export function canWrite(state: Pick<MailboxState, "snapshot" | "busy">): boolea
 
 function moveTargets(deps: MailMenuDeps, rows: UiSummary[]): MenuEntry[] {
   const account = rows[0]?.account ?? "";
-  return deps.controller
+  const folders = deps.controller
     .foldersOf(account)
-    .filter((f) => f.present && !rows.some((r) => r.folder === f.name))
-    .map((f) => ({
+    .filter((f) => f.present && !rows.some((r) => r.folder === f.name));
+  const labels = folderNavigationLabels(folders);
+  return folders.map((f) => ({
       kind: "item",
-      label: folderLabel(f),
+      label: labels.get(f)!,
       icon: folderIcon(f),
       run: () => void deps.controller.perform({ action: "move", target: f.name }, rows),
     }));

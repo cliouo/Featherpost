@@ -1,9 +1,12 @@
 import { afterEach, expect, it } from "vitest";
+import { applyEffectiveLocales } from "@featherpost/i18n";
 import { MailboxController } from "../src/mailbox/controller";
 import {
   filterUnread,
   searchMail,
   folderTree,
+  folderNavigationLabels,
+  matchingFolderNames,
   selectedFolder,
 } from "../../featherpost-studio/src/navigation";
 import { FakeBridge, online, folder, summary, flush } from "./fakeBridge";
@@ -189,4 +192,101 @@ it("keeps real nested and non-selectable folders without inventing or mixing acc
       "Projects/Featherpost",
     ),
   ).toBe(false);
+});
+
+it("distinguishes localized sibling folder names without hiding either server folder", () => {
+  const drafts = [folder("Draft", "drafts"), folder("Drafts", "drafts")];
+  const before = structuredClone(drafts);
+  applyEffectiveLocales(["zh-CN"]);
+  try {
+    const labels = folderNavigationLabels(drafts);
+    expect(drafts.map((f) => labels.get(f))).toEqual([
+      "草稿箱 · Draft",
+      "草稿箱 · Drafts",
+    ]);
+    for (const f of drafts) {
+      const scope = { kind: "folder" as const, account: f.account, folder: f.name, title: labels.get(f)! };
+      expect(drafts.filter((other) => selectedFolder(scope, other.account, other.name))).toEqual([f]);
+    }
+    expect(drafts).toEqual(before);
+    applyEffectiveLocales(["en"]);
+    expect([...folderNavigationLabels(drafts).values()]).toEqual([
+      "Drafts · Draft",
+      "Drafts · Drafts",
+    ]);
+  } finally {
+    applyEffectiveLocales([]);
+  }
+});
+
+it("uses real paths for equal provider labels and leaves unique nested labels compact", () => {
+  const sameNames = [
+    { ...folder("Drafts"), display_name: "草稿" },
+    { ...folder("&g0l6Pw-"), display_name: "草稿" },
+  ];
+  expect([...folderNavigationLabels(sameNames).values()]).toEqual([
+    "草稿 · Drafts",
+    "草稿 · &g0l6Pw-",
+  ]);
+  const child = folder("Projects/Reviews");
+  expect(folderNavigationLabels([child], true).get(child)).toBe("Reviews");
+  expect(folderNavigationLabels([child]).get(child)).toBe("Projects/Reviews");
+  const custom = { ...folder("Projects/Archive", "archive"), display_name: "Private archive" };
+  expect(folderNavigationLabels([custom], true).get(custom)).toBe("Private archive");
+});
+
+it("finds complete displayed folder labels, including collision qualifiers and nested leaves", () => {
+  const folders = [
+    folder("Draft", "drafts"),
+    folder("Drafts", "drafts"),
+    folder("Projects"),
+    folder("Projects/Draft", "drafts"),
+    folder("Projects/Drafts", "drafts"),
+  ];
+  expect([...matchingFolderNames(folders, "草稿箱 · Draft")]).toEqual([
+    "Draft", "Drafts",
+  ]);
+  expect([...matchingFolderNames(folders, "草稿箱 · Drafts")]).toEqual([
+    "Drafts",
+  ]);
+  expect([...matchingFolderNames(folders, "草稿箱 · Projects/Drafts")]).toEqual([
+    "Projects/Drafts",
+  ]);
+  expect([...matchingFolderNames(folders, "projects/draft")]).toEqual([
+    "Projects/Draft", "Projects/Drafts",
+  ]);
+});
+
+it("ranks an exact displayed folder label before longer matches regardless of server order", () => {
+  const folders = [folder("Drafts", "drafts"), folder("Draft", "drafts")];
+  applyEffectiveLocales(["zh-CN"]);
+  try {
+    expect([...matchingFolderNames(folders, "草稿箱 · Draft")]).toEqual([
+      "Draft", "Drafts",
+    ]);
+    expect([...matchingFolderNames(folders, "draft")]).toEqual([
+      "Draft", "Drafts",
+    ]);
+    expect([...matchingFolderNames([
+      { ...folder("Projects"), present: false },
+      folder("Projects/Reviews"),
+    ], "Projects")]).toEqual(["Projects/Reviews"]);
+  } finally {
+    applyEffectiveLocales([]);
+  }
+});
+
+it("calls the system Drafts 草稿箱 while preserving a custom 草稿 folder and both identities", () => {
+  const folders = [folder("Drafts", "drafts"), folder("草稿")];
+  applyEffectiveLocales(["zh-CN"]);
+  try {
+    expect([...folderNavigationLabels(folders).values()]).toEqual(["草稿箱", "草稿"]);
+    expect(folders.map((f) => f.name)).toEqual(["Drafts", "草稿"]);
+    for (const f of folders) {
+      const scope = { kind: "folder" as const, account: f.account, folder: f.name, title: f.display_name };
+      expect(folders.filter((other) => selectedFolder(scope, other.account, other.name))).toEqual([f]);
+    }
+  } finally {
+    applyEffectiveLocales([]);
+  }
 });

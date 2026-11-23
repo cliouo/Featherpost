@@ -1,5 +1,5 @@
 import { m } from "@featherpost/i18n/messages";
-import { folderLabel, uiLocale, useUiLocale } from "../../maild-ui/src/i18n";
+import { useUiLocale } from "../../maild-ui/src/i18n";
 import { Choice } from "../../maild-ui/src/settings/Choice";
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import type { Host } from "../../maild-ui/src/host/host";
@@ -23,6 +23,8 @@ import {
 import {
   folderTree,
   folderIcon,
+  folderNavigationLabels,
+  matchingFolderNames,
   selectedFolder,
   scopeContext,
   searchMail,
@@ -311,6 +313,7 @@ export function Studio({
                 nodes={folderTree(mailbox.foldersOf(account))}
                 depth={0}
                 filter={filter}
+                matchingNames={filter ? matchingFolderNames(mailbox.foldersOf(account), filter) : undefined}
                 messageContext={view === "unified"}
                 active={state.activeViewId === MAIL}
                 mailbox={mailbox}
@@ -380,6 +383,7 @@ function FolderBranches({
   nodes,
   depth,
   filter,
+  matchingNames,
   active,
   messageContext,
   mailbox,
@@ -388,6 +392,7 @@ function FolderBranches({
   nodes: FolderNode[];
   depth: number;
   filter: string;
+  matchingNames?: ReadonlySet<string>;
   active: boolean;
   messageContext?: boolean;
   mailbox: MailboxController;
@@ -413,26 +418,19 @@ function FolderBranches({
     );
   const matches = (n: FolderNode): boolean =>
     !filter ||
-    `${n.folder.name} ${n.folder.display_name} ${folderLabel(n.folder)}`
-      .toLocaleLowerCase(uiLocale())
-      .includes(filter) ||
+    !!matchingNames?.has(n.folder.name) ||
     n.children.some(matches);
+  const labels = folderNavigationLabels(nodes.map((n) => n.folder), depth > 0);
   return (
-    <div className="folder-branches">
+    <div className={`folder-branches ${depth === 0 ? "folder-directory" : ""}`}>
       {nodes.filter(matches).map(({ folder, children }) => {
         const expanded = !!filter || !collapsed.has(folder.name);
-        const rawLabel =
-          depth &&
-          folder.display_name === folder.name &&
-          /[/.]/.test(folder.name)
-            ? folder.name.split(/[/.]/).pop()
-            : folder.display_name || folder.name;
-        const label = folderLabel({ ...folder, display_name: rawLabel ?? folder.name });
+        const label = labels.get(folder)!;
         const count = folder.role === "drafts" ? folder.total : folder.unseen;
         return (
           <div key={folder.name}>
             <div
-              className={`folder-row ${active && current(folder.account, folder.name) ? "is-active" : ""}`}
+              className={`folder-row ${depth === 0 ? "folder-root-row" : ""} ${active && current(folder.account, folder.name) ? "is-active" : ""}`}
               style={{ "--depth": depth } as CSSProperties}
               onContextMenu={(e) =>
                 menu.offer(e, () =>
@@ -491,6 +489,7 @@ function FolderBranches({
                 depth={depth + 1}
                 messageContext={messageContext}
                 filter={filter}
+                matchingNames={matchingNames}
                 active={active}
                 mailbox={mailbox}
                 actions={actions}

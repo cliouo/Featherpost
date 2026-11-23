@@ -442,16 +442,18 @@ kbd {
   font-variant-numeric: tabular-nums;
 }
 .folder-row {
+  position: relative;
   display: flex;
   align-items: center;
-  height: 25px;
-  border-radius: 5px;
-  padding-left: calc(13px + var(--depth, 0) * 15px);
-  padding-right: 8px;
+  height: 26px;
+  padding-left: calc(6px + var(--depth, 0) * 14px);
+  padding-right: 3px;
   color: var(--studio-secondary);
 }
 .folder-disclosure {
-  width: 16px;
+  position: absolute;
+  left: calc(var(--depth, 0) * 14px - 10px);
+  width: 14px;
   flex: none;
   padding: 0;
   display: grid;
@@ -464,7 +466,7 @@ kbd {
 .folder-link {
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: 7px;
   min-width: 0;
   flex: 1;
   height: 100%;
@@ -476,6 +478,9 @@ kbd {
   width: 14px;
   height: 14px;
   color: var(--studio-muted);
+}
+.folder-root-row .folder-link > .icon {
+  display: none;
 }
 .folder-link > span {
   min-width: 0;
@@ -490,8 +495,23 @@ kbd {
   color: var(--studio-muted);
 }
 .folder-row.is-active {
+  color: var(--studio-text);
+}
+.folder-row.is-active::before {
+  content: "";
+  position: absolute;
+  left: -15px;
+  top: 6px;
+  width: 3px;
+  height: 14px;
+  border-radius: 2px;
   background: var(--studio-primary);
-  color: var(--studio-on-primary);
+}
+.folder-row.is-active .folder-link {
+  font-weight: 600;
+}
+.folder-row:not(.is-active):hover {
+  background: var(--studio-soft-border);
 }
 .folder-row.is-active .icon,
 .folder-row.is-active small,
