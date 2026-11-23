@@ -30,6 +30,7 @@ import {
 import { useContextMenu } from "./ContextMenu";
 import { accountMenu, groupMenu } from "./menus";
 import { useStudioActions } from "./studioActions";
+import { matchingFolderNames } from "./navigation";
 
 export interface NavigationHandle {
   focus(): void;
@@ -128,15 +129,11 @@ export function MailboxNavigation({
   const accountMatches = (id: string) =>
     !needle ||
     `${label(id)} ${address(id)}`.toLocaleLowerCase(uiLocale()).includes(needle);
-  const matching = (id: string) =>
-    accountMatches(id) ||
-    mailbox
-      .foldersOf(id)
-      .some(
-        (f) =>
-          f.present &&
-          `${f.name} ${f.display_name} ${folderLabel(f)}`.toLocaleLowerCase(uiLocale()).includes(needle),
-      );
+  const matching = (id: string) => {
+    if (accountMatches(id)) return true;
+    const names = matchingFolderNames(mailbox.foldersOf(id), needle);
+    return mailbox.foldersOf(id).some((f) => f.present && names.has(f.name));
+  };
   const count = (id: string) =>
     mailbox
       .foldersOf(id)
@@ -172,12 +169,11 @@ export function MailboxNavigation({
 
   function selectAccount(id: string, unread = false) {
     const available = mailbox.foldersOf(id).filter((f) => f.present);
+    const matches = !accountMatches(id)
+      ? matchingFolderNames(mailbox.foldersOf(id), needle)
+      : undefined;
     const target =
-      (!accountMatches(id)
-        ? available.find((f) =>
-            `${f.name} ${f.display_name} ${folderLabel(f)}`.toLocaleLowerCase(uiLocale()).includes(needle),
-          )
-        : undefined) ??
+      available.find((f) => matches?.has(f.name)) ??
       available.find((f) => f.role === "inbox") ??
       available[0];
     if (!target) {

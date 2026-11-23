@@ -1,5 +1,5 @@
 import { m } from "@featherpost/i18n/messages";
-import { folderLabel, uiLocale, useUiLocale } from "../../maild-ui/src/i18n";
+import { useUiLocale } from "../../maild-ui/src/i18n";
 import { Choice } from "../../maild-ui/src/settings/Choice";
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import type { Host } from "../../maild-ui/src/host/host";
@@ -24,6 +24,7 @@ import {
   folderTree,
   folderIcon,
   folderNavigationLabels,
+  matchingFolderNames,
   selectedFolder,
   scopeContext,
   searchMail,
@@ -312,6 +313,7 @@ export function Studio({
                 nodes={folderTree(mailbox.foldersOf(account))}
                 depth={0}
                 filter={filter}
+                matchingNames={filter ? matchingFolderNames(mailbox.foldersOf(account), filter) : undefined}
                 messageContext={view === "unified"}
                 active={state.activeViewId === MAIL}
                 mailbox={mailbox}
@@ -381,6 +383,7 @@ function FolderBranches({
   nodes,
   depth,
   filter,
+  matchingNames,
   active,
   messageContext,
   mailbox,
@@ -389,6 +392,7 @@ function FolderBranches({
   nodes: FolderNode[];
   depth: number;
   filter: string;
+  matchingNames?: ReadonlySet<string>;
   active: boolean;
   messageContext?: boolean;
   mailbox: MailboxController;
@@ -414,9 +418,7 @@ function FolderBranches({
     );
   const matches = (n: FolderNode): boolean =>
     !filter ||
-    `${n.folder.name} ${n.folder.display_name} ${folderLabel(n.folder)}`
-      .toLocaleLowerCase(uiLocale())
-      .includes(filter) ||
+    !!matchingNames?.has(n.folder.name) ||
     n.children.some(matches);
   const labels = folderNavigationLabels(nodes.map((n) => n.folder), depth > 0);
   return (
@@ -487,6 +489,7 @@ function FolderBranches({
                 depth={depth + 1}
                 messageContext={messageContext}
                 filter={filter}
+                matchingNames={matchingNames}
                 active={active}
                 mailbox={mailbox}
                 actions={actions}

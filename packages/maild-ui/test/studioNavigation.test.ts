@@ -6,6 +6,7 @@ import {
   searchMail,
   folderTree,
   folderNavigationLabels,
+  matchingFolderNames,
   selectedFolder,
 } from "../../featherpost-studio/src/navigation";
 import { FakeBridge, online, folder, summary, flush } from "./fakeBridge";
@@ -232,4 +233,26 @@ it("uses real paths for equal provider labels and leaves unique nested labels co
   expect(folderNavigationLabels([child]).get(child)).toBe("Projects/Reviews");
   const custom = { ...folder("Projects/Archive", "archive"), display_name: "Private archive" };
   expect(folderNavigationLabels([custom], true).get(custom)).toBe("Private archive");
+});
+
+it("finds complete displayed folder labels, including collision qualifiers and nested leaves", () => {
+  const folders = [
+    folder("Draft", "drafts"),
+    folder("Drafts", "drafts"),
+    folder("Projects"),
+    folder("Projects/Draft", "drafts"),
+    folder("Projects/Drafts", "drafts"),
+  ];
+  expect([...matchingFolderNames(folders, "草稿 · Draft")]).toEqual([
+    "Draft", "Drafts",
+  ]);
+  expect([...matchingFolderNames(folders, "草稿 · Drafts")]).toEqual([
+    "Drafts",
+  ]);
+  expect([...matchingFolderNames(folders, "草稿 · Projects/Drafts")]).toEqual([
+    "Projects/Drafts",
+  ]);
+  expect([...matchingFolderNames(folders, "projects/draft")]).toEqual([
+    "Projects/Draft", "Projects/Drafts",
+  ]);
 });

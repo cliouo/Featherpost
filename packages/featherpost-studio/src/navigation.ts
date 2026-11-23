@@ -34,6 +34,23 @@ export function folderNavigationLabels(folders: UiFolder[], nested = false) {
   );
 }
 
+/** Search the same labels the sidebar displays, as well as original server names. */
+export function matchingFolderNames(folders: UiFolder[], filter: string) {
+  const needle = filter.toLocaleLowerCase(uiLocale());
+  const matches = new Set<string>();
+  const visit = (nodes: FolderNode[], nested = false) => {
+    const labels = folderNavigationLabels(nodes.map((n) => n.folder), nested);
+    for (const { folder, children } of nodes) {
+      if (`${folder.name} ${folder.display_name} ${folderLabel(folder)} ${labels.get(folder)}`
+        .toLocaleLowerCase(uiLocale()).includes(needle))
+        matches.add(folder.name);
+      visit(children, true);
+    }
+  };
+  visit(folderTree(folders));
+  return matches;
+}
+
 const order: Record<string, number> = {
   inbox: 0,
   sent: 1,
