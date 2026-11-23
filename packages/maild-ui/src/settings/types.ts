@@ -26,7 +26,8 @@ export interface AccountProfile {
   incoming: Endpoint;
   outgoing?: Endpoint | null;
   credentials: { incoming: string; outgoing?: string | null };
-  runtime: { state: string; detail: string };
+  /** Tauri 桥不传中文整句 `detail`；离线原因按 `detail_code` 成文，`server_detail` 是服务器原文（ADR-0048 L6）。 */
+  runtime: { state: string; detail: string; detail_code?: string | null; server_detail?: string };
 }
 export interface AccountDraft {
   display_name: string;

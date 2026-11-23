@@ -1,6 +1,7 @@
 import { m } from "@featherpost/i18n/messages";
 import { useUiLocale } from "@featherpost/i18n/react";
 import { packageText, providerName } from "../../../maild-ui/src/i18n";
+import { AccountReason } from "../../../maild-ui/src/settings/AccountReason";
 import { Choice } from "../../../maild-ui/src/settings/Choice";
 import { useState, type ReactNode } from "react";
 import { useStore } from "../../../maild-ui/src/host/hooks";
@@ -650,7 +651,7 @@ export function Accounts({ controller }: { controller: SettingsController }) {
               {!p.editable && <small>{m.studio_account_readonly()}</small>}
               {needsRepair(p) && <p className="account-alert" role="status">
                 {p.runtime.state === "needs_credentials" ? m.studio_account_alert_credentials() : m.studio_account_alert_error()}
-                {p.runtime.detail && <code>{p.runtime.detail}</code>}
+                <AccountReason source={p.runtime} />
               </p>}
             </div>
             <span className="studio-account-state"><i className={`status-dot${p.runtime.state === "online" ? "" : " warn"}`} />{accountState(p)}</span>
