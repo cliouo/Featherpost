@@ -93,8 +93,8 @@ export interface MailboxState {
   threadOffset: number;
   threadLoading: boolean;
   threadError: string | null;
-  /** 「立即同步」进行中：已请求后台检查新邮件，正在刷新列表。 */
   syncing: boolean;
+  syncingScope: { account: string; folder?: string } | null;
   syncError: string | null;
   remote: RemoteSearch;
 }
@@ -288,6 +288,7 @@ export class MailboxController {
       threadLoading: false,
       threadError: null,
       syncing: false,
+      syncingScope: null,
       syncError: null,
       remote: idleRemote(),
     });
@@ -876,20 +877,25 @@ export class MailboxController {
   /**
    * 「立即同步」：先敲醒后台检查新邮件（后台不支持时静默降级），再刷新当前列表。
    */
-  syncNow = async () => {
+  syncNow = async (scope?: { account: string; folder?: string }) => {
     if (this.state.snapshot.phase !== "online" || this.stopped || this.state.syncing) return;
-    const account = queryOf(this.state.scope).account;
-    this.patch({ syncing: true, syncError: null });
+    const account = scope?.account ?? queryOf(this.state.scope).account;
+    this.patch({ syncing: true, syncingScope: scope ?? null, syncError: null });
     let syncError: string | null = null;
     try {
-      await this.bridge.mailbox.syncNow?.(account);
+      if (scope && this.bridge.mailbox.syncScope) {
+        await this.bridge.mailbox.syncScope(scope.account, scope.folder);
+      } else {
+        await this.bridge.mailbox.syncNow?.(account);
+      }
     } catch (e) {
       syncError = describe(e, m.mailbox_error_sync());
     }
     try {
+      if (scope) await this.folderLoads.get(scope.account);
       await this.refresh();
     } finally {
-      if (!this.stopped) this.patch({ syncing: false, syncError });
+      if (!this.stopped) this.patch({ syncing: false, syncingScope: null, syncError });
     }
   };
   get serverSearchSupported() {

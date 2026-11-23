@@ -12,10 +12,12 @@ use std::time::Duration;
 
 use common::fake_mail::FakeMail;
 use cordis::Context;
+use maild::api::{dispatch, JsonRpcRequest};
 use maild::events::{AccountStateKind, MailAttachment, MailMessage};
 use maild::receive::{Receive, FETCH_BATCH_SIZE};
 use maild::store::Store;
 use maild::Accounts;
+use serde_json::{json, Value};
 
 async fn wait_until<F: Fn() -> bool>(what: &str, deadline: Duration, check: F) {
     let until = tokio::time::Instant::now() + deadline;
@@ -281,6 +283,120 @@ async fn trigger_sync_wakes_an_idling_loop_and_sweeps_every_folder() {
     .await;
     assert_eq!(server.imap_connections(), 1, "立即同步复用收信连接");
     assembly.dispose().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn manual_sync_refreshes_folders_on_idle_and_poll_connections() {
+    for extra in [
+        "folder_poll_secs = 3600",
+        "idle = false\npoll_secs = 3600\nfolder_poll_secs = 3600\n[plugins.scheduler]",
+    ] {
+        let server = FakeMail::start().await.expect("假邮件服务器启动");
+        server.add_mailbox("Archive", "\\Archive");
+        server.deliver_to("Archive", "", raw_mail("旧邮件", "x"));
+        let ctx = Context::new();
+        let mut assembly = maild::assemble(&ctx, &assembly_toml(server.imap_addr.port(), extra))
+            .expect("装配成功");
+        let receive = receive_of(&ctx);
+        tokio::time::timeout(Duration::from_secs(10), receive.wait_online())
+            .await
+            .expect("10s 内未在线");
+        let store = ctx.get::<Store>().expect("store 服务");
+
+        tracked_sync(&ctx, Some("Archive")).await;
+        assert_eq!(
+            store.count_messages(Some("e2e"), Some("Archive")).unwrap(),
+            1
+        );
+
+        server.remove_mailbox("Archive");
+        server.add_mailbox("Renamed", "\\Archive");
+        server.add_mailbox("Projects", "");
+        server.deliver_to("Renamed", "", raw_mail("新归档邮件", "x"));
+        server.deliver_to("Projects", "", raw_mail("新项目邮件", "x"));
+
+        // The item the user right-clicked may have vanished before LIST runs.
+        tracked_sync(&ctx, Some("Archive")).await;
+        assert!(
+            !store
+                .folder_by_name("e2e", "Archive")
+                .unwrap()
+                .unwrap()
+                .present
+        );
+        assert!(
+            store
+                .folder_by_name("e2e", "Renamed")
+                .unwrap()
+                .unwrap()
+                .present
+        );
+        assert_eq!(
+            store.count_messages(Some("e2e"), Some("Archive")).unwrap(),
+            1
+        );
+        assert_eq!(
+            store.count_messages(Some("e2e"), Some("Renamed")).unwrap(),
+            0
+        );
+
+        tracked_sync(&ctx, Some("Renamed")).await;
+        assert_eq!(
+            store.count_messages(Some("e2e"), Some("Renamed")).unwrap(),
+            1
+        );
+        assert_eq!(
+            store.count_messages(Some("e2e"), Some("Projects")).unwrap(),
+            0
+        );
+
+        server.add_mailbox("New", "");
+        server.deliver_to("New", "", raw_mail("新文件夹邮件", "x"));
+        tracked_sync(&ctx, None).await;
+        assert!(store.folder_by_name("e2e", "New").unwrap().unwrap().present);
+        assert_eq!(store.count_messages(Some("e2e"), Some("New")).unwrap(), 1);
+        assert_eq!(
+            store.count_messages(Some("e2e"), Some("Projects")).unwrap(),
+            1
+        );
+        assert_eq!(server.imap_connections(), 1);
+        assembly.dispose().await;
+    }
+}
+
+async fn tracked_sync(ctx: &Context, folder: Option<&str>) {
+    async fn call(ctx: &Context, params: Value) -> Value {
+        let response = dispatch(
+            ctx,
+            &JsonRpcRequest {
+                jsonrpc: "2.0".into(),
+                method: "syncMessages".into(),
+                params,
+                id: json!(1),
+            },
+        )
+        .await;
+        response
+            .result
+            .unwrap_or_else(|| panic!("{:?}", response.error))
+    }
+    let started = call(
+        ctx,
+        json!({"account": "e2e", "folder": folder, "track": true}),
+    )
+    .await;
+    let id = started["sync_id"].as_u64().expect("同步 ID");
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let status = call(ctx, json!({"account": "e2e", "sync_id": id})).await;
+            if status["done"] == true {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("同步超时");
 }
 
 #[tokio::test(flavor = "current_thread")]

@@ -127,6 +127,36 @@ describe("快捷键路由", () => {
 });
 
 describe("立即同步", () => {
+  it.each([undefined, "Archive"])("tracks an explicit sidebar sync (%s) through completion and suppresses duplicates", async (name) => {
+    const { bridge, c } = await ready();
+    const originalScope = c.state.scope;
+    const sync = deferred<void>();
+    const asked: Array<[string, string | undefined]> = [];
+    bridge.mailbox.syncScope = (account, folder) => {
+      asked.push([account, folder]);
+      return sync.promise;
+    };
+    const scope = { account: "demo", folder: name };
+    const run = c.syncNow(scope);
+    await c.syncNow({ account: "other" });
+    expect(c.state.syncingScope).toEqual(scope);
+    expect(asked).toEqual([["demo", name]]);
+    expect(bridge.folderRequests).toHaveLength(1);
+    if (name) sync.reject(offlineError());
+    else sync.resolve();
+    await flush();
+    expect(c.state.syncingScope).toEqual(scope);
+    bridge.folderRequests.at(-1)!.d.resolve([folder("INBOX", "inbox"), folder("Renamed")]);
+    bridge.mailbox.queries.at(-1)!.d.resolve({ messages: [], total: 0 });
+    await run;
+    expect(c.state.syncingScope).toBeNull();
+    expect(c.state.syncing).toBe(false);
+    expect(c.state.scope).toEqual(originalScope);
+    expect(c.foldersOf("demo").map((folder) => folder.name)).toEqual(["INBOX", "Renamed"]);
+    if (name) expect(c.state.syncError).toContain("后台连接不可用");
+    else expect(c.state.syncError).toBeNull();
+  });
+
   it("先敲醒后台（带当前账户），再刷新列表，期间显示同步中", async () => {
     const { bridge, c } = await ready();
     c.selectFolder(c.foldersOf("demo")[0]);

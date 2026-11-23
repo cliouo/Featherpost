@@ -77,6 +77,7 @@ export const tauriBridge: MailBridge = {
         if (code === 'offline' || code === 'denied') throw error;
       }
     },
+    syncScope:(account,folder)=>call('ui_sync_mailbox_scope',{account,folder:folder??null}),
     serverSearch:(account,folder,query,options)=>call('ui_server_search',{account,folder,query,since:options?.since??null,until:options?.until??null}),
     fetchServerMessage:(account,folder,uid)=>call('ui_fetch_server_message',{account,folder,uid}),
   },

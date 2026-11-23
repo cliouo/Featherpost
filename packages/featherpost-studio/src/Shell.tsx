@@ -14,6 +14,7 @@ import { MailboxNavigation, type NavigationHandle } from "./MailboxNavigation";
 import { readStudioView, saveStudioView, type StudioView } from "./layout";
 import { ContextMenuHost, useContextMenu } from "./ContextMenu";
 import { folderMenu, selectionMenu } from "./menus";
+import { SyncCount } from "./SyncCount";
 import {
   StudioActionsContext,
   clipboardCopier,
@@ -143,8 +144,10 @@ export function Studio({
         searchInput.current?.focus();
         searchInput.current?.select();
       }),
-    sync: () => void mailbox.syncNow(),
+    sync: (folder) => void mailbox.syncNow({ account: folder.account, folder: folder.name }),
     canSync: online && !mail.syncing,
+    syncing: (folder) => mail.syncingScope?.account === folder.account &&
+      mail.syncingScope.folder === folder.name,
   };
   const unread = state.snapshot.accounts.reduce(
     (n, a) =>
@@ -372,8 +375,9 @@ interface FolderActions {
   open(folder: Folder): void;
   openUnread(folder: Folder): void;
   searchIn(folder: Folder): void;
-  sync(): void;
+  sync(folder: Folder): void;
   canSync: boolean;
+  syncing(folder: Folder): boolean;
 }
 
 function FolderBranches({
@@ -429,10 +433,12 @@ function FolderBranches({
             : folder.display_name || folder.name;
         const label = folderLabel({ ...folder, display_name: rawLabel ?? folder.name });
         const count = folder.role === "drafts" ? folder.total : folder.unseen;
+        const syncing = actions.syncing(folder);
         return (
           <div key={folder.name}>
             <div
               className={`folder-row ${active && current(folder.account, folder.name) ? "is-active" : ""}`}
+              aria-busy={syncing || undefined}
               style={{ "--depth": depth } as CSSProperties}
               onContextMenu={(e) =>
                 menu.offer(e, () =>
@@ -440,7 +446,7 @@ function FolderBranches({
                     open: () => actions.open(folder),
                     openUnread: () => actions.openUnread(folder),
                     searchIn: () => actions.searchIn(folder),
-                    sync: actions.sync,
+                    sync: () => actions.sync(folder),
                     canSync: actions.canSync,
                     copy,
                     expansion:
@@ -482,7 +488,7 @@ function FolderBranches({
               >
                 <Icon name={folderIcon(folder)} />
                 <span>{label}</span>
-                {count > 0 && <small>{count}</small>}
+                <SyncCount count={count} busy={syncing} />
               </button>
             </div>
             {children.length > 0 && expanded && (

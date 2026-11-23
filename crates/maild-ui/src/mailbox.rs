@@ -277,6 +277,39 @@ impl Bridge {
         Ok(())
     }
 
+    pub async fn sync_mailbox_scope(
+        &self,
+        account: String,
+        folder: Option<String>,
+    ) -> Result<(), UiError> {
+        #[derive(serde::Deserialize)]
+        struct Started {
+            sync_id: u64,
+        }
+        #[derive(serde::Deserialize)]
+        struct Status {
+            done: bool,
+        }
+        let Started { sync_id } = self
+            .compose_call(
+                "syncMessages",
+                json!({ "account": account, "folder": folder, "track": true }),
+            )
+            .await?;
+        loop {
+            let status: Status = self
+                .compose_call(
+                    "syncMessages",
+                    json!({ "account": account, "sync_id": sync_id }),
+                )
+                .await?;
+            if status.done {
+                return Ok(());
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        }
+    }
+
     /// 在服务器上检索本地缓存窗口之外的历史（`searchMessages` 的 `scope: "server"` 分支）。
     /// 结果只是摘要、不落库；要读全文请接着调 [`Bridge::fetch_server_message`]。
     pub async fn server_search(

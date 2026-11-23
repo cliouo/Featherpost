@@ -13,6 +13,7 @@
 
 use std::any::TypeId;
 use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -324,10 +325,20 @@ struct ReceiveInner {
     search_rx: tokio::sync::Mutex<mpsc::Receiver<ServerSearchRequest>>,
     /// 「立即同步」计数（ADR-0041 决策 4）：打断 IDLE / 轮询等待 / 断线退避睡眠。
     sync_wake: watch::Sender<u64>,
+    manual_sync: Mutex<Option<ManualSync>>,
     /// 按需单封拉取的投递口（ADR-0041 决策 4），与 `search` 同构。
     fetch: mpsc::Sender<FetchByUidRequest>,
     fetch_rx: tokio::sync::Mutex<mpsc::Receiver<FetchByUidRequest>>,
 }
+
+struct ManualSync {
+    id: u64,
+    queued: bool,
+    folder: Option<String>,
+    outcome: Option<Result<(), String>>,
+}
+
+static NEXT_MANUAL_SYNC: AtomicU64 = AtomicU64::new(1);
 
 /// 一次按需单封拉取请求。
 pub(crate) struct FetchByUidRequest {
@@ -434,6 +445,7 @@ impl Receive {
                 search,
                 search_rx: tokio::sync::Mutex::new(search_rx),
                 sync_wake,
+                manual_sync: Mutex::new(None),
                 fetch,
                 fetch_rx: tokio::sync::Mutex::new(fetch_rx),
                 state: Mutex::new(AccountStateInfo::plain(account, AccountStateKind::Connecting)),
@@ -465,6 +477,9 @@ impl Receive {
         // send_replace 无条件更新（无 receiver 也保留值）：wait_online 的 receiver
         // 可能在 send 之后才 subscribe，用 send 会丢值导致 wait_for 死等。
         let _ = self.inner.online.send_replace(v);
+        if !v {
+            self.cancel_manual_sync();
+        }
     }
 
     /// 没有原因的状态（连接中、在线、重连中）。
@@ -493,6 +508,7 @@ impl Receive {
 
     pub(crate) fn shutdown(&self) {
         let _ = self.inner.shutdown.send_replace(true);
+        self.cancel_manual_sync();
     }
 
     /// 敲醒收信循环去清写队列。账户离线时是空操作——op 留在库里等下次连接。
@@ -541,8 +557,65 @@ impl Receive {
     /// 打断三种等待：IDLE、轮询间隔、断线退避睡眠——用户点「立即同步」不必等退避倒计时。
     /// 循环正忙于一次同步时，信号会在这次同步结束后立刻生效。
     pub fn trigger_sync(&self) {
-        let next = self.inner.sync_wake.borrow().wrapping_add(1);
-        let _ = self.inner.sync_wake.send_replace(next);
+        self.inner
+            .sync_wake
+            .send_modify(|count| *count = count.wrapping_add(1));
+    }
+
+    pub(crate) fn start_manual_sync(&self, folder: Option<String>) -> Result<u64, String> {
+        let mut state = self.inner.manual_sync.lock().unwrap();
+        if !self.is_online() || self.is_shutdown() {
+            return Err("账户当前离线，无法同步".into());
+        }
+        if state.as_ref().is_some_and(|sync| sync.outcome.is_none()) {
+            return Err("账户正在同步".into());
+        }
+        let id = NEXT_MANUAL_SYNC.fetch_add(1, Ordering::Relaxed);
+        *state = Some(ManualSync {
+            id,
+            queued: true,
+            folder,
+            outcome: None,
+        });
+        self.trigger_sync();
+        Ok(id)
+    }
+
+    pub(crate) fn manual_sync_done(&self, id: u64) -> Result<bool, String> {
+        let state = self.inner.manual_sync.lock().unwrap();
+        match state.as_ref().filter(|sync| sync.id == id) {
+            Some(sync) => match &sync.outcome {
+                None => Ok(false),
+                Some(outcome) => outcome.clone().map(|()| true),
+            },
+            None => Err("同步请求已失效".into()),
+        }
+    }
+
+    fn take_manual_sync(&self) -> Option<(u64, Option<String>)> {
+        let mut state = self.inner.manual_sync.lock().unwrap();
+        let sync = state
+            .as_mut()
+            .filter(|sync| sync.queued && sync.outcome.is_none())?;
+        sync.queued = false;
+        Some((sync.id, sync.folder.take()))
+    }
+
+    fn cancel_manual_sync(&self) {
+        let mut state = self.inner.manual_sync.lock().unwrap();
+        if let Some(sync) = state.as_mut().filter(|sync| sync.outcome.is_none()) {
+            sync.outcome = Some(Err("同步被中止：连接已断开".into()));
+        }
+    }
+
+    fn finish_manual_sync(&self, id: u64, outcome: Result<(), String>) {
+        let mut state = self.inner.manual_sync.lock().unwrap();
+        if let Some(sync) = state
+            .as_mut()
+            .filter(|sync| sync.id == id && sync.outcome.is_none())
+        {
+            sync.outcome = Some(outcome);
+        }
     }
 
     fn sync_rx(&self) -> watch::Receiver<u64> {
@@ -808,7 +881,21 @@ async fn serve(
 
     let capabilities = read_capabilities(&mut session, &cfg.account).await;
     // LIST → 登记文件夹 → 决定本次会话的同步目标。主文件夹在 targets[0]。
-    let targets = discover_folders(&mut session, cfg, ctx).await;
+    let mut targets = match discover_folders(&mut session, cfg, ctx).await {
+        Ok(mut targets) if !targets.is_empty() => {
+            targets.truncate(MAX_SYNCED_FOLDERS);
+            targets
+        }
+        result => {
+            if let Err(error) = result {
+                eprintln!(
+                    "[maild/receive] 账户 {}: LIST 失败，退回单信箱: {error}",
+                    cfg.account
+                );
+            }
+            vec![fallback_target(cfg)]
+        }
+    };
 
     // 上次会话停在 in_flight 的 op 与失联同处境：可重放的回到 pending，
     // 不可重放的落到 unknown 交用户裁决（ADR-0027 决策 2）。
@@ -818,6 +905,7 @@ async fn serve(
         }
     }
 
+    let mut sync_rx = receive.sync_rx();
     receive.set_state(ctx, AccountStateKind::Online);
     receive.set_online(true);
 
@@ -833,7 +921,6 @@ async fn serve(
     };
     let mut shutdown_rx = receive.shutdown_rx();
     let mut wake_rx = receive.wake_rx();
-    let mut sync_rx = receive.sync_rx();
     // 接收端独占到本次连接结束；断线后请求方会收到 oneshot 断开而不是静默丢弃。
     let mut search_rx = receive.inner.search_rx.lock().await;
     let mut fetch_rx = receive.inner.fetch_rx.lock().await;
@@ -904,8 +991,11 @@ async fn serve(
                 _ = sync_rx.changed() => {
                     drop(stop);
                     session = finish_idle(idle).await?;
-                    // 「立即同步」覆盖所有文件夹：下一轮必定 sweep。
-                    next_sweep = tokio::time::Instant::now();
+                    match sync.refresh_on_wake(&mut session, cfg, receive, &mut targets).await {
+                        Some(true) => next_sweep = tokio::time::Instant::now() + sweep_interval,
+                        Some(false) => {}
+                        None => next_sweep = tokio::time::Instant::now(),
+                    }
                 }
                 request = search_rx.recv() => {
                     drop(stop);
@@ -984,8 +1074,18 @@ async fn serve(
                     true
                 }
                 _ = sync_rx.changed() => {
-                    next_sweep = tokio::time::Instant::now();
-                    true
+                    match sync.refresh_on_wake(&mut session, cfg, receive, &mut targets).await {
+                        Some(all) => {
+                            if all {
+                                next_sweep = tokio::time::Instant::now() + sweep_interval;
+                            }
+                            false
+                        }
+                        None => {
+                            next_sweep = tokio::time::Instant::now();
+                            true
+                        }
+                    }
                 }
                 _ = wake_rx.changed() => {
                     drain_pending_ops(
@@ -1753,58 +1853,42 @@ fn special_use_token(attribute: &async_imap::types::NameAttribute<'_>) -> Option
 
 /// `LIST "" "*"` → 登记文件夹 → 返回本次会话要同步的目标（主文件夹在最前）。
 ///
-/// 没有 store 装配、或 `LIST` 失败时退化为「只同步配置里的那一个 mailbox」，
-/// 与 v4 之前的行为一致——一个可选的发现步骤不该挡住收信。
+/// 连接启动失败时退回配置里的 mailbox；手动刷新失败时保留已有目标。
+fn fallback_target(cfg: &ReceiveConfig) -> SyncTarget {
+    SyncTarget {
+        name: cfg.mailbox.clone(),
+        display_name: folders::decode_modified_utf7(&cfg.mailbox),
+        role: Some(FolderRole::Inbox),
+        folder_id: None,
+    }
+}
+
 async fn discover_folders(
     session: &mut async_imap::Session<Conn>,
     cfg: &ReceiveConfig,
     ctx: &Context,
-) -> Vec<SyncTarget> {
-    let fallback = || {
-        vec![SyncTarget {
-            name: cfg.mailbox.clone(),
-            display_name: folders::decode_modified_utf7(&cfg.mailbox),
-            role: Some(FolderRole::Inbox),
-            folder_id: None,
-        }]
-    };
+) -> Result<Vec<SyncTarget>, ReceiveError> {
     if store_of(ctx).is_none() {
-        return fallback();
+        return Ok(vec![fallback_target(cfg)]);
     }
 
-    let listed = match list_mailboxes(session).await {
-        Ok(listed) => listed,
-        Err(error) => {
-            eprintln!("[maild/receive] 账户 {}: LIST 失败，退回单信箱: {error}", cfg.account);
-            return fallback();
-        }
-    };
-    if listed.is_empty() {
-        return fallback();
-    }
+    let listed = tokio::time::timeout(Duration::from_secs(30), list_mailboxes(session))
+        .await
+        .map_err(fixed(AccountDetailCode::SyncFailed, "LIST 超时"))??;
 
     let present: Vec<String> = listed.iter().map(|entry| entry.name.clone()).collect();
     let Some(store) = store_of(ctx) else {
-        return fallback();
+        return Ok(vec![fallback_target(cfg)]);
     };
-    if let Err(error) = store.mark_absent_folders(&cfg.account, &present) {
-        eprintln!("[maild/receive] 账户 {}: 标记缺席文件夹失败: {error}", cfg.account);
-    }
+    store
+        .mark_absent_folders(&cfg.account, &present)
+        .map_err(store_stage("标记缺席文件夹失败"))?;
 
     let mut targets = Vec::new();
     for entry in listed {
-        let folder_id = match store.upsert_folder(
-            &cfg.account,
-            &entry.name,
-            &entry.display_name,
-            entry.role,
-        ) {
-            Ok(id) => id,
-            Err(error) => {
-                eprintln!("[maild/receive] 账户 {}: 登记文件夹失败: {error}", cfg.account);
-                continue;
-            }
-        };
+        let folder_id = store
+            .upsert_folder(&cfg.account, &entry.name, &entry.display_name, entry.role)
+            .map_err(store_stage("登记文件夹失败"))?;
         // `\NoSelect` 是纯层级节点：登记但不同步。
         if !entry.selectable {
             continue;
@@ -1818,7 +1902,7 @@ async fn discover_folders(
     }
     drop(store);
     if targets.is_empty() {
-        return fallback();
+        return Ok(targets);
     }
 
     // 主文件夹：配置指定的 mailbox 优先，其次 role=inbox，最后第一个。
@@ -1828,8 +1912,7 @@ async fn discover_folders(
         .or_else(|| targets.iter().position(|t| t.role == Some(FolderRole::Inbox)))
         .unwrap_or(0);
     targets.swap(0, primary);
-    targets.truncate(MAX_SYNCED_FOLDERS);
-    targets
+    Ok(targets)
 }
 
 struct ListedFolder {
@@ -1959,6 +2042,64 @@ struct SyncSession<'a> {
 }
 
 impl SyncSession<'_> {
+    async fn refresh_on_wake(
+        &mut self,
+        session: &mut async_imap::Session<Conn>,
+        cfg: &ReceiveConfig,
+        receive: &Receive,
+        targets: &mut Vec<SyncTarget>,
+    ) -> Option<bool> {
+        let request = receive.take_manual_sync();
+        let outcome = match discover_folders(session, cfg, self.ctx).await {
+            Err(error) => Err(error),
+            Ok(mut refreshed) => {
+                self.selected = None;
+                let result = match &request {
+                    Some((_, Some(name))) => {
+                        match refreshed
+                            .iter()
+                            .enumerate()
+                            .find(|(_, target)| &target.name == name)
+                        {
+                            Some((index, target)) => {
+                                self.sync_folder(session, target, index == 0).await
+                            }
+                            None => Ok(()),
+                        }
+                    }
+                    Some((_, None)) if !refreshed.is_empty() => {
+                        match self.sync_folder(session, &refreshed[0], true).await {
+                            Ok(()) => self
+                                .sweep_secondary_folders(session, &refreshed)
+                                .await
+                                .and_then(|failure| failure.map_or(Ok(()), Err)),
+                            Err(error) => Err(error),
+                        }
+                    }
+                    _ => Ok(()),
+                };
+                if !refreshed.is_empty() {
+                    refreshed.truncate(MAX_SYNCED_FOLDERS);
+                    self.folders
+                        .retain(|name, _| refreshed.iter().any(|target| &target.name == name));
+                    *targets = refreshed;
+                }
+                result
+            }
+        };
+        if let Err(error) = &outcome {
+            eprintln!(
+                "[maild/receive] 账户 {}: 手动同步失败: {error}",
+                self.account
+            );
+        }
+        request.map(|(id, folder)| {
+            let swept_all = folder.is_none() && outcome.is_ok();
+            receive.finish_manual_sync(id, outcome.map_err(|error| error.to_string()));
+            swept_all
+        })
+    }
+
     fn folder_mut(&mut self, name: &str) -> &mut FolderSession {
         if !self.folders.contains_key(name) {
             self.folders.insert(name.to_string(), FolderSession::default());
@@ -1973,7 +2114,8 @@ impl SyncSession<'_> {
         &mut self,
         session: &mut async_imap::Session<Conn>,
         targets: &[SyncTarget],
-    ) -> Result<(), ReceiveError> {
+    ) -> Result<Option<ReceiveError>, ReceiveError> {
+        let mut first_error = None;
         for target in targets.iter().skip(1) {
             if let Err(error) = self.sync_folder(session, target, false).await {
                 eprintln!(
@@ -1981,6 +2123,7 @@ impl SyncSession<'_> {
                     self.account, target.display_name
                 );
                 self.selected = None;
+                first_error.get_or_insert(error);
             }
         }
         if targets.len() > 1 {
@@ -1991,7 +2134,7 @@ impl SyncSession<'_> {
             // 重新 SELECT 后 UIDVALIDITY 由下一次 sync_folder 重新读取。
             self.selected = None;
         }
-        Ok(())
+        Ok(first_error)
     }
 
     /// 增量同步一个文件夹。
@@ -2531,6 +2674,8 @@ pub(crate) fn spawn_provider_receive(
 
 async fn run_provider_loop(spec: ProviderReceiveSpec, ctx: Context, receive: Receive) {
     let mut first = true;
+    let mut sync_rx = receive.sync_rx();
+    let mut shutdown_rx = receive.shutdown_rx();
     loop {
         if receive.is_shutdown() {
             return;
@@ -2544,7 +2689,13 @@ async fn run_provider_loop(spec: ProviderReceiveSpec, ctx: Context, receive: Rec
             },
         );
         first = false;
-        match provider_drain(&spec, &ctx, &receive).await {
+        let request = receive.take_manual_sync();
+        let result = provider_drain(&spec, &ctx, &receive).await;
+        if let Some((id, _)) = request {
+            receive
+                .finish_manual_sync(id, result.as_ref().map(|_| ()).map_err(ToString::to_string));
+        }
+        match result {
             Ok(count) => {
                 eprintln!(
                     "[maild/provider] 委托收信 account={} provider={} outcome=delivered count={count}",
@@ -2562,14 +2713,21 @@ async fn run_provider_loop(spec: ProviderReceiveSpec, ctx: Context, receive: Rec
                     return;
                 }
                 // 失败退避复用 reconnect 节奏的下限，避免紧贴 provider 重试。
-                tokio::time::sleep(Duration::from_secs(5)).await;
+                if !receive.backoff_sleep(Duration::from_secs(5)).await {
+                    return;
+                }
+                sync_rx.borrow_and_update();
                 continue;
             }
         }
         if receive.is_shutdown() {
             return;
         }
-        tokio::time::sleep(Duration::from_secs(spec.poll_secs.max(1))).await;
+        tokio::select! {
+            _ = tokio::time::sleep(Duration::from_secs(spec.poll_secs.max(1))) => {}
+            _ = sync_rx.changed() => {}
+            _ = shutdown_rx.changed() => {}
+        }
     }
 }
 

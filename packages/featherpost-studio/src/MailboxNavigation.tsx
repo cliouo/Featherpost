@@ -29,6 +29,7 @@ import {
 } from "./layout";
 import { useContextMenu } from "./ContextMenu";
 import { accountMenu, groupMenu } from "./menus";
+import { SyncCount } from "./SyncCount";
 import { useStudioActions } from "./studioActions";
 
 export interface NavigationHandle {
@@ -288,6 +289,7 @@ export function MailboxNavigation({
             {open &&
               visible.map((id) => {
                 const opened = !unified && expanded === id;
+                const syncing = mail.syncingScope?.account === id;
                 return (
                   <div
                     className={`account-tree grouped-account ${opened ? "account-expanded" : ""} ${active && selectedAccount === id ? "account-selected" : ""}`}
@@ -295,6 +297,7 @@ export function MailboxNavigation({
                   >
                     <button
                       className="account-heading"
+                      aria-busy={syncing || undefined}
                       aria-expanded={unified ? undefined : opened}
                       title={`${label(id)}\n${address(id)}`}
                       onClick={() =>
@@ -308,6 +311,8 @@ export function MailboxNavigation({
                             canOpen: mailbox
                               .foldersOf(id)
                               .some((f) => f.present),
+                            sync: () => void mailbox.syncNow({ account: id }),
+                            canSync: mail.snapshot.phase === "online" && !mail.syncing,
                             groups: grouping.groups,
                             group: grouping.assignments[id] ?? OTHER_GROUP,
                             assign: (group) =>
@@ -345,7 +350,7 @@ export function MailboxNavigation({
                         <strong>{label(id)}</strong>
                         <small>{address(id)}</small>
                       </span>
-                      <span className="account-count">{count(id) || ""}</span>
+                      <SyncCount className="account-count" count={count(id)} busy={syncing} />
                     </button>
                     {opened &&
                       (mailbox.foldersOf(id).some((f) => f.present) ? (

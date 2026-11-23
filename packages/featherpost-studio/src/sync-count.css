@@ -1,0 +1,28 @@
+.sync-count {
+  display: inline-grid;
+  flex: none;
+  min-width: 22px;
+  height: 20px;
+  place-items: center;
+  font-variant-numeric: tabular-nums;
+}
+.sync-count > * {
+  grid-area: 1 / 1;
+}
+.sync-count-hidden {
+  visibility: hidden;
+}
+.sync-count .sync-count-spinner {
+  width: 13px;
+  height: 13px;
+  color: var(--studio-mark);
+  animation: studio-sync-spin 1.25s linear infinite;
+}
+@keyframes studio-sync-spin {
+  to { transform: rotate(360deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sync-count .sync-count-spinner {
+    animation: none;
+  }
+}

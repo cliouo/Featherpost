@@ -35,6 +35,7 @@ export class FakeMailbox implements MailboxBridge {
   profileRows: Profile[] = [];
   // 可选能力默认缺席（= 旧后台）；测试按需挂上。
   syncNow?: MailboxBridge["syncNow"];
+  syncScope?: MailboxBridge["syncScope"];
   serverSearch?: MailboxBridge["serverSearch"];
   fetchServerMessage?: MailboxBridge["fetchServerMessage"];
   indexStatus = { pending: 0, done: true };

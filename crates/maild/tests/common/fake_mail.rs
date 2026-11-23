@@ -584,6 +584,10 @@ impl FakeMail {
         );
     }
 
+    pub fn remove_mailbox(&self, name: &str) {
+        self.state.extra.lock().unwrap().remove(name).unwrap();
+    }
+
     /// 往指定 mailbox 投递一封信；`flags` 是 FETCH 回复里的 FLAGS 内容（可为空串）。
     pub fn deliver_to(&self, mailbox: &str, flags: &str, raw: Vec<u8>) {
         let internal_date = now_imap_internal_date();
