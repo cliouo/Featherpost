@@ -11,23 +11,23 @@
 //!   伴随键，说明值来自系统设置或用户自己，`AppleLanguages` 原样保留，只清掉过期的伴随键。
 //!   绝不把系统列表写进来，否则「跟随系统」会被冻结。
 //!
-//! 触发：`preferences/locale` 推送只带 `effective`，不带模式，所以状态泵在 `effective` 变化时
-//! （含启动后首次取到）调 [`spawn_sync`]，经桥重读一次完整偏好；本壳自己的
-//! `ui_set_locale_preference` 成功后再按应答直接同步一次（[`sync_after_set`]），覆盖显式列表恰好
-//! 等于系统列表、`effective` 不变也就没有推送的情况。只在值确实不同时写。
+//! 触发（由 `shell_locale` 调 [`sync`]，与 M2 的解析共用一把串行锁）：`preferences/locale` 推送只带
+//! `effective`，不带模式，所以状态泵在 `effective` 变化时（含启动后首次取到）经桥重读一次完整偏好；
+//! 本壳自己的 `ui_set_locale_preference` 成功后再按应答直接同步一次，覆盖显式列表恰好等于系统列表、
+//! `effective` 不变也就没有推送的情况。只在值确实不同时写。镜像之后才读 [`process_languages`]（M2），
+//! 过期的镜像值不会被当成用户的按 app 选择。
 //! 不监听系统语言变化：跟随系统模式下改了系统语言，重启 app 生效（ADR 定案）。
 //!
 //! 只读写本 app 的域（`kCFPreferencesCurrentApplication`，打包后是 bundle id，`cargo run` 是可执行
 //! 文件名），从不碰全局域。测试经 [`AppLanguageStore`] 注入假存储，不触碰真实用户默认值。
 
-use std::sync::{Arc, OnceLock};
-
 use objc2_core_foundation::{
     kCFPreferencesAnyHost, kCFPreferencesCurrentApplication, kCFPreferencesCurrentUser, CFArray,
-    CFPreferencesCopyValue, CFPreferencesSetValue, CFPreferencesSynchronize, CFString, CFType,
+    CFLocale, CFPreferencesCopyValue, CFPreferencesSetValue, CFPreferencesSynchronize, CFString,
+    CFType,
 };
 
-use crate::bridge::{Bridge, UiError, UiLocalePreference};
+use crate::bridge::UiLocalePreference;
 
 /// 系统设置「按 app 设置语言」与 AppKit 读的键。
 pub(crate) const APPLE_LANGUAGES: &str = "AppleLanguages";
@@ -94,23 +94,6 @@ pub(crate) fn mirror(store: &impl AppLanguageStore, preference: &UiLocalePrefere
     }
 }
 
-/// 本壳 `setLocalePreference` 的结果：成功则按应答镜像（应答与 `get` 同形，带模式）；失败不动存储。
-pub(crate) fn mirror_set_result(
-    store: &impl AppLanguageStore,
-    result: &Result<UiLocalePreference, UiError>,
-) -> Option<Mirror> {
-    result
-        .as_ref()
-        .ok()
-        .map(|preference| mirror(store, preference))
-}
-
-/// 与 [`spawn_sync`] 共用的串行锁：同步互不交错，后到的一次在前一次写完后执行。
-fn serial() -> &'static tokio::sync::Mutex<()> {
-    static SYNCING: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
-    SYNCING.get_or_init(|| tokio::sync::Mutex::new(()))
-}
-
 fn log(mirror: Mirror, preference: &UiLocalePreference) {
     match mirror {
         Mirror::Written => eprintln!(
@@ -125,24 +108,25 @@ fn log(mirror: Mirror, preference: &UiLocalePreference) {
     }
 }
 
-/// 经桥重读完整偏好并镜像。串行执行：连续变化时后一次在前一次写完后重读，最后一次总是最新值。
-pub(crate) fn spawn_sync(bridge: Arc<Bridge>) {
-    tauri::async_runtime::spawn(async move {
-        let _serial = serial().lock().await;
-        // 失败（老 daemon、断线）不动存储；桥已记日志，下次 `effective` 变化或下次启动再同步。
-        let Ok(preference) = bridge.locale_preference().await else {
-            return;
-        };
-        log(mirror(&UserDefaults, &preference), &preference);
-    });
+/// 按完整偏好镜像本进程的应用偏好域。调用方（`shell_locale`）持串行锁，并在这之后才读
+/// [`process_languages`]（M2）。
+pub(crate) fn sync(preference: &UiLocalePreference) {
+    log(mirror(&UserDefaults, preference), preference);
 }
 
-/// `ui_set_locale_preference` 成功后按应答同步一次（不必等推送；`effective` 不变时也没有推送）。
-pub(crate) async fn sync_after_set(result: &Result<UiLocalePreference, UiError>) {
-    let _serial = serial().lock().await;
-    if let (Some(mirror), Ok(preference)) = (mirror_set_result(&UserDefaults, result), result) {
-        log(mirror, preference);
-    }
+/// 本进程的首选语言（M2）：`CFLocaleCopyPreferredLanguages`，与 `+[NSLocale preferredLanguages]`
+/// 同源。本 app 偏好域有 `AppleLanguages`（系统设置的按 app 语言，或 M1 写的显式列表）时就是它，
+/// 否则是全局列表；同一进程里改了键立即可见（M2 用一次性探针核验过）。
+pub(crate) fn process_languages() -> Vec<String> {
+    let Some(array) = CFLocale::preferred_languages() else {
+        return Vec::new();
+    };
+    // SAFETY: CFArray 的元素都是 CF 对象；下面逐个检查是不是字符串。
+    let array = unsafe { array.cast_unchecked::<CFType>() };
+    array
+        .iter()
+        .filter_map(|item| item.downcast_ref::<CFString>().map(ToString::to_string))
+        .collect()
 }
 
 /// 本进程的应用偏好域（CFPreferences，与 `NSUserDefaults` 的应用域同一份）。
@@ -205,6 +189,8 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
+    use crate::bridge::UiError;
+    use crate::shell_locale::settle;
 
     #[derive(Default)]
     struct Memory {
@@ -367,19 +353,65 @@ mod tests {
             Some(reply.effective.clone())
         ));
 
+        // 写入成功后 `shell_locale::after_set` 经 `settle` 按应答镜像。
         let store = Memory::default();
-        assert_eq!(mirror_set_result(&store, &Ok(reply)), Some(Mirror::Written));
+        let outcome = std::cell::Cell::new(None);
+        let mirror_reply = |reply| {
+            settle(
+                Ok(reply),
+                |p| outcome.set(Some(mirror(&store, p))),
+                Vec::new,
+            )
+            .unwrap()
+        };
+        mirror_reply(reply);
+        assert_eq!(outcome.take(), Some(Mirror::Written));
         assert_eq!(store.value(APPLE_LANGUAGES), Some(strings(&["en"])));
         assert_eq!(store.value(MIRRORED_KEY), Some(strings(&["en"])));
 
         // 切回跟随系统：同样立即删掉我们写的值。
-        let back = preference("system", &[], &["en"]);
-        assert_eq!(mirror_set_result(&store, &Ok(back)), Some(Mirror::Removed));
+        mirror_reply(preference("system", &[], &["en"]));
+        assert_eq!(outcome.take(), Some(Mirror::Removed));
         assert_eq!(store.value(APPLE_LANGUAGES), None);
 
         // 写入失败（拒绝、老 daemon）不动存储。
         let failed = Err(UiError::invalid("locale_unsupported", "x"));
-        assert_eq!(mirror_set_result(&store, &failed), None);
+        assert!(settle(failed, |p| outcome.set(Some(mirror(&store, p))), Vec::new).is_err());
+        assert_eq!(outcome.take(), None);
         assert_eq!(store.writes(), 4);
+    }
+
+    /// 本进程的语言按 CF 的规则从假存储读：本域有 `AppleLanguages` 就是它，否则是全局列表。
+    fn process_languages_of(store: &Memory, global: &[&str]) -> Vec<String> {
+        store
+            .value(APPLE_LANGUAGES)
+            .unwrap_or_else(|| strings(global))
+    }
+
+    #[test]
+    fn a_stale_mirrored_value_never_counts_as_the_per_app_choice() {
+        // 上次运行时偏好是显式 en，我们镜像了 en；本 app 关着时别的客户端改回跟随系统（系统中文）。
+        // 启动后先镜像（删掉我们写的 en）再读本进程语言：得到全局中文，而不是过期的 en。
+        let store = Memory::with(&[(APPLE_LANGUAGES, &["en"]), (MIRRORED_KEY, &["en"])]);
+        let system = preference("system", &[], &["zh-Hans-CN"]);
+        let resolved = settle(
+            Ok(system.clone()),
+            |p| assert_eq!(mirror(&store, p), Mirror::Removed),
+            || process_languages_of(&store, &["zh-Hans-CN"]),
+        )
+        .unwrap();
+        assert_eq!(resolved.effective, strings(&["zh-Hans-CN"]));
+        assert_eq!(store.value(APPLE_LANGUAGES), None);
+
+        // 用户自己在系统设置里给本 app 设的英文（没有伴随键）：保留，并且我们的界面跟着它。
+        let store = Memory::with(&[(APPLE_LANGUAGES, &["en"])]);
+        let resolved = settle(
+            Ok(system),
+            |p| assert_eq!(mirror(&store, p), Mirror::Unchanged),
+            || process_languages_of(&store, &["zh-Hans-CN"]),
+        )
+        .unwrap();
+        assert_eq!(resolved.effective, strings(&["en"]));
+        assert_eq!(store.writes(), 0, "跟随系统从不写按 app 语言");
     }
 }

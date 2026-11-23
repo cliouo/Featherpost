@@ -21,6 +21,7 @@ pub mod mailbox;
 pub mod system;
 pub mod settings;
 pub mod settings_packages;
+mod shell_locale;
 
 /// Packaging contract (ADR-0039): only the `embedded` form serves its assets from the binary.
 /// A default-form build would load `devUrl` from a local port, so `build-bundle.sh` and
@@ -59,6 +60,8 @@ pub struct AppState {
     pub guard_ready: AtomicBool,
     /// ADR-0046：退出流水线（撤窗 → `Accessory` → `app.exit(0)`）已经启动；防重入。
     pub exiting: AtomicBool,
+    /// ADR-0048 决策 8（M2）：壳的语言列表，`ui_locale`、`maild://locale` 与原生菜单都读它。
+    pub locale: shell_locale::ShellLocale,
 }
 
 /// 起 Tauri 事件循环。必须在主线程调用；`tauri::async_runtime` 需已由调用方绑定到
@@ -84,6 +87,7 @@ pub fn run(bridge: Arc<Bridge>) -> Result<(), tauri::Error> {
             close_allowed: AtomicBool::new(false),
             guard_ready: AtomicBool::new(false),
             exiting: AtomicBool::new(false),
+            locale: shell_locale::ShellLocale::default(),
         })
         // ADR-0033 决策 4：文档与 part 只经令牌可达。处理器在 tokio 上异步跑——part 要经认证连接
         // 向 daemon 取字节。
@@ -475,8 +479,6 @@ fn spawn_state_pump(app: tauri::AppHandle, bridge: Arc<Bridge>) {
         let mut shutdown_seen = false;
         // 与 actor 初值一致：启动时还没有偏好，webview 与菜单都在基础语言。
         let mut seen_locale: Option<Vec<String>> = None;
-        #[cfg(target_os = "macos")]
-        let mut menu_locale = maild_l10n::Locale::default();
         loop {
             let (snapshot, intent_epoch, shutdown_requested, locale) = {
                 let current = state.borrow_and_update();
@@ -491,28 +493,11 @@ fn spawn_state_pump(app: tauri::AppHandle, bridge: Arc<Bridge>) {
             if let Err(error) = app.emit(STATE_EVENT, &snapshot) {
                 eprintln!("[maild-ui] 推送连接快照失败: {error}");
             }
-            // ADR-0048：偏好列表变了才转发——webview 自己协商并切换文案；原生菜单按同一规则协商，
-            // 协商结果变了才重建。
+            // ADR-0048：daemon 的偏好列表变了才重新解析壳的列表（M2：跟随系统时按本进程的语言，
+            // 含系统设置给本 app 单独设的语言），之后转发给 webview、按同一规则重建原生菜单；
+            // macOS 上先把模式镜像到本 app 的 AppleLanguages（M1，系统画的文字下次启动跟随）。
             if locale_changed(&mut seen_locale, locale) {
-                let payload = UiLocale {
-                    effective: seen_locale.clone(),
-                };
-                if let Err(error) = app.emit(LOCALE_EVENT, &payload) {
-                    eprintln!("[maild-ui] 推送语言偏好失败: {error}");
-                }
-                #[cfg(target_os = "macos")]
-                {
-                    let negotiated =
-                        maild_l10n::negotiate(seen_locale.as_deref().unwrap_or_default());
-                    if negotiated != menu_locale {
-                        menu_locale = negotiated;
-                        macos_locale::apply(&app, negotiated);
-                    }
-                    // 系统画的文字（右键菜单、文件面板）下次启动跟随：按模式镜像到本 app 的 AppleLanguages。
-                    if seen_locale.is_some() {
-                        macos_app_languages::spawn_sync(bridge.clone());
-                    }
-                }
+                shell_locale::spawn_refresh(app.clone(), bridge.clone(), seen_locale.clone());
             }
             // ADR-0045：daemon 推来 `frontend/intent`——菜单栏、通知或再次打开主 app bundle 排了意图。
             // 窗口可能正原生最小化在 Dock，或已被别处藏起（`Accessory` 收不到可靠的 Reopen），
