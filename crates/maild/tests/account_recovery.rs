@@ -134,6 +134,73 @@ async fn wait_online(client: &RpcClient, id: &str) {
     }
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn paused_connection_update_stays_offline() {
+    std::env::set_var("MAILD_TEST_CREDENTIAL_STORE", "memory");
+    std::env::set_var("MAILD_TEST_ACCEPT_INVALID_CERTS", "1");
+    let server = FakeMail::start_imap_implicit_and_smtp_starttls_with_login(PASSWORD_V1)
+        .await
+        .unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let paths = test_paths(root.path());
+    prepare_platform_root(&paths);
+    let (task, shutdown_tx, socket) = spawn_daemon(&paths).await;
+    let client = client_for(&socket);
+    let (draft, password) = draft_for(&server, PASSWORD_V1);
+    let created = client.create_account(&draft, &password, None).await.unwrap();
+    let id = created.profile.id;
+    wait_online(&client, &id).await;
+    let paused = client
+        .set_account_enabled(&id, created.profile.revision, false)
+        .await
+        .unwrap();
+    let mut incoming = incoming_input_from_view(&paused.incoming);
+    if let IncomingInput::Imap { poll_secs, .. } = &mut incoming {
+        *poll_secs = 120;
+    }
+    let patch = UpdatePatchInput {
+        incoming: Some(incoming),
+        ..Default::default()
+    };
+    let updated = client
+        .update_account(&id, paused.revision, &patch, Default::default())
+        .await
+        .unwrap();
+    assert!(!updated.enabled);
+    assert_eq!(updated.incoming.poll_secs, 120);
+    assert_eq!(updated.revision, paused.revision + 1);
+    assert_eq!(updated.runtime.state, "disabled");
+    let catalog = std::fs::read_to_string(&paths.accounts_file).unwrap();
+    assert!(catalog.contains("enabled = false"));
+    assert!(catalog.contains("poll_secs = 120"));
+
+    let archived = client.remove_account(&id, updated.revision).await.unwrap();
+    assert!(archived.archived);
+    let view = client
+        .list_account_profiles(true)
+        .await
+        .unwrap()
+        .profiles
+        .remove(0);
+    let error = client
+        .update_account(&id, view.revision, &patch, Default::default())
+        .await
+        .unwrap_err();
+    assert_eq!(error.rpc_code, Some(-32010));
+    let after = client
+        .list_account_profiles(true)
+        .await
+        .unwrap()
+        .profiles
+        .remove(0);
+    assert!(!after.enabled);
+    assert_eq!(after.runtime.state, "disabled");
+    assert_eq!(after.revision, view.revision);
+
+    shutdown_tx.send(()).unwrap();
+    task.await.unwrap().unwrap();
+}
+
 /// 目录损坏：配置停止、不产生任何网络任务、已存凭据原样保留。
 #[tokio::test(flavor = "current_thread")]
 async fn corrupt_catalog_fails_closed_and_keeps_credentials() {

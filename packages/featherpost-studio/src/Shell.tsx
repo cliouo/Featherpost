@@ -12,6 +12,14 @@ import { DRAFTS_VIEW } from "../../maild-ui/src/compose/controller";
 import { MAIL, ACTIVITY } from "./views";
 import { MailboxNavigation, type NavigationHandle } from "./MailboxNavigation";
 import { readStudioView, saveStudioView, type StudioView } from "./layout";
+import { ContextMenuHost, useContextMenu } from "./ContextMenu";
+import { folderMenu, selectionMenu } from "./menus";
+import {
+  StudioActionsContext,
+  clipboardCopier,
+  useStudioActions,
+  type StudioActions,
+} from "./studioActions";
 import {
   folderTree,
   folderIcon,
@@ -29,11 +37,13 @@ export function Studio({
   mailbox,
   composer,
   setup,
+  manageAccounts,
 }: {
   host: Host;
   mailbox: MailboxController;
   composer: ComposeController;
   setup(): void;
+  manageAccounts(): void;
 }) {
   // 订阅界面语言：切换时整棵树随根组件重新渲染（不重挂载、不丢状态）。
   useUiLocale();
@@ -112,6 +122,30 @@ export function Studio({
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
   }, [host]);
+  const actions: StudioActions = {
+    search(text, all = false) {
+      if (all) setAllMail(true);
+      setSearch(text);
+      void openMailbox(() => searchMail(mailbox, text, all || allMail, searchScope));
+    },
+    copy: clipboardCopier((text) => host.notify(text)),
+  };
+  const folderActions: FolderActions = {
+    open: (folder) => void openMailbox(() => mailbox.selectFolder(folder)),
+    openUnread: (folder) =>
+      void openMailbox(() => {
+        mailbox.selectFolder(folder);
+        mailbox.setUnreadFilter(true);
+      }),
+    searchIn: (folder) =>
+      void openMailbox(() => mailbox.selectFolder(folder)).then(() => {
+        setAllMail(false);
+        searchInput.current?.focus();
+        searchInput.current?.select();
+      }),
+    sync: () => void mailbox.syncNow(),
+    canSync: online && !mail.syncing,
+  };
   const unread = state.snapshot.accounts.reduce(
     (n, a) =>
       n +
@@ -122,6 +156,15 @@ export function Studio({
     0,
   );
   return (
+    <StudioActionsContext.Provider value={actions}>
+    <ContextMenuHost
+      selection={(text) =>
+        selectionMenu(text, {
+          copy: actions.copy,
+          search: (query) => actions.search(query, true),
+        })
+      }
+    >
     <div className={`studio studio-${view}`} data-studio-view={view}>
       <a className="skip-link" href="#workspace">
         {m.studio_shell_skip_to_content()}
@@ -262,6 +305,7 @@ export function Studio({
             navigate={openMailbox}
             focusRef={navigation}
             setup={setup}
+            manageAccounts={manageAccounts}
             folders={(account, filter) => (
               <FolderBranches
                 nodes={folderTree(mailbox.foldersOf(account))}
@@ -270,9 +314,7 @@ export function Studio({
                 messageContext={view === "unified"}
                 active={state.activeViewId === MAIL}
                 mailbox={mailbox}
-                open={(folder) =>
-                  void openMailbox(() => mailbox.selectFolder(folder))
-                }
+                actions={folderActions}
               />
             )}
           />
@@ -320,7 +362,18 @@ export function Studio({
         </div>
       )}
     </div>
+    </ContextMenuHost>
+    </StudioActionsContext.Provider>
   );
+}
+
+type Folder = FolderNode["folder"];
+interface FolderActions {
+  open(folder: Folder): void;
+  openUnread(folder: Folder): void;
+  searchIn(folder: Folder): void;
+  sync(): void;
+  canSync: boolean;
 }
 
 function FolderBranches({
@@ -330,7 +383,7 @@ function FolderBranches({
   active,
   messageContext,
   mailbox,
-  open,
+  actions,
 }: {
   nodes: FolderNode[];
   depth: number;
@@ -338,10 +391,18 @@ function FolderBranches({
   active: boolean;
   messageContext?: boolean;
   mailbox: MailboxController;
-  open(folder: FolderNode["folder"]): void;
+  actions: FolderActions;
 }) {
   useUiLocale();
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const menu = useContextMenu(),
+    { copy } = useStudioActions();
+  const toggle = (name: string) =>
+    setCollapsed((previous) => {
+      const next = new Set(previous);
+      next.has(name) ? next.delete(name) : next.add(name);
+      return next;
+    });
   const { scope, selectedRow } = useStore(mailbox.store);
   const current = (account: string, name: string) =>
     selectedFolder(
@@ -373,6 +434,22 @@ function FolderBranches({
             <div
               className={`folder-row ${active && current(folder.account, folder.name) ? "is-active" : ""}`}
               style={{ "--depth": depth } as CSSProperties}
+              onContextMenu={(e) =>
+                menu.offer(e, () =>
+                  folderMenu(folder, {
+                    open: () => actions.open(folder),
+                    openUnread: () => actions.openUnread(folder),
+                    searchIn: () => actions.searchIn(folder),
+                    sync: actions.sync,
+                    canSync: actions.canSync,
+                    copy,
+                    expansion:
+                      children.length && !filter
+                        ? { expanded, toggle: () => toggle(folder.name) }
+                      : undefined,
+                  }),
+                )
+              }
             >
               {children.length > 0 ? (
                 <button
@@ -383,15 +460,7 @@ function FolderBranches({
                       : m.studio_folder_expand({ folder: label })
                   }
                   aria-expanded={expanded}
-                  onClick={() =>
-                    setCollapsed((previous) => {
-                      const next = new Set(previous);
-                      next.has(folder.name)
-                        ? next.delete(folder.name)
-                        : next.add(folder.name);
-                      return next;
-                    })
-                  }
+                  onClick={() => toggle(folder.name)}
                 >
                   <span className={expanded ? "chevron" : "chevron collapsed"}>
                     ⌄
@@ -409,7 +478,7 @@ function FolderBranches({
                 }
                 disabled={!folder.present}
                 title={folder.name}
-                onClick={() => open(folder)}
+                onClick={() => actions.open(folder)}
               >
                 <Icon name={folderIcon(folder)} />
                 <span>{label}</span>
@@ -424,7 +493,7 @@ function FolderBranches({
                 filter={filter}
                 active={active}
                 mailbox={mailbox}
-                open={open}
+                actions={actions}
               />
             )}
           </div>

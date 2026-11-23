@@ -33,6 +33,10 @@ import {
   type ComposeController,
 } from "../../maild-ui/src/compose/controller";
 import { Editor } from "../../maild-ui/src/compose/Editor";
+import { useContextMenu } from "./ContextMenu";
+import { addressMenu, messageMenu } from "./menus";
+import { useStudioActions } from "./studioActions";
+import { useMailMenu } from "./Workspace";
 
 export function ReadingPane({
   host,
@@ -70,6 +74,9 @@ export function ReadingPane({
     ? s.profiles.find((p) => p.id === row.account)
     : undefined;
   const inline = !!row && compose.inline && compose.source === sourceKey(row);
+  const menu = useContextMenu(),
+    actions = useStudioActions(),
+    menuDeps = useMailMenu(controller, composer);
   return (
     <section className="reader-column" aria-label={m.studio_reader_label()}>
       <div className="reader-actions">
@@ -221,11 +228,32 @@ export function ReadingPane({
         </div>
       ) : (
         <div className="letter-scroll">
-          <div className="letter-content">
+          <div
+            className="letter-content"
+            onContextMenu={(e) => {
+              // The reply area holds the editor and its own controls.
+              if ((e.target as Element).closest(".reply-section")) return;
+              menu.offer(e, () => messageMenu(row, menuDeps, true), null);
+            }}
+          >
             <header className="letter-heading">
               <h2>{row.subject || m.studio_message_no_subject()}</h2>
               <div className="letter-sender">
-                <div>
+                <div
+                  onContextMenu={(e) =>
+                    menu.offer(e, () =>
+                      addressMenu(
+                        row.sender,
+                        {
+                          compose: (address) => void composer.create(address),
+                          copy: actions.copy,
+                          findSender: (address) => actions.search(address, true),
+                        },
+                        writable,
+                      ),
+                    )
+                  }
+                >
                   <strong>{displayName(row.sender) || row.sender}</strong>
                   <span className="sender-address">
                     {addressOnly(row.sender)}

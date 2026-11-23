@@ -47,6 +47,8 @@ if [[ "$icons" == 1 ]]; then
     trap 'rm -rf -- "$work"' EXIT
     swift "$repo_root/scripts/render-macos-icon.swift" "$artwork" \
         "$repo_root/assets/brand/icon-1024.png" "$repo_root/packaging/macos/assets/AppIcon.icns"
+    swift "$repo_root/scripts/render-menu-bar-icon.swift" \
+        "$repo_root/assets/brand/menubar-template.pdf" >/dev/null
     sips -z 512 512 "$repo_root/assets/brand/icon-1024.png" \
         --out "$repo_root/crates/maild-ui/icons/icon.png" >/dev/null
     sips -z 256 256 "$repo_root/assets/brand/icon-1024.png" --out "$work/icon-256.png" >/dev/null

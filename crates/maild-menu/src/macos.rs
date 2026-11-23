@@ -7,13 +7,13 @@ use maild_client::{
 use maild_l10n::Locale;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
-use objc2::{define_class, msg_send, sel, ClassType, DefinedClass, MainThreadOnly};
+use objc2::{define_class, msg_send, sel, AnyThread, ClassType, DefinedClass, MainThreadOnly};
 use objc2_app_kit::{
-    NSApplication, NSApplicationDelegate, NSMenu, NSMenuDelegate, NSMenuItem,
+    NSApplication, NSApplicationDelegate, NSImage, NSMenu, NSMenuDelegate, NSMenuItem,
     NSRunningApplication, NSStatusBar, NSStatusItem, NSVariableStatusItemLength,
 };
 use objc2_foundation::{
-    MainThreadMarker, NSLocale, NSNotification, NSObject, NSObjectProtocol, NSString,
+    MainThreadMarker, NSData, NSLocale, NSNotification, NSObject, NSObjectProtocol, NSString,
 };
 use tokio::runtime::{Builder, Handle};
 
@@ -38,6 +38,10 @@ const LOCALE_REQUEST_TIMEOUT: Duration = Duration::from_secs(1);
 /// answers in a few milliseconds; past this the menu opens in the last known language and a late
 /// answer applies on the next opening.
 const LOCALE_MENU_WAIT: Duration = Duration::from_millis(250);
+
+/// Status item glyph: the brand envelope-and-feather as a vector template PDF (18 pt tall).
+/// Regenerate with `swift scripts/render-menu-bar-icon.swift assets/brand/menubar-template.pdf`.
+static STATUS_ICON_PDF: &[u8] = include_bytes!("../../../assets/brand/menubar-template.pdf");
 
 struct MenuDelegateIvars {
     runtime: Handle,
@@ -143,7 +147,10 @@ impl MenuDelegate {
         let status_item =
             NSStatusBar::systemStatusBar().statusItemWithLength(NSVariableStatusItemLength);
         if let Some(button) = status_item.button(mtm) {
-            button.setTitle(&NSString::from_str("✉"));
+            match status_icon() {
+                Some(icon) => button.setImage(Some(&icon)),
+                None => button.setTitle(&NSString::from_str("✉")),
+            }
             button.setToolTip(Some(&NSString::from_str(maild_brand::PRODUCT_NAME)));
         }
         let menu = NSMenu::initWithTitle(
@@ -309,6 +316,16 @@ fn system_languages() -> Vec<String> {
             .map(|index| languages.objectAtIndex(index).to_string())
             .collect()
     })
+}
+
+/// The menu-bar glyph as a template image, so AppKit tints it for light/dark menu bars and the
+/// highlighted state. `None` only if the embedded PDF fails to decode; the caller falls back to text.
+fn status_icon() -> Option<Retained<NSImage>> {
+    let data = NSData::with_bytes(STATUS_ICON_PDF);
+    let icon = NSImage::initWithData(NSImage::alloc(), &data)?;
+    icon.setTemplate(true);
+    icon.setAccessibilityDescription(Some(&NSString::from_str(maild_brand::PRODUCT_NAME)));
+    Some(icon)
 }
 
 /// Ask the Agent for a managed graceful stop. `true` only when it acknowledged in time.

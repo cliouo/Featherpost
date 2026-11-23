@@ -55,6 +55,7 @@ packaging/macos/build-universal.sh --output "$PWD/dist/macos/<app_bundle_name>"
 | `crates/maild-ui/package/frontend.toml` | 开发期前端清单的 `id` / `name` |
 | `crates/{maild,maild-launcher,maild-menu,maild-ui}/Cargo.toml` | `# BEGIN/END GENERATED BRAND BINS` 之间的 `[[bin]]` 名 |
 | （`--icons`）`assets/brand/icon-1024.png`、`packaging/macos/assets/AppIcon.icns`、`crates/maild-ui/icons/icon.{png,ico}` | 从 `assets/brand/icon-artwork.jpg` 重绘的全套图标 |
+| （`--icons`）`assets/brand/menubar-template.pdf` | 菜单栏状态项的单色模板图标（信封＋羽毛矢量，18 pt 高），由 `scripts/render-menu-bar-icon.swift` 直接绘制，编译期嵌入 `maild-menu` |
 
 macOS 打包模板（`packaging/macos/templates/*.in`）本身是品牌中立的，只含 `__BRAND_<KEY>__` 占位符，构建时由
 `build-bundle.sh` 从 `brand.env` 渲染，所以**不需要**被同步脚本改写。

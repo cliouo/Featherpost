@@ -18,6 +18,7 @@ import "./navigation.css";
 import "./activity.css";
 import "./settings/settings.css";
 import "./select.css";
+import "./contextmenu.css";
 
 const host = new Host(tauriBridge);
 const composer = new ComposeController(
@@ -56,6 +57,10 @@ void startupLocaleReady().then(() => {
         mailbox={mailbox.controller}
         composer={composer}
         setup={mailbox.setup}
+        manageAccounts={() => {
+          settings.openAccounts();
+          host.openRole("settings");
+        }}
       />
       </ChoiceRenderer.Provider>
     </ErrorBoundary>,

@@ -15,6 +15,27 @@ import type { ComposeController } from "../../maild-ui/src/compose/controller";
 import { ReadingPane } from "./ReadingPane";
 import { scopeContext, filterUnread } from "./navigation";
 import { ACTIVITY } from "./views";
+import { useContextMenu } from "./ContextMenu";
+import { messageMenu, type MailMenuDeps } from "./menus";
+import { useStudioActions } from "./studioActions";
+
+/** Menu actions shared by list rows and the reading pane. */
+export function useMailMenu(
+  controller: MailboxController,
+  composer: ComposeController,
+): MailMenuDeps {
+  const actions = useStudioActions();
+  return {
+    controller,
+    reply(row, mode) {
+      // Replies open inline under the message, so the message must be open.
+      if (mode !== "forward") controller.selectMessage(row);
+      void composer.reply(row, mode);
+    },
+    copy: actions.copy,
+    findSender: (address) => actions.search(address, true),
+  };
+}
 
 export function Workspace({
   host,
@@ -38,6 +59,8 @@ export function Workspace({
     (s.scope.kind === "smart" && s.scope.name === "unread");
   const folderUnread = context.folder?.unseen;
   const title = searching ? m.studio_list_search_results() : context.name;
+  const menu = useContextMenu(),
+    menuDeps = useMailMenu(controller, composer);
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       if (
@@ -195,6 +218,9 @@ export function Workspace({
                   )}
                   <article
                     className={`message-row ${selected ? "selected" : ""} ${!row.seen ? "unread" : ""} ${checked ? "checked" : ""}`}
+                    onContextMenu={(e) =>
+                      menu.offer(e, () => messageMenu(row, menuDeps))
+                    }
                   >
                     <span className="row-marker" aria-hidden="true" />
                     <input

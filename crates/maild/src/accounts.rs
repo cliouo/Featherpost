@@ -1539,7 +1539,7 @@ impl AccountManager {
 
         // 重挂载 runtime：endpoint/username/secret 变化必须先停止旧 realm 再挂新 realm，
         // 避免两个 IDLE 连接并存。
-        if connection_changed {
+        if connection_changed && next.enabled {
             if let Some(old) = self.take_runtime(id) {
                 Self::stop_runtime(old).await;
                 self.accounts.remove(id);
