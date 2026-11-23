@@ -10,6 +10,7 @@ import type {
   UiSnapshot,
   UiSummary,
 } from "../bridge/types";
+import { compatBlocksWrites } from "../bridge/types";
 import { errorCode } from "../bridge/errors";
 import { Store } from "../host/store";
 import type {
@@ -18,12 +19,14 @@ import type {
   MailAction,
   MailboxQuery,
   Profile,
+  Receipt,
   Scope,
   SmartFolder,
   WriteRequest,
 } from "./types";
 const PAGE_SIZE = 50,
   MAX_ROWS = 1000;
+const MARK_READ_DWELL_MS = 1500;
 export const folderKey = ({ account, folder }: FolderIdentity) =>
   JSON.stringify([account, folder]);
 export const messageKey = ({ account, folder, uid }: MessageIdentity) =>
@@ -108,6 +111,39 @@ const describe = (error: unknown, fallback: string) =>
       : errorCode(error) === "not_found"
         ? m.mailbox_error_not_found()
         : fallback;
+const unconfirmedWrite = (error: unknown) =>
+  errorCode(error)
+    ? m.mailbox_error_submit_unconfirmed()
+    : error instanceof Error
+      ? error.message
+      : m.mailbox_error_unconfirmed();
+function validateReceipt(receipt: Receipt, uids: string[]) {
+  const { queued, queued_uids, unchanged_uids, missing_uids } = receipt;
+  if (!Number.isInteger(queued) || queued < 0 || queued > uids.length)
+    throw new Error(m.mailbox_error_receipt_invalid());
+  if (queued_uids && unchanged_uids && missing_uids) {
+    const ids = [...queued_uids, ...unchanged_uids, ...missing_uids];
+    if (
+      ids.length !== uids.length ||
+      new Set(ids).size !== ids.length ||
+      ids.some((uid) => !uids.includes(uid)) ||
+      queued_uids.length !== queued
+    )
+      throw new Error(m.mailbox_error_receipt_identity());
+    return {
+      queued,
+      unchanged: unchanged_uids.length,
+      accepted: [...queued_uids, ...unchanged_uids],
+      error: missing_uids.length ? m.mailbox_error_receipt_missing() : null,
+    };
+  }
+  return {
+    queued,
+    unchanged: 0,
+    accepted: queued === uids.length ? uids : [],
+    error: queued === uids.length ? null : m.mailbox_error_receipt_partial(),
+  };
+}
 function boundedSet<K, V>(cache: Map<K, V>, key: K, value: V, limit: number) {
   cache.delete(key);
   cache.set(key, value);
@@ -146,16 +182,20 @@ export class MailboxController {
   private rowRequests = new RequestGeneration();
   private navigationRequests = new RequestGeneration();
   private detailRequests = new RequestGeneration();
+  private readDwellRequests = new RequestGeneration();
   private threadRequests = new RequestGeneration();
   private metadataRequests = new RequestGeneration();
   private remoteRequests = new RequestGeneration();
   private folders = new Map<string, UiFolder[]>();
   private rows = new Map<string, Cached>();
   private details = new Map<string, UiMessage>();
+  private openingReads = new Map<string, Promise<void>>();
+  private manualSeen = new Set<string>();
   private folderLoads = new Map<string, Promise<void>>();
   private context = 0;
   private stopped = false;
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
+  private readDwellTimer: ReturnType<typeof setTimeout> | null = null;
   private previousSearch: { scope: Scope; selection: UiSummary | null } | null =
     null;
   constructor(
@@ -216,7 +256,10 @@ export class MailboxController {
     });
   }
   navigationGuard(){return this.navigationRequests.begin();}
-  invalidateNavigation(){this.navigationRequests.invalidate();}
+  invalidateNavigation() {
+    this.navigationRequests.invalidate();
+    this.cancelReadDwell();
+  }
   get state() {
     return this.store.getSnapshot();
   }
@@ -247,6 +290,7 @@ export class MailboxController {
     if (this.refreshTimer) clearTimeout(this.refreshTimer);
   }
   private invalidate() {
+    this.cancelReadDwell();
     this.folderLoads.clear();
     this.navigationRequests.invalidate();
     this.rowRequests.invalidate();
@@ -446,9 +490,16 @@ export class MailboxController {
       (r) => messageKey(r) === messageKey(identity),
     );
     if (!row) return;
-    this.openRow(row, preserveThread);
+    this.openRow(row, { preserveThread, markRead: true });
   }
-  private openRow(row: UiSummary, preserveThread = false) {
+  private openRow(
+    row: UiSummary,
+    { preserveThread = false, markRead = false } = {},
+  ) {
+    const key = messageKey(row);
+    if (markRead || !this.state.selected || key !== messageKey(this.state.selected))
+      this.cancelReadDwell();
+    const readCurrent = markRead ? this.readDwellRequests.begin() : null;
     this.navigationRequests.invalidate();
     if (!preserveThread) {
       this.threadRequests.invalidate();
@@ -463,9 +514,8 @@ export class MailboxController {
       });
     }
     const current = this.detailRequests.begin();
-    const key = messageKey(row);
     const cached = this.details.get(key);
-    this.setSelected(row);
+    this.setSelected(this.withOpeningRead(row));
     this.patch({
       detail: cached ?? null,
       detailError: null,
@@ -480,13 +530,16 @@ export class MailboxController {
       });
       return;
     }
-    void this.bridge
-      .message(row)
+    const pendingRead = this.openingReads.get(key);
+    const load = () => this.bridge.message(row);
+    void (pendingRead ? pendingRead.then(load) : load())
       .then((detail) => {
         if (!current() || this.stopped) return;
         if (messageKey(detail) !== key) throw new Error("identity mismatch");
+        detail = this.withOpeningRead(detail);
         boundedSet(this.details, key, detail, 24);
         this.patch({ detail, selectedRow: detail, loadingDetail: false });
+        if (readCurrent?.()) this.scheduleReadDwell(detail);
       })
       .catch((e) => {
         if (current() && !this.stopped)
@@ -495,6 +548,93 @@ export class MailboxController {
             detailError: describe(e, m.mailbox_error_detail()),
           });
       });
+  }
+  private cancelReadDwell() {
+    this.readDwellRequests.invalidate();
+    if (this.readDwellTimer !== null) clearTimeout(this.readDwellTimer);
+    this.readDwellTimer = null;
+  }
+  private scheduleReadDwell(detail: UiMessage) {
+    if (detail.seen) return;
+    const key = messageKey(detail);
+    this.readDwellTimer = setTimeout(() => {
+      this.readDwellTimer = null;
+      const { selected, selectedRow, detail: latest } = this.state;
+      if (
+        !this.stopped &&
+        selected &&
+        messageKey(selected) === key &&
+        !selectedRow?.seen
+      )
+        this.markOpenedRead(latest && messageKey(latest) === key ? latest : detail);
+    }, MARK_READ_DWELL_MS);
+  }
+  private withOpeningRead<T extends UiSummary>(row: T): T {
+    return !row.seen && this.openingReads.has(messageKey(row))
+      ? { ...row, seen: true }
+      : row;
+  }
+  private updateSeen(key: string, seen: boolean) {
+    const update = <T extends UiSummary>(row: T): T =>
+      messageKey(row) === key && row.seen !== seen ? { ...row, seen } : row;
+    const { rows, threadRows, remote, detail, selectedRow } = this.state;
+    for (const cached of this.rows.values()) cached.rows = cached.rows.map(update);
+    const cached = this.details.get(key);
+    if (cached) this.details.set(key, update(cached));
+    this.patch({
+      rows: rows.map(update),
+      threadRows: threadRows.map(update),
+      remote: { ...remote, rows: remote.rows.map(update) },
+      selectedRow: selectedRow && update(selectedRow),
+      detail: detail && update(detail),
+    });
+  }
+  private markOpenedRead({ account, folder, uid, seen }: UiMessage) {
+    const { snapshot, remote } = this.state;
+    const key = messageKey({ account, folder, uid });
+    if (
+      seen ||
+      snapshot.phase !== "online" ||
+      compatBlocksWrites(snapshot) ||
+      this.openingReads.has(key) ||
+      this.manualSeen.has(key) ||
+      (this.isRemote({ account, folder, uid }) && !remote.fetched.includes(key))
+    )
+      return;
+    const context = this.context;
+    const write = Promise.resolve().then(async () => {
+      let error: string | null = null;
+      try {
+        if (
+          this.stopped ||
+          this.state.snapshot.phase !== "online" ||
+          this.state.snapshot.connection_epoch !== snapshot.connection_epoch
+        )
+          throw new Error(m.mailbox_error_connection_changed());
+        const receipt = await this.bridge.mailbox.write({
+          action: "mark",
+          flag: "seen",
+          value: true,
+          account,
+          folder,
+          uids: [uid],
+        });
+        error = validateReceipt(receipt, [uid]).error;
+      } catch (e) {
+        error = unconfirmedWrite(e);
+      } finally {
+        this.openingReads.delete(key);
+      }
+      if (this.stopped) return;
+      if (error) {
+        this.updateSeen(key, false);
+        if (context === this.context)
+          this.patch({ report: { requested: 1, queued: 0, unchanged: 0, unconfirmed: 1, error } });
+      }
+      void this.refresh(false);
+    });
+    this.openingReads.set(key, write);
+    this.updateSeen(key, true);
   }
   async locate(account: string, uid: string, folder?: string) {
     if (!folder) {
@@ -532,7 +672,7 @@ export class MailboxController {
         title: folderLabel(source, message.folder),
       });
       boundedSet(this.details, messageKey(message), message, 24);
-      this.openRow(message);
+      this.openRow(message, { markRead: true });
     } catch (e) {
       if (current())
         this.patch({
@@ -550,6 +690,7 @@ export class MailboxController {
     );
   }
   clearSelection() {
+    this.cancelReadDwell();
     this.navigationRequests.invalidate();
     this.detailRequests.invalidate();
     this.threadRequests.invalidate();
@@ -571,7 +712,7 @@ export class MailboxController {
     const row = this.state.selectedRow;
     if (row) {
       this.details.delete(messageKey(row));
-      this.openRow(row, true);
+      this.openRow(row, { preserveThread: true });
     }
   }
   refresh = async (refreshDetail=true) => {
@@ -643,7 +784,7 @@ export class MailboxController {
         throw new Error("scope mismatch");
       const rows = [
         ...new Map(
-          [...previous, ...page.messages].map((r) => [messageKey(r), r]),
+          [...previous, ...page.messages].map((r) => [messageKey(r), this.withOpeningRead(r)]),
         ).values(),
       ].slice(0, MAX_ROWS);
       const nextOffset = offset + page.messages.length;
@@ -763,7 +904,7 @@ export class MailboxController {
     if (!current() || this.stopped || epoch !== this.state.snapshot.connection_epoch) return;
     const local = new Set(this.state.rows.map(messageKey));
     const rows = [
-      ...new Map(found.filter((r) => !local.has(messageKey(r))).map((r) => [messageKey(r), r])).values(),
+      ...new Map(found.filter((r) => !local.has(messageKey(r))).map((r) => [messageKey(r), this.withOpeningRead(r)])).values(),
     ]
       .sort((a, b) => b.sort_at - a.sort_at)
       .slice(0, 200);
@@ -792,11 +933,13 @@ export class MailboxController {
   openRemote(row: UiSummary) {
     const key = messageKey(row);
     if (this.state.remote.fetched.includes(key)) {
-      this.openRow(row);
+      this.openRow(row, { markRead: true });
       return;
     }
     const fetch = this.bridge.mailbox.fetchServerMessage;
     if (!fetch) return;
+    this.cancelReadDwell();
+    const readCurrent = this.readDwellRequests.begin();
     this.navigationRequests.invalidate();
     this.threadRequests.invalidate();
     this.patch({
@@ -809,7 +952,7 @@ export class MailboxController {
       threadLoading: false,
     });
     const current = this.detailRequests.begin();
-    this.setSelected(row);
+    this.setSelected(this.withOpeningRead(row));
     this.patch({ detail: null, detailError: null, loadingDetail: true });
     if (this.state.snapshot.phase !== "online") {
       this.patch({
@@ -830,6 +973,7 @@ export class MailboxController {
           return;
         }
         if (messageKey(detail) !== key) throw new Error("identity mismatch");
+        detail = this.withOpeningRead(detail);
         boundedSet(this.details, key, detail, 24);
         this.patch({
           detail,
@@ -840,6 +984,7 @@ export class MailboxController {
             fetched: [...this.state.remote.fetched.filter((k) => k !== key), key],
           },
         });
+        if (readCurrent()) this.scheduleReadDwell(detail);
       })
       .catch((e) => {
         if (current() && !this.stopped)
@@ -866,7 +1011,7 @@ export class MailboxController {
     const row = list[next]!;
     if (index === next) return row;
     if (remote) this.openRemote(row);
-    else this.openRow(row);
+    else this.openRow(row, { markRead: true });
     return row;
   }
   /** s / u：切换当前邮件的星标或已读。尚未拉回本地的服务器结果不能写。 */
@@ -959,6 +1104,15 @@ export class MailboxController {
     ];
     const context = this.context,
       epoch = this.state.snapshot.connection_epoch;
+    const writesSeen = action.action === "mark" && action.flag === "seen";
+    if (writesSeen) {
+      const selected = this.state.selected && messageKey(this.state.selected);
+      for (const row of frozen) {
+        const key = messageKey(row);
+        this.manualSeen.add(key);
+        if (key === selected) this.cancelReadDwell();
+      }
+    }
     this.patch({ busy: true, report: null });
     let queued = 0,
       unchanged = 0;
@@ -980,6 +1134,10 @@ export class MailboxController {
           const rows = group.slice(offset, offset + 500),
             first = rows[0];
           try {
+            if (writesSeen) {
+              const opening = rows.flatMap((row) => this.openingReads.get(messageKey(row)) ?? []);
+              if (opening.length) await Promise.all(opening);
+            }
             if (
               this.state.snapshot.phase !== "online" ||
               this.state.snapshot.connection_epoch !== epoch
@@ -1010,56 +1168,21 @@ export class MailboxController {
                 uids: rows.map((r) => r.uid),
               };
             const receipt = await this.bridge.mailbox.write(request);
-            if (
-              !Number.isInteger(receipt.queued) ||
-              receipt.queued < 0 ||
-              receipt.queued > rows.length
-            )
-              throw new Error(m.mailbox_error_receipt_invalid());
-            if (
-              receipt.queued_uids &&
-              receipt.unchanged_uids &&
-              receipt.missing_uids
-            ) {
-              const ids = [
-                ...receipt.queued_uids,
-                ...receipt.unchanged_uids,
-                ...receipt.missing_uids,
-              ];
-              if (
-                ids.length !== rows.length ||
-                new Set(ids).size !== ids.length ||
-                ids.some((id) => !rows.some((r) => r.uid === id)) ||
-                receipt.queued_uids.length !== receipt.queued
-              )
-                throw new Error(m.mailbox_error_receipt_identity());
-              queued += receipt.queued;
-              unchanged += receipt.unchanged_uids.length;
-              for (const row of rows)
-                if (
-                  receipt.queued_uids.includes(row.uid) ||
-                  receipt.unchanged_uids.includes(row.uid)
-                )
-                  accepted.add(messageKey(row));
-              if (receipt.missing_uids.length)
-                error = m.mailbox_error_receipt_missing();
-            } else {
-              queued += receipt.queued;
-              if (receipt.queued === rows.length)
-                for (const row of rows) accepted.add(messageKey(row));
-              else error = m.mailbox_error_receipt_partial();
-            }
+            const result = validateReceipt(receipt, request.uids);
+            queued += result.queued;
+            unchanged += result.unchanged;
+            for (const uid of result.accepted)
+              accepted.add(messageKey({ ...first, uid }));
+            if (result.error) error = result.error;
           } catch (e) {
-            error = errorCode(e)
-              ? m.mailbox_error_submit_unconfirmed()
-              : e instanceof Error
-                ? e.message
-                : m.mailbox_error_unconfirmed();
+            error = unconfirmedWrite(e);
           }
         }
     } catch (e) {
       error = e instanceof Error ? e.message : m.mailbox_error_unconfirmed();
     } finally {
+      if (writesSeen)
+        for (const row of frozen) this.manualSeen.delete(messageKey(row));
       this.rows.clear();
       this.details.clear();
       const selected = this.state.selectedRow;
@@ -1145,7 +1268,10 @@ export class MailboxController {
         throw new Error("thread changed");
       const rows = [
         ...new Map(
-          [...s.threadRows, ...page.messages].map((r) => [messageKey(r), r]),
+          [...this.state.threadRows, ...page.messages].map((r) => [
+            messageKey(r),
+            this.withOpeningRead(r),
+          ]),
         ).values(),
       ];
       if (page.messages.length === 0 && offset < page.total)
