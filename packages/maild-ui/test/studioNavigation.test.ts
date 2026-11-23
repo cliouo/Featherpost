@@ -205,7 +205,7 @@ it("distinguishes localized sibling folder names without hiding either server fo
       "草稿箱 · Drafts",
     ]);
     for (const f of drafts) {
-      const scope = { kind: "folder" as const, account: f.account, folder: f.name };
+      const scope = { kind: "folder" as const, account: f.account, folder: f.name, title: labels.get(f)! };
       expect(drafts.filter((other) => selectedFolder(scope, other.account, other.name))).toEqual([f]);
     }
     expect(drafts).toEqual(before);
@@ -283,7 +283,7 @@ it("calls the system Drafts 草稿箱 while preserving a custom 草稿 folder an
     expect([...folderNavigationLabels(folders).values()]).toEqual(["草稿箱", "草稿"]);
     expect(folders.map((f) => f.name)).toEqual(["Drafts", "草稿"]);
     for (const f of folders) {
-      const scope = { kind: "folder" as const, account: f.account, folder: f.name };
+      const scope = { kind: "folder" as const, account: f.account, folder: f.name, title: f.display_name };
       expect(folders.filter((other) => selectedFolder(scope, other.account, other.name))).toEqual([f]);
     }
   } finally {
