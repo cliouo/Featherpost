@@ -66,10 +66,15 @@
   display: flex;
   align-items: center;
   gap: 7px;
-  min-height: 48px;
+  height: 40px;
   width: 100%;
   text-align: left;
   padding: 7px 0;
+  transition: height 160ms ease;
+}
+.grouped-account.account-has-address.account-expanded .account-heading,
+.directory-body .grouped-account.account-has-address .account-heading {
+  height: 48px;
 }
 .grouped-account .account-heading > .chevron {
   font-size: 12px;
@@ -81,24 +86,55 @@
 .grouped-account .account-identity {
   flex: 1;
   min-width: 0;
+  display: block;
 }
 .grouped-account .account-identity strong {
+  display: block;
   font-size: 11px;
   font-weight: 450;
 }
 .grouped-account .account-identity small {
-  /* Reserve the address line so expansion cannot recenter the icon or count. */
   display: block;
+  height: 0;
+  opacity: 0;
   visibility: hidden;
   font-size: 9px;
-  margin-top: 3px;
+  line-height: 14px;
+  margin-top: 0;
+  transition: height 160ms ease, margin-top 160ms ease, opacity 160ms ease,
+    visibility 160ms ease;
 }
 .grouped-account.account-expanded .account-identity strong {
   font-weight: 600;
 }
 .grouped-account.account-expanded .account-identity small,
 .directory-body .grouped-account .account-identity small {
+  height: 14px;
+  margin-top: 3px;
+  opacity: 1;
   visibility: visible;
+}
+.account-folders {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition: grid-template-rows 160ms ease, opacity 160ms ease;
+}
+.account-folders > div {
+  min-height: 0;
+  overflow: hidden;
+}
+.account-expanded > .account-folders {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  .grouped-account .account-heading,
+  .grouped-account .account-identity small,
+  .grouped-account .chevron,
+  .account-folders {
+    transition: none;
+  }
 }
 .grouped-account .account-mark {
   border: 1px solid var(--studio-border);
