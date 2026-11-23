@@ -1,3 +1,4 @@
+import { applyEffectiveLocales } from "@featherpost/i18n";
 import { createElement, type ReactElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, expect, it, vi } from "vitest";
@@ -15,7 +16,10 @@ import { FakeSettings, account } from "./fakeSettings";
 import { Extensions } from "../src/settings/Extensions";
 import { BRAND } from "../src/brand";
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  applyEffectiveLocales([]);
+});
 
 it("does not call the legacy builtin frontend the current Studio window", () => {
   const controller = new SettingsController(new FakeSettings());
@@ -90,6 +94,31 @@ it("retains every built-in settings section without changing the legacy renderer
   expect(render(legacy)).not.toContain("studio-theme-preview");
   studio.dispose?.();
   legacy.dispose?.();
+});
+
+it("renders the account editor in English when the effective locale is en", () => {
+  applyEffectiveLocales(["en"]);
+  const c = new SettingsController(new FakeSettings());
+  const profiles = [account(), { ...account(), id: "readonly", editable: false }];
+  c.store.patch({ profiles });
+  c.beginAccount(profiles[0]);
+  const html = renderToStaticMarkup(createElement(Accounts, { controller: c }));
+  for (const text of [
+    "Connected mailboxes",
+    "Config file account, read-only",
+    "Display name",
+    "Email address",
+    "IMAP server",
+    "SMTP server",
+    "Use IMAP IDLE for new mail",
+    "Polling interval (seconds)",
+    "Check connection",
+    "Save changes",
+    "More account actions",
+  ])
+    expect(html).toContain(text);
+  expect(html).not.toContain("显示名称");
+  c.dispose();
 });
 
 it("keeps all accounts visible around the inline editor, including read-only profiles", () => {

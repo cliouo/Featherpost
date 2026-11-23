@@ -1,3 +1,4 @@
+import { applyEffectiveLocales } from "@featherpost/i18n";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, expect, it } from "vitest";
@@ -11,7 +12,10 @@ import type { Operation } from "../src/mailbox/types";
 import { FakeBridge } from "./fakeBridge";
 
 const controllers: MailboxController[] = [];
-afterEach(() => controllers.splice(0).forEach((c) => c.stop()));
+afterEach(() => {
+  controllers.splice(0).forEach((c) => c.stop());
+  applyEffectiveLocales([]);
+});
 function operation(patch: Partial<Operation> = {}): Operation {
   return {
     id: 1,
@@ -109,4 +113,29 @@ it("does not mistake loading, errors or a disconnected daemon for an empty histo
   expect(render({ loading: true })).toContain("正在读取同步活动");
   expect(render({ error: "无法读取活动" })).toContain('role="alert"');
   expect(render({ online: false })).toContain("后台连接不可用");
+});
+
+it("renders the activity page in English when the effective locale is en", () => {
+  applyEffectiveLocales(["en-US"]);
+  const html = render({
+    ops: [
+      operation({ id: 1, attempts: 1 }),
+      operation({ id: 2, state: "unknown" }),
+    ],
+    more: true,
+  });
+  for (const text of [
+    "Sync activity",
+    "Mark as read",
+    "Result needs review",
+    "1 attempt",
+    "2 attempts",
+    "2 items loaded",
+    "Load earlier operations",
+    "Message 3",
+    "Check the message flags before deciding whether to retry",
+  ])
+    expect(html).toContain(text);
+  expect(html).toMatch(/>Stop retrying<\/button>/);
+  expect(html).toMatch(/>Review and retry<\/button>/);
 });

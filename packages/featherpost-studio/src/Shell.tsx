@@ -1,4 +1,5 @@
-import { folderLabel, UI_LOCALE } from "../../maild-ui/src/i18n";
+import { m } from "@featherpost/i18n/messages";
+import { folderLabel, uiLocale, useUiLocale } from "../../maild-ui/src/i18n";
 import { Choice } from "../../maild-ui/src/settings/Choice";
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import type { Host } from "../../maild-ui/src/host/host";
@@ -28,6 +29,9 @@ import {
   type FolderNode,
 } from "./navigation";
 
+// i18n-lint-allow-cjk: 全角加号是按钮的装饰图标（aria-hidden），不是文案
+const PLUS = "＋";
+
 export function Studio({
   host,
   mailbox,
@@ -41,6 +45,8 @@ export function Studio({
   setup(): void;
   manageAccounts(): void;
 }) {
+  // 订阅界面语言：切换时整棵树随根组件重新渲染（不重挂载、不丢状态）。
+  useUiLocale();
   const state = useStore(host.state),
     mail = useStore(mailbox.store),
     drafts = useStore(composer.store);
@@ -161,7 +167,7 @@ export function Studio({
     >
     <div className={`studio studio-${view}`} data-studio-view={view}>
       <a className="skip-link" href="#workspace">
-        跳到邮件内容
+        {m.studio_shell_skip_to_content()}
       </a>
       <header className="studio-topbar" data-tauri-drag-region>
         <div className="studio-brand" data-tauri-drag-region>
@@ -189,13 +195,13 @@ export function Studio({
           <input
             ref={searchInput}
             data-mail-search
-            aria-label="搜索邮件"
-            placeholder="搜索邮件"
+            aria-label={m.studio_search_label()}
+            placeholder={m.studio_search_label()}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
           <Choice
-            aria-label="搜索范围"
+            aria-label={m.studio_search_scope_label()}
             value={
               allMail || (!searchContext.account && !searchContext.accounts)
                 ? "all"
@@ -213,16 +219,19 @@ export function Studio({
             {(searchContext.account || searchContext.accounts) && (
               <option value="current">
                 {searchContext.accounts
-                  ? `${searchContext.group ?? "所选分组"}的全部邮件`
+                  ? m.studio_search_scope_group({
+                      group:
+                        searchContext.group ?? m.studio_scope_selected_group(),
+                    })
                   : searchContext.label}
               </option>
             )}
-            <option value="all">全部邮件</option>
+            <option value="all">{m.studio_search_scope_all()}</option>
           </Choice>
           {searchText ? (
             <button
               type="button"
-              aria-label="清除搜索"
+              aria-label={m.studio_search_clear()}
               onClick={() => {
                 setSearch("");
                 void openMailbox(() => searchMail(mailbox, ""));
@@ -235,35 +244,43 @@ export function Studio({
           )}
         </form>
         <div className="topbar-actions">
-          <div className="view-switch" role="group" aria-label="邮箱视图">
+          <div className="view-switch" role="group" aria-label={m.studio_view_switch_label()}>
             <button
               aria-pressed={view === "standard"}
               onClick={() => changeView("standard")}
             >
-              标准
+              {m.studio_view_switch_standard()}
             </button>
             <button
               aria-pressed={view === "unified"}
               onClick={() => changeView("unified")}
             >
-              统一收件
+              {m.studio_view_switch_unified()}
             </button>
           </div>
           <button
             className={`sync-status ${mail.syncing ? "spinning" : ""}`}
             disabled={!online || mail.syncing}
-            title="立即同步"
+            title={m.studio_sync_now()}
             onClick={() => void mailbox.syncNow()}
           >
             <Icon name="refresh" />
             <span>
-              {mail.syncing ? "正在同步" : online ? "已连接" : "连接中"}
+              {mail.syncing
+                ? m.studio_sync_status_syncing()
+                : online
+                  ? m.studio_sync_status_online()
+                  : m.studio_sync_status_connecting()}
             </span>
           </button>
           <button
             className={`icon-button drafts-shortcut ${state.activeViewId === DRAFTS_VIEW ? "active" : ""}`}
-            title="本机草稿"
-            aria-label={`本机草稿${drafts.draftTotal ? ` ${drafts.draftTotal}` : ""}`}
+            title={m.studio_drafts_label()}
+            aria-label={
+              drafts.draftTotal
+                ? m.studio_drafts_label_count({ count: drafts.draftTotal })
+                : m.studio_drafts_label()
+            }
             onClick={() => host.openView(DRAFTS_VIEW)}
           >
             <Icon name="drafts" />
@@ -272,13 +289,13 @@ export function Studio({
           <button
             className="compose-button"
             onClick={() => void composer.create()}
-            title="写邮件 ⌘ N"
+            title={m.studio_compose_title()}
           >
-            <span aria-hidden="true">＋</span> 写邮件
+            <span aria-hidden="true">{PLUS}</span> {m.studio_compose()}
           </button>
         </div>
       </header>
-      <aside className="studio-sidebar" aria-label="账户和文件夹">
+      <aside className="studio-sidebar" aria-label={m.studio_sidebar_label()}>
         <div className="sidebar-scroll">
           <MailboxNavigation
             mailbox={mailbox}
@@ -304,20 +321,21 @@ export function Studio({
         </div>
         <footer className="sidebar-footer">
           <button className="add-account" onClick={setup}>
-            <span aria-hidden="true">＋</span> 添加账户
+            <span aria-hidden="true">{PLUS}</span>{" "}
+            {m.studio_account_add()}
           </button>
           <button
             className="icon-button"
-            title="同步活动"
-            aria-label="同步活动"
+            title={m.studio_view_activity()}
+            aria-label={m.studio_view_activity()}
             onClick={() => host.openView(ACTIVITY)}
           >
             <Icon name="activity" />
           </button>
           <button
             className="icon-button"
-            title="设置 ⌘ ,"
-            aria-label="设置"
+            title={m.studio_sidebar_settings_title()}
+            aria-label={m.studio_sidebar_settings()}
             onClick={() => host.openRole("settings")}
           >
             <Icon name="settings" />
@@ -327,13 +345,13 @@ export function Studio({
       <main id="workspace" className="studio-workspace">
         {state.snapshot.identity_failure && (
           <div className="notice error" role="alert">
-            新版前端尚未注册，请运行安装包里的「安装 Studio.command」后重开窗口
+            {m.studio_notice_identity_failure()}
           </div>
         )}
         {(state.snapshot.compat === "app_outdated" ||
           state.snapshot.compat === "kernel_outdated") && (
           <div className="notice" role="alert">
-            界面与后台版本不同，当前只读。请更新 Featherpost 后重试。
+            {m.studio_notice_version_mismatch()}
           </div>
         )}
         {View && <View active />}
@@ -375,6 +393,7 @@ function FolderBranches({
   mailbox: MailboxController;
   actions: FolderActions;
 }) {
+  useUiLocale();
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const menu = useContextMenu(),
     { copy } = useStudioActions();
@@ -395,7 +414,7 @@ function FolderBranches({
   const matches = (n: FolderNode): boolean =>
     !filter ||
     `${n.folder.name} ${n.folder.display_name} ${folderLabel(n.folder)}`
-      .toLocaleLowerCase(UI_LOCALE)
+      .toLocaleLowerCase(uiLocale())
       .includes(filter) ||
     n.children.some(matches);
   return (
@@ -435,7 +454,11 @@ function FolderBranches({
               {children.length > 0 ? (
                 <button
                   className="folder-disclosure"
-                  aria-label={`${expanded ? "折叠" : "展开"} ${label}`}
+                  aria-label={
+                    expanded
+                      ? m.studio_folder_collapse({ folder: label })
+                      : m.studio_folder_expand({ folder: label })
+                  }
                   aria-expanded={expanded}
                   onClick={() => toggle(folder.name)}
                 >

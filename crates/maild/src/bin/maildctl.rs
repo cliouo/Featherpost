@@ -8,9 +8,11 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use maild_client::{
     discover_endpoint, generate_token, validate_draft_input, AccountDraftInput, ClientError,
-    CompatVerdict, DiscoveryOptions, ErrorKind, IncomingInput, OutgoingInput, RpcClient,
-    PluginPackageKind, UpdatePatchInput, PROTOCOL_VERSION,
+    CompatVerdict, DiscoveryOptions, ErrorKind, IncomingInput, LocalePreferenceResult,
+    LocalePreferenceUpdate, OutgoingInput, PluginPackageKind, RpcClient, UpdatePatchInput,
+    PROTOCOL_VERSION,
 };
+use maild_l10n::{Ctl, Locale};
 use serde_json::{json, Value};
 
 const MAX_BODY_BYTES: u64 = 512 * 1024;
@@ -91,6 +93,12 @@ enum Command {
     ReadingPolicy {
         #[command(subcommand)]
         command: ReadingPolicyCommand,
+    },
+    /// Show or change the language preference shared by all interfaces (ADR-0048).
+    Locale {
+        /// Omit to show the current preference.
+        #[command(subcommand)]
+        command: Option<LocaleCommand>,
     },
     /// Work with daemon-owned drafts (ADR-0034).
     Draft {
@@ -310,6 +318,26 @@ enum ReadingPolicyCommand {
     Untrust {
         #[arg(required = true)]
         values: Vec<String>,
+    },
+}
+
+/// 语言偏好子命令（ADR-0048 决策 1、2）。偏好归 daemon，`set` 整包替换。
+#[derive(Subcommand)]
+enum LocaleCommand {
+    /// Print the mode, the explicit languages, and the resolved `effective` list.
+    Show,
+    /// Set an ordered list of BCP 47 tags (`set en zh-Hans`), or `--system` to follow the OS.
+    Set {
+        /// Preferred languages, most preferred first.
+        #[arg(
+            value_name = "LANGUAGE",
+            required_unless_present = "system",
+            conflicts_with = "system"
+        )]
+        languages: Vec<String>,
+        /// Follow the operating system's preferred languages.
+        #[arg(long)]
+        system: bool,
     },
 }
 
@@ -581,9 +609,15 @@ async fn run(cli: Cli) -> Result<(), AppError> {
         pipe: cli.pipe,
     })?;
     let client = RpcClient::new(endpoint)?;
-    warn_on_protocol_skew(&client).await;
+    let compat = client.agent_compat(PROTOCOL_VERSION).await;
+    let reachable = !matches!(&compat, Err(error) if error.kind == ErrorKind::Connection);
+    let m = &cli_locale(&client, reachable).await.messages().ctl;
+    warn_on_protocol_skew(compat, m);
+    if let Command::Locale { command } = cli.command {
+        return run_locale(client, command, cli.json).await;
+    }
     if let Command::Account { command } = cli.command {
-        return run_account(client, command, cli.json).await;
+        return run_account(client, command, cli.json, m).await;
     }
     if let Command::PluginToken { id, frontend } = cli.command {
         // reveal 即轮换（ADR-0017）：明文只在本次 stdout 出现，旧凭证对新连接失效。
@@ -593,22 +627,22 @@ async fn run(cli: Cli) -> Result<(), AppError> {
         if cli.json {
             println!("{}", json!({ "token": token }));
         } else {
-            eprintln!("凭证已轮换；旧凭证对新连接立即失效。请立即写入插件自己的配置，勿入 shell 历史：");
+            eprintln!("{}", m.token_rotated_notice);
             println!("{token}");
         }
         return Ok(());
     }
     if let Command::Plugin { command } = cli.command {
-        return run_plugin(client, command, cli.json).await;
+        return run_plugin(client, command, cli.json, m).await;
     }
     if let Command::Attachment { command } = cli.command {
         return run_attachment(client, command, cli.json).await;
     }
     if let Command::ReadingPolicy { command } = cli.command {
-        return run_reading_policy(client, command, cli.json).await;
+        return run_reading_policy(client, command, cli.json, m).await;
     }
     if let Command::Draft { command } = cli.command {
-        return run_draft(client, command, cli.json).await;
+        return run_draft(client, command, cli.json, m).await;
     }
     let (method, params) = match cli.command {
         Command::Status => ("status", json!({})),
@@ -672,6 +706,7 @@ async fn run(cli: Cli) -> Result<(), AppError> {
             unreachable!("reading-policy commands handled before dispatch")
         }
         Command::Draft { .. } => unreachable!("draft commands handled before dispatch"),
+        Command::Locale { .. } => unreachable!("locale commands handled before dispatch"),
     };
 
     let result = client.call(method, params).await?;
@@ -682,30 +717,45 @@ async fn run(cli: Cli) -> Result<(), AppError> {
                 .map_err(|e| AppError::rpc(format!("JSON 输出失败: {e}")))?
         );
     } else {
-        print_text(method, &result);
+        print_text(method, &result, m);
     }
     Ok(())
 }
 
+/// CLI 自己的界面语言（ADR-0048 L5）。连得上 daemon 就用它解析好的 `effective`，与通知、
+/// 菜单栏等内核界面一致；连不上、老 daemon（`-32601`）或其他失败时读系统首选语言，
+/// 读不到再回落 `zh-Hans`（`negotiate` 对空列表的回落）。失败不报错：语言只影响措辞。
+async fn cli_locale(client: &RpcClient, reachable: bool) -> Locale {
+    if reachable {
+        if let Ok(view) = client.locale_preference().await {
+            return maild_l10n::negotiate(&view.effective);
+        }
+    }
+    system_locale()
+}
+
+/// 不经 daemon 的回落：与 daemon `system` 模式读同一个来源（macOS 为 `NSLocale`，
+/// 其他平台为 `LC_ALL` → `LC_MESSAGES` → `LANG`）。
+fn system_locale() -> Locale {
+    maild_l10n::negotiate(&maild::locale_preference::system_preferred_languages())
+}
+
 /// ADR-0016：内核与客户端协议代不一致时在 stderr 提示。不改变退出码与输出，
 /// 保持脚本可用；握手失败不额外制造噪音（连不上等故障由后续命令本身报错）。
-async fn warn_on_protocol_skew(client: &RpcClient) {
-    let verdict = match client.agent_compat(PROTOCOL_VERSION).await {
+fn warn_on_protocol_skew(compat: Result<CompatVerdict, ClientError>, m: &Ctl) {
+    let verdict = match compat {
         Ok(verdict) => verdict,
         Err(_) => return,
     };
     match verdict {
         CompatVerdict::Compatible => {}
-        CompatVerdict::KernelOutdated => eprintln!(
-            "警告: 后台内核协议代较旧（期望 {PROTOCOL_VERSION}），结果可能不可靠；请重启后台内核"
-        ),
-        CompatVerdict::AppOutdated => {
-            eprintln!(
-                "警告: {} 较旧（内核协议代更新），建议更新 {}",
-                maild_brand::CLI_CTL,
-                maild_brand::PRODUCT_NAME
-            )
+        CompatVerdict::KernelOutdated => {
+            eprintln!("{}", (m.kernel_outdated_warning)(PROTOCOL_VERSION))
         }
+        CompatVerdict::AppOutdated => eprintln!(
+            "{}",
+            (m.app_outdated_warning)(maild_brand::CLI_CTL, maild_brand::PRODUCT_NAME)
+        ),
     }
 }
 
@@ -754,7 +804,7 @@ fn read_body(path: &Path) -> Result<String, AppError> {
     String::from_utf8(bytes).map_err(|_| AppError::connection("正文必须是 UTF-8"))
 }
 
-fn print_text(method: &str, result: &Value) {
+fn print_text(method: &str, result: &Value, m: &Ctl) {
     match method {
         "status" => {
             println!("version: {}", result["version"].as_str().unwrap_or("?"));
@@ -762,7 +812,7 @@ fn print_text(method: &str, result: &Value) {
                 "messages: {}",
                 result["message_count"].as_i64().unwrap_or(0)
             );
-            print_accounts(&result["accounts"]);
+            print_accounts(&result["accounts"], m);
             print_runtime(&result["runtime"]);
         }
         "syncMessages" => {
@@ -780,7 +830,7 @@ fn print_text(method: &str, result: &Value) {
             println!("triggered: {triggered}");
             println!("online: {}", result["online_count"].as_u64().unwrap_or(0));
         }
-        "listAccounts" => print_accounts(&result["accounts"]),
+        "listAccounts" => print_accounts(&result["accounts"], m),
         "listMessages" => {
             println!("total: {}", result["total"].as_i64().unwrap_or(0));
             if let Some(messages) = result["messages"].as_array() {
@@ -867,32 +917,38 @@ fn print_text(method: &str, result: &Value) {
         "send" => println!("sent"),
         "commitPluginInstall" => match result["action"].as_str() {
             Some("installed") => println!(
-                "已安装 {} {}",
-                terminal_text(result["id"].as_str().unwrap_or("?")),
-                terminal_text(result["version"].as_str().unwrap_or("?"))
+                "{}",
+                (m.plugin_installed)(
+                    &terminal_text(result["id"].as_str().unwrap_or("?")),
+                    &terminal_text(result["version"].as_str().unwrap_or("?"))
+                )
             ),
             Some("upgraded") => println!(
-                "已升级 {}: {} -> {}（旧版在回滚位，可用 rollback 切回）",
-                terminal_text(result["id"].as_str().unwrap_or("?")),
-                terminal_text(result["from_version"].as_str().unwrap_or("?")),
-                terminal_text(result["version"].as_str().unwrap_or("?"))
+                "{}",
+                (m.plugin_upgraded)(
+                    &terminal_text(result["id"].as_str().unwrap_or("?")),
+                    &terminal_text(result["from_version"].as_str().unwrap_or("?")),
+                    &terminal_text(result["version"].as_str().unwrap_or("?"))
+                )
             ),
             _ => println!("{result}"),
         },
         "removePlugin" => println!(
-            "已移除 {}",
-            terminal_text(result["removed"].as_str().unwrap_or("?"))
+            "{}",
+            (m.plugin_removed)(&terminal_text(result["removed"].as_str().unwrap_or("?")))
         ),
         "rollbackPlugin" => println!(
-            "{} 已切换到 {}（再执行一次切回另一版）",
-            terminal_text(result["id"].as_str().unwrap_or("?")),
-            terminal_text(result["version"].as_str().unwrap_or("?"))
+            "{}",
+            (m.plugin_rolled_back)(
+                &terminal_text(result["id"].as_str().unwrap_or("?")),
+                &terminal_text(result["version"].as_str().unwrap_or("?"))
+            )
         ),
         "setPluginEnabled" => {
             let state = if result["enabled"].as_bool().unwrap_or(false) {
-                "已启用"
+                m.plugin_enabled
             } else {
-                "已停用"
+                m.plugin_disabled
             };
             println!("{} {}", terminal_text(result["id"].as_str().unwrap_or("?")), state);
         }
@@ -1092,28 +1148,52 @@ fn print_message(result: &Value) {
     }
 }
 
-fn print_accounts(accounts: &Value) {
-    let Some(accounts) = accounts.as_array() else {
-        println!("accounts: 0");
-        return;
-    };
-    println!("accounts: {}", accounts.len());
-    for account in accounts {
-        let detail = terminal_text(account["detail"].as_str().unwrap_or(""));
-        if detail.is_empty() {
-            println!(
-                "  {} {}",
-                terminal_text(account["account"].as_str().unwrap_or("?")),
-                terminal_text(account["state"].as_str().unwrap_or("?"))
-            );
-        } else {
-            println!(
-                "  {} {} ({detail})",
-                terminal_text(account["account"].as_str().unwrap_or("?")),
-                terminal_text(account["state"].as_str().unwrap_or("?"))
-            );
+/// 账户状态原因（ADR-0048 L6）：有 `detail_code` 时按 code 用 CLI 语言成文，服务器原文原样接在
+/// 后面；老 daemon 没有 code 时照旧显示 `detail`。没有原因时为空串。
+fn account_reason(detail: &str, code: Option<&str>, server_detail: &str, m: &Ctl) -> String {
+    match code {
+        Some(code) => {
+            let text = m.account_detail.text(code);
+            let server = terminal_text(server_detail);
+            if server.trim().is_empty() {
+                text.to_string()
+            } else {
+                format!("{text}: {server}")
+            }
         }
+        None => terminal_text(detail),
     }
+}
+
+fn print_accounts(accounts: &Value, m: &Ctl) {
+    for line in account_lines(accounts, m) {
+        println!("{line}");
+    }
+}
+
+fn account_lines(accounts: &Value, m: &Ctl) -> Vec<String> {
+    let mut lines = Vec::new();
+    let Some(accounts) = accounts.as_array() else {
+        lines.push("accounts: 0".to_string());
+        return lines;
+    };
+    lines.push(format!("accounts: {}", accounts.len()));
+    for account in accounts {
+        let detail = account_reason(
+            account["detail"].as_str().unwrap_or(""),
+            account["detail_code"].as_str(),
+            account["server_detail"].as_str().unwrap_or(""),
+            m,
+        );
+        let name = terminal_text(account["account"].as_str().unwrap_or("?"));
+        let state = terminal_text(account["state"].as_str().unwrap_or("?"));
+        lines.push(if detail.is_empty() {
+            format!("  {name} {state}")
+        } else {
+            format!("  {name} {state} ({detail})")
+        });
+    }
+    lines
 }
 
 fn terminal_text(value: &str) -> String {
@@ -1156,6 +1236,7 @@ async fn run_plugin(
     client: RpcClient,
     command: PluginCommand,
     json_output: bool,
+    m: &Ctl,
 ) -> Result<(), AppError> {
     match command {
         PluginCommand::Install { source, frontend } => {
@@ -1172,7 +1253,7 @@ async fn run_plugin(
                 json!({ "staging": staged.staging() })
             };
             let result = client.call("commitPluginInstall", params).await?;
-            print_result("commitPluginInstall", &result, json_output)?;
+            print_result("commitPluginInstall", &result, json_output, m)?;
         }
         PluginCommand::Remove { id, frontend } => {
             let result = client
@@ -1181,7 +1262,7 @@ async fn run_plugin(
                     plugin_id_params(&id, frontend.then_some("frontend")),
                 )
                 .await?;
-            print_result("removePlugin", &result, json_output)?;
+            print_result("removePlugin", &result, json_output, m)?;
         }
         PluginCommand::Rollback { id, frontend } => {
             let result = client
@@ -1190,19 +1271,19 @@ async fn run_plugin(
                     plugin_id_params(&id, frontend.then_some("frontend")),
                 )
                 .await?;
-            print_result("rollbackPlugin", &result, json_output)?;
+            print_result("rollbackPlugin", &result, json_output, m)?;
         }
         PluginCommand::Enable { id } => {
             let result = client
                 .call("setPluginEnabled", json!({ "id": id, "enabled": true }))
                 .await?;
-            print_result("setPluginEnabled", &result, json_output)?;
+            print_result("setPluginEnabled", &result, json_output, m)?;
         }
         PluginCommand::Disable { id } => {
             let result = client
                 .call("setPluginEnabled", json!({ "id": id, "enabled": false }))
                 .await?;
-            print_result("setPluginEnabled", &result, json_output)?;
+            print_result("setPluginEnabled", &result, json_output, m)?;
         }
     }
     Ok(())
@@ -1288,6 +1369,7 @@ async fn run_draft(
     client: RpcClient,
     command: DraftCommand,
     json_output: bool,
+    m: &Ctl,
 ) -> Result<(), AppError> {
     use maild_client::{DraftAttachmentInput, DraftPatchInput};
 
@@ -1319,7 +1401,7 @@ async fn run_draft(
                     draft.version,
                     terminal_text(&draft.account),
                     terminal_text(if draft.subject.is_empty() {
-                        "（无主题）"
+                        m.draft_no_subject
                     } else {
                         &draft.subject
                     }),
@@ -1336,7 +1418,7 @@ async fn run_draft(
         }
         DraftCommand::Show { id } => {
             let draft = client.get_draft(&id).await?;
-            print_draft(&draft, json_output)
+            print_draft(&draft, json_output, m)
         }
         DraftCommand::New {
             account,
@@ -1358,7 +1440,7 @@ async fn run_draft(
                 ..DraftPatchInput::default()
             };
             let draft = client.create_draft(&account, &patch).await?;
-            print_draft(&draft, json_output)
+            print_draft(&draft, json_output, m)
         }
         DraftCommand::Set {
             id,
@@ -1384,7 +1466,7 @@ async fn run_draft(
                 ..DraftPatchInput::default()
             };
             let draft = client.update_draft(&id, version, &patch).await?;
-            print_draft(&draft, json_output)
+            print_draft(&draft, json_output, m)
         }
         DraftCommand::Attach {
             id,
@@ -1408,7 +1490,7 @@ async fn run_draft(
                 ..DraftPatchInput::default()
             };
             let draft = client.update_draft(&id, version, &patch).await?;
-            print_draft(&draft, json_output)
+            print_draft(&draft, json_output, m)
         }
         DraftCommand::AttachFile {
             id,
@@ -1417,11 +1499,11 @@ async fn run_draft(
             mime_type,
         } => {
             let draft = upload_draft_file(&client, &id, version, &file, &mime_type).await?;
-            print_draft(&draft, json_output)
+            print_draft(&draft, json_output, m)
         }
         DraftCommand::FinishUpload { upload_id, version } => {
             let draft = client.finish_attachment_upload(&upload_id, version).await?;
-            print_draft(&draft, json_output)
+            print_draft(&draft, json_output, m)
         }
         DraftCommand::CancelUpload { upload_id } => {
             client.cancel_attachment_upload(&upload_id).await?;
@@ -1451,7 +1533,7 @@ async fn run_draft(
                 ..DraftPatchInput::default()
             };
             let draft = client.update_draft(&id, version, &patch).await?;
-            print_draft(&draft, json_output)
+            print_draft(&draft, json_output, m)
         }
         DraftCommand::Rm { id, version } => {
             let draft = client.delete_draft(&id, version).await?;
@@ -1570,7 +1652,11 @@ fn attachment_inputs(draft: &maild_client::DraftView) -> Vec<maild_client::Draft
         .collect()
 }
 
-fn print_draft(draft: &maild_client::DraftView, json_output: bool) -> Result<(), AppError> {
+fn print_draft(
+    draft: &maild_client::DraftView,
+    json_output: bool,
+    m: &Ctl,
+) -> Result<(), AppError> {
     if json_output {
         println!(
             "{}",
@@ -1602,9 +1688,9 @@ fn print_draft(draft: &maild_client::DraftView, json_output: bool) -> Result<(),
             attachment.size,
             terminal_text(&attachment.mime_type),
             if attachment.stored {
-                ""
+                String::new()
             } else {
-                " [源 part 已不可读]"
+                format!(" {}", m.draft_attachment_unreadable)
             },
         );
     }
@@ -1617,6 +1703,7 @@ async fn run_reading_policy(
     client: RpcClient,
     command: ReadingPolicyCommand,
     json_output: bool,
+    m: &Ctl,
 ) -> Result<(), AppError> {
     let result = match command {
         ReadingPolicyCommand::Show => client.reading_policy().await?,
@@ -1672,9 +1759,69 @@ async fn run_reading_policy(
         );
     }
     if !result.persisted {
-        println!("persisted: false（策略文件停摆：读到的是缺省值，写会被拒绝）");
+        println!("{}", m.reading_policy_not_persisted);
     }
     Ok(())
+}
+
+/// `locale` 子命令。`--json` 打印与协议应答同形的一行；人读输出在写入后按**新的**
+/// `effective` 成文，刚切换语言的用户立刻看到新语言。
+async fn run_locale(
+    client: RpcClient,
+    command: Option<LocaleCommand>,
+    json_output: bool,
+) -> Result<(), AppError> {
+    let result = match command.unwrap_or(LocaleCommand::Show) {
+        LocaleCommand::Show => client.locale_preference().await?,
+        LocaleCommand::Set { system: true, .. } => {
+            client
+                .set_locale_preference(&LocalePreferenceUpdate::system())
+                .await?
+        }
+        LocaleCommand::Set { languages, .. } => {
+            client
+                .set_locale_preference(&LocalePreferenceUpdate::explicit(languages))
+                .await?
+        }
+    };
+    if json_output {
+        println!("{}", locale_json(&result));
+    } else {
+        let m = &maild_l10n::negotiate(&result.effective).messages().ctl;
+        for line in locale_lines(&result, m) {
+            println!("{line}");
+        }
+    }
+    Ok(())
+}
+
+fn locale_json(result: &LocalePreferenceResult) -> Value {
+    json!({
+        "preference": {
+            "mode": result.preference.mode,
+            "languages": result.preference.languages,
+        },
+        "effective": result.effective,
+        "persisted": result.persisted,
+    })
+}
+
+fn locale_lines(result: &LocalePreferenceResult, m: &Ctl) -> Vec<String> {
+    let mut lines = vec![format!("mode: {}", terminal_text(&result.preference.mode))];
+    if !result.preference.languages.is_empty() {
+        lines.push(format!(
+            "languages: {}",
+            terminal_text(&result.preference.languages.join(", "))
+        ));
+    }
+    lines.push(format!(
+        "effective: {}",
+        terminal_text(&result.effective.join(", "))
+    ));
+    if !result.persisted {
+        lines.push(m.locale_not_persisted.to_string());
+    }
+    lines
 }
 
 fn plugin_id_params(id: &str, kind: Option<&str>) -> Value {
@@ -1685,18 +1832,23 @@ fn plugin_id_params(id: &str, kind: Option<&str>) -> Value {
 }
 
 /// 事务类命令的统一输出：`--json` 打一行 JSON，否则走人读分支。
-fn print_result(method: &str, result: &Value, json_output: bool) -> Result<(), AppError> {
+fn print_result(method: &str, result: &Value, json_output: bool, m: &Ctl) -> Result<(), AppError> {
     if json_output {
         let line = serde_json::to_string(result)
             .map_err(|error| AppError::rpc(format!("JSON 输出失败: {error}")))?;
         println!("{line}");
     } else {
-        print_text(method, result);
+        print_text(method, result, m);
     }
     Ok(())
 }
 
-async fn run_account(client: RpcClient, command: AccountCommand, json_output: bool) -> Result<(), AppError> {
+async fn run_account(
+    client: RpcClient,
+    command: AccountCommand,
+    json_output: bool,
+    m: &Ctl,
+) -> Result<(), AppError> {
     match command {
         AccountCommand::List { all } => {
             let result = client.list_account_profiles(all).await?;
@@ -1707,11 +1859,11 @@ async fn run_account(client: RpcClient, command: AccountCommand, json_output: bo
                         .map_err(|e| AppError::rpc(format!("JSON 输出失败: {e}")))?
                 );
             } else {
-                print_profiles(&result.profiles);
+                print_profiles(&result.profiles, m);
             }
         }
         AccountCommand::Test { spec } => {
-            let (draft, incoming, outgoing) = collect_draft(&spec)?;
+            let (draft, incoming, outgoing) = collect_draft(&spec, m)?;
             let report = client
                 .probe_account(&draft, &incoming, outgoing.as_deref())
                 .await?;
@@ -1730,12 +1882,12 @@ async fn run_account(client: RpcClient, command: AccountCommand, json_output: bo
                     && report.outgoing.as_ref().map(|o| o.ok).unwrap_or(true);
                 println!("{}", if ok { "probe ok" } else { "probe failed" });
                 if !ok {
-                    return Err(AppError::rpc("探测未通过"));
+                    return Err(AppError::rpc(m.probe_failed));
                 }
             }
         }
         AccountCommand::Add { spec } => {
-            let (draft, incoming, outgoing) = collect_draft(&spec)?;
+            let (draft, incoming, outgoing) = collect_draft(&spec, m)?;
             let result = client
                 .create_account(&draft, &incoming, outgoing.as_deref())
                 .await?;
@@ -1768,7 +1920,7 @@ async fn run_account(client: RpcClient, command: AccountCommand, json_output: bo
                     report.incoming.ok && report.outgoing.as_ref().map(|o| o.ok).unwrap_or(true);
                 println!("{}", if ok { "probe ok" } else { "probe failed" });
                 if !ok {
-                    return Err(AppError::rpc("探测未通过"));
+                    return Err(AppError::rpc(m.probe_failed));
                 }
             }
         }
@@ -1862,12 +2014,12 @@ async fn run_account(client: RpcClient, command: AccountCommand, json_output: bo
 
             // 秘密保存在栈上局部变量中，调用结束即释放；绝不进入 argv/env。
             let new_imap_password = if update_imap_password {
-                Some(read_secret("新的 IMAP 密码")?)
+                Some(read_secret(m.prompt_new_imap_password)?)
             } else {
                 None
             };
             let new_smtp_password = if update_smtp_password {
-                Some(read_secret("新的 SMTP 密码")?)
+                Some(read_secret(m.prompt_new_smtp_password)?)
             } else {
                 None
             };
@@ -1953,12 +2105,15 @@ async fn current_revision(client: &RpcClient, id: &str) -> Result<u64, AppError>
         .ok_or_else(|| AppError::rpc(format!("账户不存在: {id}")))
 }
 
-fn collect_draft(spec: &AccountSpec) -> Result<(AccountDraftInput, String, Option<String>), AppError> {
-    let incoming_secret = read_secret("IMAP 密码")?;
+fn collect_draft(
+    spec: &AccountSpec,
+    m: &Ctl,
+) -> Result<(AccountDraftInput, String, Option<String>), AppError> {
+    let incoming_secret = read_secret(m.prompt_imap_password)?;
     let outgoing_secret = if spec.smtp_host.is_some()
         && spec.smtp_credential == "separate"
     {
-        Some(read_secret("SMTP 密码")?)
+        Some(read_secret(m.prompt_smtp_password)?)
     } else {
         None
     };
@@ -2062,7 +2217,7 @@ fn read_secret_no_echo(prompt: &str) -> Result<String, AppError> {
     Ok(line)
 }
 
-fn print_profiles(profiles: &[maild_client::AccountProfileView]) {
+fn print_profiles(profiles: &[maild_client::AccountProfileView], m: &Ctl) {
     println!("profiles: {}", profiles.len());
     for profile in profiles {
         println!(
@@ -2076,16 +2231,22 @@ fn print_profiles(profiles: &[maild_client::AccountProfileView]) {
             terminal_text(&profile.credentials.incoming),
             terminal_text(profile.credentials.outgoing.as_deref().unwrap_or("-")),
         );
+        let reason = account_reason(
+            &profile.runtime.detail,
+            profile.runtime.detail_code.as_deref(),
+            &profile.runtime.server_detail,
+            m,
+        );
         println!(
             "    imap {}:{} ({}) state={} {}",
             terminal_text(&profile.incoming.server),
             profile.incoming.port,
             terminal_text(&profile.incoming.security),
             terminal_text(&profile.runtime.state),
-            if profile.runtime.detail.is_empty() {
+            if reason.is_empty() {
                 String::new()
             } else {
-                format!("({})", terminal_text(&profile.runtime.detail))
+                format!("({reason})")
             },
         );
     }
@@ -2103,6 +2264,45 @@ fn print_probe(side: &str, outcome: &maild_client::ProbeOutcomeView) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ADR-0048 L6：daemon 的每个 code 在 CLI 两种语言里都有文案，英文里没有中文。
+    #[test]
+    fn every_account_detail_code_has_cli_text_in_both_languages() {
+        for code in maild::events::AccountDetailCode::ALL {
+            let zh = maild_l10n::ZH_HANS.ctl.account_detail.known(code.as_str());
+            let en = maild_l10n::EN.ctl.account_detail.known(code.as_str());
+            assert!(zh.is_some_and(|text| !text.trim().is_empty()), "zh {}", code.as_str());
+            assert!(en.is_some_and(|text| text.is_ascii() && !text.trim().is_empty()), "en {}", code.as_str());
+        }
+    }
+
+    /// `accounts` 的人读输出：有 code 按 CLI 语言成文并接上服务器原文；老 daemon 照旧显示 `detail`。
+    #[test]
+    fn account_lines_translate_the_detail_code() {
+        let accounts = json!([
+            {"account": "work", "state": "offline", "detail": "IMAP 登录失败: no response: bad",
+             "detail_code": "login_failed", "server_detail": "no response: bad"},
+            {"account": "home", "state": "offline", "detail": "IMAP 登录超时",
+             "detail_code": "login_timeout"},
+            {"account": "old", "state": "offline", "detail": "连接 a:993 失败: refused"},
+            {"account": "next", "state": "offline", "detail": "未来的原因", "detail_code": "future_code",
+             "server_detail": "raw"},
+            {"account": "up", "state": "online", "detail": ""}
+        ]);
+        assert_eq!(
+            account_lines(&accounts, &maild_l10n::EN.ctl),
+            [
+                "accounts: 5",
+                "  work offline (The server rejected the sign-in: no response: bad)",
+                "  home offline (Signing in timed out)",
+                "  old offline (连接 a:993 失败: refused)",
+                "  next offline (Connection problem: raw)",
+                "  up online",
+            ]
+        );
+        let zh = account_lines(&accounts, &maild_l10n::ZH_HANS.ctl);
+        assert_eq!(zh[1], "  work offline (服务器拒绝了登录: no response: bad)");
+    }
 
     #[test]
     fn token_is_32_random_bytes_as_hex() {
@@ -2405,6 +2605,88 @@ mod tests {
             Command::SetDefaultFrontend { id } if id == "dev.featherpost.studio"
         ));
         assert!(Cli::try_parse_from([maild_brand::CLI_CTL, "set-default-frontend"]).is_err());
+    }
+
+    #[test]
+    fn locale_subcommands_parse() {
+        let cli = Cli::try_parse_from([maild_brand::CLI_CTL, "locale"]).unwrap();
+        assert!(matches!(cli.command, Command::Locale { command: None }));
+        let cli = Cli::try_parse_from([maild_brand::CLI_CTL, "locale", "show", "--json"]).unwrap();
+        assert!(cli.json);
+        assert!(matches!(
+            cli.command,
+            Command::Locale {
+                command: Some(LocaleCommand::Show)
+            }
+        ));
+        let cli =
+            Cli::try_parse_from([maild_brand::CLI_CTL, "locale", "set", "en", "zh-Hans"]).unwrap();
+        let Command::Locale {
+            command: Some(LocaleCommand::Set { languages, system }),
+        } = cli.command
+        else {
+            panic!("expected locale set");
+        };
+        assert_eq!(languages, ["en", "zh-Hans"]);
+        assert!(!system);
+        let cli = Cli::try_parse_from([maild_brand::CLI_CTL, "locale", "set", "--system"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Locale {
+                command: Some(LocaleCommand::Set { system: true, ref languages })
+            } if languages.is_empty()
+        ));
+        // 两者都不给、或同时给，都在本地被拒，不发 RPC。
+        assert!(Cli::try_parse_from([maild_brand::CLI_CTL, "locale", "set"]).is_err());
+        assert!(
+            Cli::try_parse_from([maild_brand::CLI_CTL, "locale", "set", "en", "--system"]).is_err()
+        );
+    }
+
+    #[test]
+    fn locale_output_shapes() {
+        let explicit = LocalePreferenceResult {
+            preference: maild_client::LocalePreference {
+                mode: "explicit".into(),
+                languages: vec!["en".into(), "zh-Hans".into()],
+            },
+            effective: vec!["en".into(), "zh-Hans".into()],
+            persisted: true,
+        };
+        assert_eq!(
+            locale_json(&explicit),
+            json!({
+                "preference": { "mode": "explicit", "languages": ["en", "zh-Hans"] },
+                "effective": ["en", "zh-Hans"],
+                "persisted": true,
+            })
+        );
+        assert_eq!(
+            locale_lines(&explicit, &maild_l10n::EN.ctl),
+            [
+                "mode: explicit",
+                "languages: en, zh-Hans",
+                "effective: en, zh-Hans"
+            ]
+        );
+
+        let stalled = LocalePreferenceResult {
+            preference: maild_client::LocalePreference {
+                mode: "system".into(),
+                languages: Vec::new(),
+            },
+            effective: vec!["zh-Hans-CN".into()],
+            persisted: false,
+        };
+        assert_eq!(locale_json(&stalled)["preference"]["languages"], json!([]));
+        assert_eq!(
+            locale_lines(&stalled, &maild_l10n::ZH_HANS.ctl),
+            [
+                "mode: system",
+                "effective: zh-Hans-CN",
+                "persisted: false（偏好文件停摆：读到的是缺省值，写会被拒绝）",
+            ]
+        );
     }
 
     #[test]

@@ -32,6 +32,8 @@ getrandom = "0.4.3"
 lol_html = "2"
 maild-app = { path = "../maild-app" }
 maild-client = { path = "../maild-client" }
+# ADR-0048 决策 8：原生菜单与 webview 用同一条语言协商规则。
+maild-l10n = { path = "../maild-l10n" }
 # ADR-0044：单实例锁位于平台 runtime 目录。
 maild-paths = { path = "../maild-paths" }
 regex = "1"
@@ -50,6 +52,9 @@ libc = "0.2"
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { version = "0.6.4", default-features = false, features = ["std"] }
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "libc", "NSApplication", "NSResponder", "NSRunningApplication"] }
+# ADR-0048 决策 8：把显式语言镜像到本 app 偏好域的 `AppleLanguages`（CFPreferences）；
+# 跟随系统时读本进程的首选语言（CFLocale，M2）。
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFArray", "CFLocale", "CFPreferences", "CFString"] }
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

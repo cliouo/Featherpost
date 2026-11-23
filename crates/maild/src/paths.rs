@@ -65,6 +65,13 @@ pub fn assemble_with_paths_from(
         )),
     ));
 
+    // 语言偏好（ADR-0048 决策 1）：同目录、任何模式都装配；纪律与阅读策略相同。
+    effective.provide::<crate::locale_preference::LocalePreference>(Arc::new(
+        crate::locale_preference::LocalePreference::open(
+            crate::locale_preference::preference_path_for(config_path),
+        ),
+    ));
+
     // rules 侧车（ADR-0043）：与 `reading_policy.toml` 同目录、load 之前提供。只有
     // `[plugins.rules.config] persist = true` 时 `RulesPlugin` 才据此打开持久模式；
     // `setSettings` 的 `persist: true` 也只在这条路径存在时才能动态开启落盘。

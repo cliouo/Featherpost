@@ -2,6 +2,7 @@
 members = [
     "crates/cordis",
     "crates/maild-brand",
+    "crates/maild-l10n",
     "crates/maild",
     "crates/maild-client",
     "crates/maild-paths",

@@ -42,7 +42,7 @@ impl PackageSelections {
         let _selecting = self
             .selecting
             .try_lock()
-            .map_err(|_| UiError::invalid("已有安装包正在准备。"))?;
+            .map_err(|_| UiError::invalid("package_preparing", "已有安装包正在准备。"))?;
         let epoch = bridge.snapshot().connection_epoch;
         {
             let mut entries = self.entries.lock().unwrap();
@@ -50,7 +50,7 @@ impl PackageSelections {
                 e.epoch == epoch && e.created.elapsed() < std::time::Duration::from_secs(600)
             });
             if entries.len() >= 4 {
-                return Err(UiError::invalid("请先完成或取消已有安装。"));
+                return Err(UiError::invalid("package_install_pending", "请先完成或取消已有安装。"));
             }
         }
         let root: Root = bridge
@@ -60,9 +60,10 @@ impl PackageSelections {
         let staged =
             tokio::task::spawn_blocking(move || stage_plugin_package_into(&source, &root.root))
                 .await
-                .map_err(|_| UiError::invalid("准备安装包失败。"))?
+                .map_err(|_| UiError::invalid("package_prepare_failed", "准备安装包失败。"))?
                 .map_err(|_| {
                     UiError::invalid(
+                        "package_directory_invalid",
                         "无法准备此目录。请选择当前用户所有、无符号链接且不超过 512 MiB 的完整包。",
                     )
                 })?;
@@ -73,14 +74,14 @@ impl PackageSelections {
             )
             .await?;
         if bridge.snapshot().connection_epoch != epoch || bridge.snapshot().phase != "online" {
-            return Err(UiError::invalid("连接已变化，请重新选择安装包。"));
+            return Err(UiError::invalid("package_connection_changed", "连接已变化，请重新选择安装包。"));
         }
         let mut bytes = [0u8; 16];
-        getrandom::fill(&mut bytes).map_err(|_| UiError::invalid("无法生成安装令牌。"))?;
+        getrandom::fill(&mut bytes).map_err(|_| UiError::invalid("package_token_failed", "无法生成安装令牌。"))?;
         let token = bytes.iter().map(|b| format!("{b:02x}")).collect::<String>();
         let mut entries = self.entries.lock().unwrap();
         if entries.len() >= 4 {
-            return Err(UiError::invalid("请先完成或取消已有安装。"));
+            return Err(UiError::invalid("package_install_pending", "请先完成或取消已有安装。"));
         }
         entries.insert(
             token.clone(),
@@ -110,14 +111,14 @@ impl PackageSelections {
             .lock()
             .unwrap()
             .remove(token)
-            .ok_or_else(|| UiError::invalid("安装确认已过期，请重新选择。"))?;
+            .ok_or_else(|| UiError::invalid("package_preview_expired", "安装确认已过期，请重新选择。"))?;
         if selected.epoch != bridge.snapshot().connection_epoch
             || selected.created.elapsed() >= std::time::Duration::from_secs(600)
         {
-            return Err(UiError::invalid("连接或安装确认已过期，请重新选择安装包。"));
+            return Err(UiError::invalid("package_session_expired", "连接或安装确认已过期，请重新选择安装包。"));
         }
         let r: Value=bridge.management_call("commitPluginInstall",json!({"kind":selected.preview.kind,"staging":selected.staged.staging(),"expected_preview":selected.preview})).await?;
         serde_json::from_value(r)
-            .map_err(|_| UiError::invalid("后台未返回完整安装回执，请刷新清单。"))
+            .map_err(|_| UiError::invalid("package_receipt_incomplete", "后台未返回完整安装回执，请刷新清单。"))
     }
 }

@@ -1,3 +1,4 @@
+import { m } from '@featherpost/i18n/messages';
 import type { MailBridge, MessageIdentity, UiDocument, UiLink, UiMessage } from '../bridge/types';
 import { errorCode } from '../bridge/errors';
 import { Store } from '../host/store';
@@ -29,13 +30,13 @@ const MAX_ALLOWED_ONCE = 64;
 export function describeDocumentError(error: unknown): string {
   switch (errorCode(error)) {
     case 'offline':
-      return '后台连接不可用，正文按纯文本显示。';
+      return m.mailbox_document_error_offline();
     case 'denied':
-      return '当前前端没有读取这封邮件版式的授权。';
+      return m.mailbox_document_error_denied();
     case 'not_found':
-      return '这封邮件已不在本地缓存中。';
+      return m.mailbox_document_error_not_found();
     default:
-      return '无法准备 HTML 版式，已显示纯文本。';
+      return m.mailbox_document_error_failed();
   }
 }
 
@@ -47,9 +48,9 @@ export function shouldAllowRemote(detail: UiMessage, allowedOnce: readonly strin
 
 export function presentation(detail: UiMessage | null, state: DocumentState): BodyPresentation {
   if (!detail) return { mode: 'loading' };
-  const truncatedNote = '此缓存中的正文不完整（超过 256 KiB 的部分未保存）。';
+  const truncatedNote = m.mailbox_document_truncated();
   if (!detail.has_html) {
-    return { mode: 'text', note: '此缓存中没有 HTML 版式，显示纯文本。' };
+    return { mode: 'text', note: m.mailbox_document_no_html() };
   }
   if (state.key !== messageKey(detail)) return { mode: 'loading' };
   if (state.status === 'preparing' || state.status === 'idle') return { mode: 'loading' };
@@ -61,7 +62,7 @@ export function presentation(detail: UiMessage | null, state: DocumentState): Bo
 
 export function truncationNote(state: DocumentState): string | null {
   return state.status === 'ready' && state.document?.truncated
-    ? '此缓存中的正文不完整（超过 256 KiB 的部分未保存）。'
+    ? m.mailbox_document_truncated()
     : null;
 }
 

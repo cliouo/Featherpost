@@ -21,7 +21,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use cordis::{Context, Plugin, PluginError, Service};
 pub use maild_client::OpenIntent;
-use maild_client::{FrontendInfo, FrontendsResult};
+use maild_client::{FrontendInfo, FrontendsResult, PackageL10nEntry};
 use serde::Deserialize;
 
 use crate::notify::Notifier;
@@ -32,9 +32,11 @@ pub use maild_client::{
 };
 
 const MANIFEST_FILE: &str = "frontend.toml";
-/// v1 只有路由 `capabilities`；v2 起可另外声明纯授权的 `permissions`（ADR-0030 决策 3）。
+/// v1 只有路由 `capabilities`；v2 起可另外声明纯授权的 `permissions`（ADR-0030 决策 3）；
+/// v3 起可另外声明兜底 `description` 与 `[l10n.<tag>]`（ADR-0048 决策 5）。
 const MANIFEST_SCHEMA_VERSION_V1: u32 = 1;
 const MANIFEST_SCHEMA_VERSION_PERMISSIONS: u32 = 2;
+const MANIFEST_SCHEMA_VERSION_L10N: u32 = 3;
 pub(crate) const API_PROTOCOL_VERSION: u32 = 1;
 const MAX_PENDING_INTENTS: usize = 64;
 const MAX_FRONTENDS: usize = 64;
@@ -221,6 +223,12 @@ struct FrontendManifest {
     permissions: Vec<FrontendPermission>,
     #[serde(default)]
     launch: Option<LaunchManifest>,
+    /// ADR-0048 决策 5：兜底描述，仅 `schema_version = 3` 起允许。
+    #[serde(default)]
+    description: Option<String>,
+    /// ADR-0048 决策 5：各语言的名称/描述，仅 `schema_version = 3` 起允许。
+    #[serde(default)]
+    l10n: crate::manifest_l10n::ManifestL10n,
 }
 
 #[derive(Clone, Debug)]
@@ -238,13 +246,26 @@ struct FrontendRecord {
     launch: LaunchTarget,
 }
 
+/// The native launcher's listing name, worded like its window title in each kernel language.
+fn recovery_name(locale: maild_l10n::Locale) -> String {
+    (locale.messages().launcher.window_title)(maild_brand::PRODUCT_NAME)
+}
+
 impl FrontendRecord {
     /// The native launcher: always present, routes only `background` and authorizes no API.
     fn recovery() -> Self {
         Self {
             info: FrontendInfo {
                 id: BUILTIN_RECOVERY_FRONTEND.into(),
-                name: format!("{} 修复与后台管理", maild_brand::PRODUCT_NAME),
+                name: recovery_name(maild_l10n::Locale::default()),
+                description: None,
+                l10n: maild_l10n::Locale::ALL
+                    .into_iter()
+                    .map(|locale| {
+                        let entry = PackageL10nEntry { name: Some(recovery_name(locale)), description: None };
+                        (locale.tag().to_owned(), entry)
+                    })
+                    .collect(),
                 version: env!("CARGO_PKG_VERSION").into(),
                 lifecycle: FrontendLifecycle::OnDemand.as_str().into(),
                 capabilities: vec!["background".into()],
@@ -1059,7 +1080,7 @@ fn load_package_at(package: &Path, expected_id: Option<&str>) -> Result<Frontend
     let manifest_text = read_manifest(&manifest_path)?;
     let manifest: FrontendManifest =
         toml::from_str(&manifest_text).map_err(|_| "frontend manifest is invalid".to_string())?;
-    validate_manifest(&manifest, expected_id)?;
+    let text = validate_manifest(&manifest, expected_id)?;
     let launch = match (manifest.lifecycle, manifest.launch) {
         (FrontendLifecycle::Independent, None) => LaunchTarget::Independent,
         (FrontendLifecycle::OnDemand, Some(launch)) => {
@@ -1091,6 +1112,8 @@ fn load_package_at(package: &Path, expected_id: Option<&str>) -> Result<Frontend
         info: FrontendInfo {
             id: manifest.id,
             name: manifest.name,
+            description: text.description,
+            l10n: text.l10n,
             version: manifest.version,
             lifecycle: manifest.lifecycle.as_str().into(),
             capabilities: capability_names,
@@ -1130,7 +1153,7 @@ fn read_manifest(path: &Path) -> Result<String, String> {
 fn validate_manifest(
     manifest: &FrontendManifest,
     package_id: Option<&str>,
-) -> Result<(), String> {
+) -> Result<crate::manifest_l10n::PackageText, String> {
     validate_manifest_with_protocol(
         manifest,
         package_id,
@@ -1138,14 +1161,17 @@ fn validate_manifest(
     )
 }
 
+/// 校验通过时返回校验后的 `description` / `l10n`（ADR-0048 决策 5），供目录与预览透传。
 fn validate_manifest_with_protocol(
     manifest: &FrontendManifest,
     package_id: Option<&str>,
     allowed_protocol: std::ops::RangeInclusive<u32>,
-) -> Result<(), String> {
+) -> Result<crate::manifest_l10n::PackageText, String> {
     if !matches!(
         manifest.schema_version,
-        MANIFEST_SCHEMA_VERSION_V1 | MANIFEST_SCHEMA_VERSION_PERMISSIONS
+        MANIFEST_SCHEMA_VERSION_V1
+            | MANIFEST_SCHEMA_VERSION_PERMISSIONS
+            | MANIFEST_SCHEMA_VERSION_L10N
     ) || !allowed_protocol.contains(&manifest.protocol_version)
     {
         return Err("frontend manifest version is unsupported".into());
@@ -1193,7 +1219,14 @@ fn validate_manifest_with_protocol(
     {
         return Err("frontend permissions are invalid".into());
     }
-    Ok(())
+    // 与 permissions 同理：v1/v2 包写了这两个键直接拒，旧 daemon 本来也会因未知键拒绝它。
+    if manifest.schema_version < MANIFEST_SCHEMA_VERSION_L10N
+        && (manifest.description.is_some() || !manifest.l10n.is_empty())
+    {
+        return Err("frontend description and l10n require manifest schema_version 3".into());
+    }
+    crate::manifest_l10n::validate(manifest.description.as_deref(), &manifest.l10n, MAX_NAME_BYTES)
+        .map_err(|reason| format!("frontend {reason}"))
 }
 
 fn valid_text(value: &str, max_bytes: usize) -> bool {
@@ -1522,6 +1555,14 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[test]
+    fn recovery_listing_names_itself_in_every_kernel_language() {
+        let info = FrontendRecord::recovery().info;
+        assert_eq!(info.name, "Featherpost 修复与后台管理");
+        assert_eq!(info.l10n["en"].name.as_deref(), Some("Featherpost Repair & Background"));
+        assert_eq!(info.l10n["zh-Hans"].name.as_deref(), Some("Featherpost 修复与后台管理"));
+    }
+
     fn install_root() -> tempfile::TempDir {
         use std::os::unix::fs::PermissionsExt as _;
         let root = tempfile::tempdir().unwrap();
@@ -1543,17 +1584,29 @@ mod tests {
         capabilities: &str,
         permissions: Option<&str>,
     ) {
+        let permissions = permissions
+            .map(|value| format!("permissions = [{value}]\n"))
+            .unwrap_or_default();
+        write_manifest_with(root, id, schema_version, capabilities, &permissions);
+    }
+
+    /// 同 [`write_manifest`]，`extra` 原样追加在 manifest 末尾（顶层键或子表）。
+    #[cfg(unix)]
+    fn write_manifest_with(
+        root: &Path,
+        id: &str,
+        schema_version: u32,
+        capabilities: &str,
+        extra: &str,
+    ) {
         use std::os::unix::fs::PermissionsExt as _;
         let package = root.join(id);
         fs::create_dir(&package).unwrap();
         fs::set_permissions(&package, fs::Permissions::from_mode(0o700)).unwrap();
-        let permissions = permissions
-            .map(|value| format!("permissions = [{value}]\n"))
-            .unwrap_or_default();
         fs::write(
             package.join(MANIFEST_FILE),
             format!(
-                "schema_version = {schema_version}\nprotocol_version = 1\nid = \"{id}\"\nname = \"Test frontend\"\nversion = \"1.0.0\"\nlifecycle = \"independent\"\ncapabilities = [{capabilities}]\n{permissions}"
+                "schema_version = {schema_version}\nprotocol_version = 1\nid = \"{id}\"\nname = \"Test frontend\"\nversion = \"1.0.0\"\nlifecycle = \"independent\"\ncapabilities = [{capabilities}]\n{extra}"
             ),
         )
         .unwrap();
@@ -1676,6 +1729,60 @@ mod tests {
             broker.api_capabilities_of("org.example.ok").unwrap(),
             vec!["frontend_open", "mailbox_write", "messages_read"]
         );
+    }
+
+    /// ADR-0048 决策 5：`description` 与 `[l10n.<tag>]` 只在 v3 起允许，校验后原样进
+    /// `listFrontends`；v1/v2 包照旧，JSON 里不出现这两个键。
+    #[cfg(unix)]
+    #[test]
+    fn l10n_requires_schema_three_and_passes_through_listing() {
+        let root = install_root();
+        let l10n = "description = \"A mail client\"\npermissions = [\"mailbox_write\"]\n\
+                    [l10n.EN]\ndescription = \"Mail client\"\n\
+                    [l10n.\"zh-hans\"]\nname = \"测试前端\"\ndescription = \"邮件客户端\"\n";
+        write_manifest_with(root.path(), "org.example.l10n", 3, "\"inbox\"", l10n);
+        write_manifest_with(root.path(), "org.example.v2l10n", 2, "\"inbox\"", "[l10n.en]\nname = \"n\"\n");
+        write_manifest_with(root.path(), "org.example.v2desc", 2, "\"inbox\"", "description = \"d\"\n");
+        write_manifest_with(root.path(), "org.example.badtag", 3, "\"inbox\"", "[l10n.\"no tag\"]\nname = \"n\"\n");
+        write_manifest_with(root.path(), "org.example.badkey", 3, "\"inbox\"", "[l10n.en]\nsummary = \"n\"\n");
+        write_manifest(root.path(), "org.example.v2", 2, "\"inbox\"", None);
+        let broker = broker_over(root.path());
+        for rejected in [
+            "org.example.v2l10n",
+            "org.example.v2desc",
+            "org.example.badtag",
+            "org.example.badkey",
+        ] {
+            assert_eq!(broker.api_capabilities_of(rejected), None, "{rejected} 应整包拒绝");
+        }
+        let listed = serde_json::to_value(broker.frontends(None)).unwrap();
+        let entry = |id: &str| {
+            listed["frontends"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|entry| entry["id"] == id)
+                .unwrap()
+                .clone()
+        };
+        let localized = entry("org.example.l10n");
+        assert_eq!(localized["name"], "Test frontend");
+        assert_eq!(localized["description"], "A mail client");
+        assert_eq!(
+            localized["l10n"],
+            serde_json::json!({
+                "en": { "description": "Mail client" },
+                "zh-Hans": { "name": "测试前端", "description": "邮件客户端" }
+            })
+        );
+        // v3 仍可声明 permissions：新版本是 v2 的超集。
+        assert_eq!(localized["permissions"], serde_json::json!(["mailbox_write"]));
+        let plain = entry("org.example.v2");
+        assert!(plain.get("l10n").is_none() && plain.get("description").is_none(), "{plain}");
+        // 内置修复入口没有 manifest，名字按内核语言目录给出各语言版本。
+        let recovery = entry(BUILTIN_RECOVERY_FRONTEND);
+        assert!(recovery.get("description").is_none(), "{recovery}");
+        assert_eq!(recovery["l10n"]["en"]["name"], "Featherpost Repair & Background");
     }
 
     /// ADR-0031 决策 8：notifications_read 是可声明的词，走 permissions 而不是塞进 settings 路由。

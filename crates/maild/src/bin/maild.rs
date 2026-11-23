@@ -16,14 +16,14 @@ use maild_paths::AppPaths;
 #[command(
     name = "backup",
     bin_name = format!("{} backup", maild_brand::CLI_DAEMON),
-    about = format!("创建经过校验的 {} SQLite 在线备份", maild_brand::PRODUCT_NAME)
+    about = format!("Create a verified online backup of the {} SQLite database", maild_brand::PRODUCT_NAME)
 )]
 struct BackupArgs {
-    /// 现有 SQLite 数据库文件
+    /// Existing SQLite database file.
     #[arg(long, value_name = "SOURCE.sqlite3")]
     database: PathBuf,
 
-    /// 必须尚不存在的备份文件路径
+    /// Backup file path; must not exist yet.
     #[arg(long, value_name = "DEST.sqlite3")]
     output: PathBuf,
 }
@@ -32,18 +32,18 @@ struct BackupArgs {
 #[command(
     name = "restore",
     bin_name = format!("{} restore", maild_brand::CLI_DAEMON),
-    about = format!("在维护锁保护下恢复经过校验的 {} SQLite 备份", maild_brand::PRODUCT_NAME)
+    about = format!("Restore a verified {} SQLite backup under the maintenance lock", maild_brand::PRODUCT_NAME)
 )]
 struct RestoreArgs {
-    /// 必须停止使用的现有 SQLite 数据库
+    /// Existing SQLite database; nothing may be using it.
     #[arg(long, value_name = "CURRENT.sqlite3")]
     database: PathBuf,
 
-    /// 经过校验后将替换当前数据库的备份文件
+    /// Backup file that replaces the current database after verification.
     #[arg(long, value_name = "BACKUP.sqlite3")]
     input: PathBuf,
 
-    /// 必须尚不存在；恢复前保存当前数据库的完整回滚快照
+    /// Full rollback snapshot of the current database, written before restoring; must not exist yet.
     #[arg(long, value_name = "ROLLBACK.sqlite3")]
     rollback: PathBuf,
 }
@@ -79,11 +79,12 @@ async fn main() {
     if first.as_deref() == Some(std::ffi::OsStr::new("backup")) {
         let backup_args = BackupArgs::try_parse_from(std::iter::once(program).chain(args))
             .unwrap_or_else(|error| error.exit());
+        let m = maintenance_messages();
         backup_database(&backup_args.database, &backup_args.output).unwrap_or_else(|error| {
-            eprintln!("备份失败: {}", terminal_error(&error));
+            eprintln!("{}", (m.backup_failed)(&terminal_error(&error)));
             std::process::exit(1);
         });
-        println!("备份完成: {:?}", backup_args.output);
+        println!("{}", (m.backup_done)(&format!("{:?}", backup_args.output)));
         return;
     }
     if first.as_deref() == Some(std::ffi::OsStr::new("restore")) {
@@ -95,12 +96,18 @@ async fn main() {
             &restore_args.rollback,
         )
         .unwrap_or_else(|error| {
-            eprintln!("恢复失败: {}", terminal_error(&error));
+            eprintln!(
+                "{}",
+                (maintenance_messages().restore_failed)(&terminal_error(&error))
+            );
             std::process::exit(1);
         });
         println!(
-            "恢复完成: {:?}；回滚快照: {:?}",
-            outcome.database, outcome.rollback
+            "{}",
+            (maintenance_messages().restore_done)(
+                &format!("{:?}", outcome.database),
+                &format!("{:?}", outcome.rollback)
+            )
         );
         return;
     }
@@ -108,7 +115,10 @@ async fn main() {
         PathsArgs::try_parse_from(std::iter::once(program).chain(args))
             .unwrap_or_else(|error| error.exit());
         let paths = AppPaths::discover().unwrap_or_else(|error| {
-            eprintln!("路径发现失败: {}", terminal_error(&error));
+            eprintln!(
+                "{}",
+                (maintenance_messages().paths_discovery_failed)(&terminal_error(&error))
+            );
             std::process::exit(1);
         });
         print_paths(&paths);
@@ -138,6 +148,14 @@ async fn main() {
         eprintln!("{error}");
         std::process::exit(1);
     }
+}
+
+/// 维护子命令（`backup` / `restore` / `paths`）由人在终端里运行，结果与失败标题随系统首选语言
+/// （ADR-0048 L5）。这里不连 daemon（恢复要求它已停止），读的是与 daemon `system` 模式同一个来源；
+/// 报错详情与守护进程启动路径上的报错是日志，不翻译。
+fn maintenance_messages() -> &'static maild_l10n::Ctl {
+    let languages = maild::locale_preference::system_preferred_languages();
+    &maild_l10n::negotiate(&languages).messages().ctl
 }
 
 fn print_paths(paths: &AppPaths) {

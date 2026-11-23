@@ -1,9 +1,15 @@
+import { m } from "@featherpost/i18n/messages";
+
 import type { AccountDraft, Endpoint } from "./types";
 import { BRAND } from "../brand";
 
 /**
  * 内置邮箱服务商预设：地址里的 @domain → 收发服务器、端口、加密方式与凭据指引。
  * 纯数据 + 纯函数；不发网络请求。未知域名由「自动检测服务器」交给后端发现或按惯例猜测。
+ *
+ * 域名与主机名是服务商数据，不随界面语言翻译。服务商名称（`name`、`short`）在各语言有通行写法的
+ * （「QQ 邮箱」/ QQ Mail）写成 getter 按当前语言成文；本来就是拉丁字母品牌名的（Gmail、iCloud）保持常量。
+ * 凭据标签、获取步骤与限制说明是界面文案，同样写成 getter，每次读取按当前语言成文。
  */
 export type Security = "implicit" | "starttls";
 export type CredentialKind =
@@ -42,11 +48,20 @@ export interface ProviderPreset {
   caveat?: string;
 }
 
-export const CREDENTIAL_LABEL: Record<CredentialKind, string> = {
-  authorization_code: "客户端授权码",
-  app_password: "应用专用密码",
-  password: "邮箱密码",
-  bridge_password: "Bridge 密码",
+/** 句中引用的凭据名（「需要{凭据}」「如何获取{凭据}」）；getter 每次按当前语言成文。 */
+export const CREDENTIAL_LABEL: Readonly<Record<CredentialKind, string>> = {
+  get authorization_code() {
+    return m.settings_credential_authorization_code();
+  },
+  get app_password() {
+    return m.settings_credential_app_password();
+  },
+  get password() {
+    return m.settings_credential_password();
+  },
+  get bridge_password() {
+    return m.settings_credential_bridge_password();
+  },
 };
 
 export const CUSTOM_PROVIDER = "custom";
@@ -57,25 +72,37 @@ const smtp = (server: string, port = 465, security: Security = "implicit"): Serv
 export const PROVIDERS: readonly ProviderPreset[] = [
   {
     id: "qq",
-    name: "QQ 邮箱 / Foxmail",
-    short: "QQ 邮箱",
+    get name() {
+      return m.settings_provider_qq_name();
+    },
+    get short() {
+      return m.settings_provider_qq_short();
+    },
     domains: ["qq.com", "foxmail.com", "vip.qq.com"],
     incoming: imap("imap.qq.com"),
     outgoing: smtp("smtp.qq.com"),
     credential: "authorization_code",
-    secretLabel: "客户端授权码（16 位）",
-    steps: [
-      "在网页版 QQ 邮箱打开「设置 → 账号与安全 → 安全设置」",
-      "开启「IMAP/SMTP 服务」，按提示完成验证",
-      "生成授权码并粘贴到这里；它不是 QQ 密码",
-    ],
+    get secretLabel() {
+      return m.settings_provider_qq_secret();
+    },
+    get steps() {
+      return [
+        m.settings_provider_qq_step_1(),
+        m.settings_provider_qq_step_2(),
+        m.settings_provider_qq_step_3(),
+      ];
+    },
     helpUrl: "https://service.mail.qq.com/",
     stripSecretSpaces: true,
   },
   {
     id: "netease",
-    name: "网易邮箱",
-    short: "网易 163",
+    get name() {
+      return m.settings_provider_netease_name();
+    },
+    get short() {
+      return m.settings_provider_netease_short();
+    },
     domains: ["163.com", "126.com", "yeah.net", "vip.163.com", "188.com"],
     incoming: imap("imap.163.com"),
     outgoing: smtp("smtp.163.com"),
@@ -86,12 +113,16 @@ export const PROVIDERS: readonly ProviderPreset[] = [
       "188.com": { incoming: "imap.188.com", outgoing: "smtp.188.com" },
     },
     credential: "authorization_code",
-    secretLabel: "客户端授权码",
-    steps: [
-      "在网页版网易邮箱打开「设置 → POP3/SMTP/IMAP」",
-      "开启「IMAP/SMTP 服务」，按提示完成手机验证",
-      "新增授权密码并粘贴到这里；它不是登录密码",
-    ],
+    get secretLabel() {
+      return m.settings_provider_netease_secret();
+    },
+    get steps() {
+      return [
+        m.settings_provider_netease_step_1(),
+        m.settings_provider_netease_step_2(),
+        m.settings_provider_netease_step_3(),
+      ];
+    },
     helpUrl: "https://help.mail.163.com/",
     stripSecretSpaces: true,
   },
@@ -103,62 +134,87 @@ export const PROVIDERS: readonly ProviderPreset[] = [
     incoming: imap("imap.gmail.com"),
     outgoing: smtp("smtp.gmail.com"),
     credential: "app_password",
-    secretLabel: "应用专用密码（16 位）",
-    steps: [
-      "Google 账号需先开启两步验证",
-      "打开「Google 账号 → 安全性 → 应用专用密码」并新建一个",
-      "复制显示的 16 位密码；中间的空格会自动去掉",
-    ],
+    get secretLabel() {
+      return m.settings_provider_gmail_secret();
+    },
+    get steps() {
+      return [
+        m.settings_provider_gmail_step_1(),
+        m.settings_provider_gmail_step_2(),
+        m.settings_provider_gmail_step_3(),
+      ];
+    },
     helpUrl: "https://myaccount.google.com/apppasswords",
     stripSecretSpaces: true,
   },
   {
     id: "icloud",
+    // i18n-lint-allow-cjk: 服务商名称是品牌数据，不是界面文案
     name: "iCloud 邮件",
     short: "iCloud",
     domains: ["icloud.com", "me.com", "mac.com"],
     incoming: imap("imap.mail.me.com"),
     outgoing: smtp("smtp.mail.me.com", 587, "starttls"),
     credential: "app_password",
-    secretLabel: "App 专用密码",
-    steps: [
-      "Apple 账户需开启双重认证",
-      "在 account.apple.com 打开「登录与安全 → App 专用密码」并生成",
-      "粘贴生成的密码；它不是 Apple 账户密码",
-    ],
+    get secretLabel() {
+      return m.settings_provider_icloud_secret();
+    },
+    get steps() {
+      return [
+        m.settings_provider_icloud_step_1(),
+        m.settings_provider_icloud_step_2(),
+        m.settings_provider_icloud_step_3(),
+      ];
+    },
     helpUrl: "https://account.apple.com/",
     stripSecretSpaces: true,
   },
   {
     id: "exmail",
-    name: "腾讯企业邮",
-    short: "企业邮箱",
+    get name() {
+      return m.settings_provider_exmail_name();
+    },
+    get short() {
+      return m.settings_provider_exmail_short();
+    },
     domains: ["exmail.qq.com"],
     incoming: imap("imap.exmail.qq.com"),
     outgoing: smtp("smtp.exmail.qq.com"),
     credential: "authorization_code",
-    secretLabel: "邮箱密码或客户端专用密码",
-    steps: [
-      "使用公司分配的完整邮箱地址",
-      "若开启了「安全登录」，需在企业邮「设置 → 账户 → 客户端专用密码」生成后粘贴",
-      "IMAP/SMTP 由管理员统一开关；无法连接时请联系管理员",
-    ],
+    get secretLabel() {
+      return m.settings_provider_exmail_secret();
+    },
+    get steps() {
+      return [
+        m.settings_provider_exmail_step_1(),
+        m.settings_provider_exmail_step_2(),
+        m.settings_provider_exmail_step_3(),
+      ];
+    },
     helpUrl: "https://exmail.qq.com/",
     stripSecretSpaces: true,
   },
   {
     id: "aliyun",
-    name: "阿里云邮箱",
-    short: "阿里云",
+    get name() {
+      return m.settings_provider_aliyun_name();
+    },
+    get short() {
+      return m.settings_provider_aliyun_short();
+    },
     domains: ["aliyun.com"],
     incoming: imap("imap.aliyun.com"),
     outgoing: smtp("smtp.aliyun.com"),
     credential: "password",
-    secretLabel: "邮箱密码",
-    steps: [
-      "在网页版阿里邮箱「设置 → 账户 → POP3/SMTP 及 IMAP/SMTP」中开启 IMAP",
-      "使用邮箱登录密码；开启了独立密码时使用独立密码",
-    ],
+    get secretLabel() {
+      return m.settings_provider_secret_mailbox_password();
+    },
+    get steps() {
+      return [
+        m.settings_provider_aliyun_step_1(),
+        m.settings_provider_aliyun_step_2(),
+      ];
+    },
     helpUrl: "https://mail.aliyun.com/",
     stripSecretSpaces: false,
   },
@@ -170,15 +226,20 @@ export const PROVIDERS: readonly ProviderPreset[] = [
     incoming: imap("outlook.office365.com"),
     outgoing: smtp("smtp-mail.outlook.com", 587, "starttls"),
     credential: "app_password",
-    secretLabel: "应用密码",
-    steps: [
-      "Microsoft 365 工作或学校账户：请管理员为你开启 IMAP 与 SMTP AUTH",
-      "若组织允许应用密码，在「Microsoft 账户 → 安全性」生成后粘贴",
-    ],
+    get secretLabel() {
+      return m.settings_provider_outlook_secret();
+    },
+    get steps() {
+      return [
+        m.settings_provider_outlook_step_1(),
+        m.settings_provider_outlook_step_2(),
+      ];
+    },
     helpUrl: "https://account.microsoft.com/security",
     stripSecretSpaces: true,
-    caveat:
-      `微软已停止个人 Outlook.com / Hotmail 账户在第三方客户端中使用密码登录，只接受 OAuth。${BRAND.productName} 目前尚不支持 OAuth，个人账户探测会在「认证」阶段失败。`,
+    get caveat() {
+      return m.settings_provider_outlook_caveat({ product: BRAND.productName });
+    },
   },
   {
     id: "fastmail",
@@ -188,11 +249,15 @@ export const PROVIDERS: readonly ProviderPreset[] = [
     incoming: imap("imap.fastmail.com"),
     outgoing: smtp("smtp.fastmail.com"),
     credential: "app_password",
-    secretLabel: "应用专用密码",
-    steps: [
-      "打开 Fastmail「设置 → 隐私与安全 → 应用专用密码」",
-      "新建一个允许 IMAP 与 SMTP 的密码并粘贴",
-    ],
+    get secretLabel() {
+      return m.settings_provider_secret_app_password();
+    },
+    get steps() {
+      return [
+        m.settings_provider_fastmail_step_1(),
+        m.settings_provider_fastmail_step_2(),
+      ];
+    },
     helpUrl: "https://www.fastmail.help/",
     stripSecretSpaces: true,
   },
@@ -204,11 +269,15 @@ export const PROVIDERS: readonly ProviderPreset[] = [
     incoming: imap("imap.mail.yahoo.com"),
     outgoing: smtp("smtp.mail.yahoo.com"),
     credential: "app_password",
-    secretLabel: "应用专用密码",
-    steps: [
-      "打开 Yahoo「账户信息 → 账户安全」",
-      "选择「生成应用密码」，复制后粘贴",
-    ],
+    get secretLabel() {
+      return m.settings_provider_secret_app_password();
+    },
+    get steps() {
+      return [
+        m.settings_provider_yahoo_step_1(),
+        m.settings_provider_yahoo_step_2(),
+      ];
+    },
     helpUrl: "https://login.yahoo.com/account/security",
     stripSecretSpaces: true,
   },
@@ -223,11 +292,15 @@ export const PROVIDERS: readonly ProviderPreset[] = [
       "zohomail.cn": { incoming: "imap.zoho.com.cn", outgoing: "smtp.zoho.com.cn" },
     },
     credential: "app_password",
-    secretLabel: "应用专用密码",
-    steps: [
-      "在 Zoho Mail「设置 → 邮件账户 → IMAP 访问」中启用 IMAP",
-      "开启两步验证时，在 Zoho 账户「安全 → 应用专用密码」生成后粘贴",
-    ],
+    get secretLabel() {
+      return m.settings_provider_secret_app_password();
+    },
+    get steps() {
+      return [
+        m.settings_provider_zoho_step_1(),
+        m.settings_provider_zoho_step_2(),
+      ];
+    },
     helpUrl: "https://accounts.zoho.com/",
     stripSecretSpaces: true,
   },
@@ -239,15 +312,21 @@ export const PROVIDERS: readonly ProviderPreset[] = [
     incoming: imap("127.0.0.1", 1143, "starttls"),
     outgoing: smtp("127.0.0.1", 1025, "starttls"),
     credential: "bridge_password",
-    secretLabel: "Bridge 密码",
-    steps: [
-      "在本机安装并登录 Proton Mail Bridge（需付费计划）",
-      "在 Bridge 的邮箱详情里复制 IMAP/SMTP 用户名与 Bridge 密码",
-      `Bridge 必须保持运行，${BRAND.productName} 才能收发`,
-    ],
+    get secretLabel() {
+      return m.settings_provider_proton_secret();
+    },
+    get steps() {
+      return [
+        m.settings_provider_proton_step_1(),
+        m.settings_provider_proton_step_2(),
+        m.settings_provider_proton_step_3({ product: BRAND.productName }),
+      ];
+    },
     helpUrl: "https://proton.me/mail/bridge",
     stripSecretSpaces: false,
-    caveat: "Bridge 只在本机 127.0.0.1 提供服务；端口若在 Bridge 设置里改过，请展开连接参数同步修改。",
+    get caveat() {
+      return m.settings_provider_proton_caveat();
+    },
   },
 ];
 
@@ -345,21 +424,22 @@ export function cleanSecret(value: string, strip: boolean): { value: string; cha
 /** 这些阶段失败说明服务器参数本身可疑，自动展开连接参数面板。 */
 export const SERVER_STAGES: readonly string[] = ["dns", "connect", "tls", "mailbox"];
 
+const STAGE_LABEL: Readonly<Record<string, () => string>> = {
+  dns: m.settings_probe_stage_dns,
+  connect: m.settings_probe_stage_connect,
+  tls: m.settings_probe_stage_tls,
+  auth: m.settings_probe_stage_auth,
+  mailbox: m.settings_probe_stage_mailbox,
+  capability: m.settings_probe_stage_capability,
+  ready: m.settings_probe_stage_ready,
+  provider: m.settings_probe_stage_provider,
+};
+
 export function stageLabel(value: string) {
-  return (
-    (
-      {
-        dns: "服务器名称",
-        connect: "连接",
-        tls: "加密连接",
-        auth: "认证",
-        mailbox: "文件夹",
-        capability: "服务能力",
-        ready: "就绪",
-        provider: "服务扩展",
-      } as Record<string, string>
-    )[value] ?? "未知阶段"
-  );
+  const label = Object.prototype.hasOwnProperty.call(STAGE_LABEL, value)
+    ? STAGE_LABEL[value]
+    : undefined;
+  return label ? label() : m.settings_probe_stage_unknown();
 }
 
 /** 失败阶段的简明排障建议；服务商有特别说明时优先给出。 */
@@ -367,23 +447,26 @@ export function probeAdvice(stage: string, side: "incoming" | "outgoing", preset
   const what = side === "incoming" ? "IMAP" : "SMTP";
   switch (stage) {
     case "dns":
-      return `找不到 ${what} 服务器，请核对服务器地址拼写，或点「自动检测服务器」。`;
+      return m.settings_probe_advice_dns({ protocol: what });
     case "connect":
-      return `能解析服务器但连不上，请核对端口，并确认网络或代理没有拦截 ${what}。`;
+      return m.settings_probe_advice_connect({ protocol: what });
     case "tls":
-      return `加密握手失败：993 / 465 通常配 TLS，143 / 587 通常配 STARTTLS。`;
+      return m.settings_probe_advice_tls();
     case "auth":
       if (preset?.caveat && preset.id === "outlook") return preset.caveat;
       return preset
-        ? `服务器拒绝了登录。${preset.name} 需要${CREDENTIAL_LABEL[preset.credential]}，而不是网页登录密码；请确认已开启 IMAP/SMTP 并重新生成。`
-        : "服务器拒绝了登录，请核对用户名与密码；许多服务商要求使用应用专用密码或授权码。";
+        ? m.settings_probe_advice_auth_provider({
+            provider: preset.name,
+            credential: CREDENTIAL_LABEL[preset.credential],
+          })
+        : m.settings_probe_advice_auth();
     case "mailbox":
-      return "登录成功，但找不到收信文件夹，请核对「收信文件夹」（通常为 INBOX）。";
+      return m.settings_probe_advice_mailbox();
     case "capability":
-      return `服务器缺少 ${BRAND.productName} 需要的能力，请确认服务商已开启 IMAP。`;
+      return m.settings_probe_advice_capability({ product: BRAND.productName });
     case "provider":
-      return "邮箱服务扩展未就绪，请在「扩展」中确认它已启用。";
+      return m.settings_probe_advice_provider();
     default:
-      return "请核对连接参数后重试。";
+      return m.settings_probe_advice_default();
   }
 }

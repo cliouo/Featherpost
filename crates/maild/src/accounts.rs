@@ -31,8 +31,9 @@ use crate::menu::{MenuConfig, MenuPlugin};
 use crate::notify::{NotifyConfig, NotifyPlugin};
 use crate::otp::{OtpConfig, OtpPlugin};
 use crate::probe::{probe_incoming, probe_outgoing, IncomingProbe, OutgoingProbe, ProbeOutcome};
+use crate::events::AccountDetailCode;
 use crate::receive::{
-    spawn_managed_receive, Receive, ReceiveConfig, ReceivePlugin, SecretFetcher,
+    spawn_managed_receive, Receive, ReceiveConfig, ReceiveError, ReceivePlugin, SecretFetcher,
 };
 use crate::rules::{RulesConfig, RulesPlugin};
 use crate::scheduler::{Scheduler, SchedulerConfig, SchedulerPlugin};
@@ -676,9 +677,13 @@ impl AccountManager {
         let key = CredentialKey::new(profile.id.clone(), CredentialRole::Incoming, revision);
         let store = self.store.clone();
         Ok(Arc::new(move || {
-            store
-                .load(&key)
-                .map_err(|error| format!("凭据读取失败: {error}"))
+            // 凭据库的报错是我们自己的文字，不作为 `server_detail` 透出（ADR-0048 L6）。
+            store.load(&key).map_err(|error| {
+                ReceiveError::new(
+                    AccountDetailCode::CredentialUnavailable,
+                    format!("凭据读取失败: {error}"),
+                )
+            })
         }))
     }
 
@@ -959,12 +964,7 @@ impl AccountManager {
             incoming: incoming_view,
             outgoing: outgoing_view.map(|(view, _)| view),
             credentials,
-            runtime: RuntimeView {
-                state: runtime_state.label().to_string(),
-                detail: runtime
-                    .map(|info| sanitize_detail(&info.detail))
-                    .unwrap_or_default(),
-            },
+            runtime: RuntimeView::from_info(runtime_state.label(), runtime.as_ref()),
         }
     }
 
@@ -2602,6 +2602,26 @@ pub struct RuntimeView {
     pub state: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub detail: String,
+    /// `detail` 的稳定 code（ADR-0048 L6），与 `account/state` 同一套。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail_code: Option<crate::events::AccountDetailCode>,
+    /// 服务器或系统原文（不含我们的前缀），可空。
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub server_detail: String,
+}
+
+impl RuntimeView {
+    /// 由收信循环的状态投影：`detail` 与 `server_detail` 有界脱敏，code 原样。
+    fn from_info(state: &str, info: Option<&crate::events::AccountStateInfo>) -> Self {
+        RuntimeView {
+            state: state.to_string(),
+            detail: info.map(|info| sanitize_detail(&info.detail)).unwrap_or_default(),
+            detail_code: info.and_then(|info| info.detail_code),
+            server_detail: info
+                .map(|info| sanitize_detail(&info.server_detail))
+                .unwrap_or_default(),
+        }
+    }
 }
 
 enum RuntimeState {
@@ -2656,15 +2676,14 @@ fn legacy_view(
             incoming: "embedded".into(),
             outgoing: None,
         },
-        runtime: RuntimeView {
-            state: match state.state {
+        runtime: RuntimeView::from_info(
+            match state.state {
                 crate::events::AccountStateKind::Connecting => "connecting",
                 crate::events::AccountStateKind::Online => "online",
                 crate::events::AccountStateKind::Reconnecting => "reconnecting",
                 crate::events::AccountStateKind::Offline => "error",
-            }
-            .to_string(),
-            detail: sanitize_detail(&state.detail),
-        },
+            },
+            Some(&state),
+        ),
     }
 }

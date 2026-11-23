@@ -1,3 +1,7 @@
+import { m } from "@featherpost/i18n/messages";
+import { useUiLocale } from "@featherpost/i18n/react";
+import { packageText, providerName } from "../../../maild-ui/src/i18n";
+import { AccountReason } from "../../../maild-ui/src/settings/AccountReason";
 import { Choice } from "../../../maild-ui/src/settings/Choice";
 import { useState, type ReactNode } from "react";
 import { useStore } from "../../../maild-ui/src/host/hooks";
@@ -36,24 +40,44 @@ export function Field({
 export function needsRepair(p: AccountProfile) {
   return p.enabled && (p.runtime.state === "needs_credentials" || p.runtime.state === "error");
 }
+const accountStates: Record<string, () => string> = {
+  online: m.studio_account_state_online,
+  connecting: m.studio_account_state_connecting,
+  reconnecting: m.studio_account_state_reconnecting,
+  disabled: m.studio_account_state_disabled,
+  needs_credentials: m.studio_account_state_needs_credentials,
+  error: m.studio_account_state_error,
+};
 export function accountState(p: AccountProfile) {
+  const label = Object.prototype.hasOwnProperty.call(
+    accountStates,
+    p.runtime.state,
+  )
+    ? accountStates[p.runtime.state]
+    : undefined;
+  return label ? label() : m.studio_account_state_unknown();
+}
+/** 把带 `{占位}` 的整句消息拆成前后两段，中间的值以 <strong> 渲染；词序由各语言的消息决定。 */
+const MARK = "\u0000";
+function emphasize(text: (mark: string) => string, value: ReactNode) {
+  const [before, after = ""] = text(MARK).split(MARK);
   return (
-    (
-      {
-        online: "已连接",
-        connecting: "连接中",
-        reconnecting: "正在重连",
-        disabled: "已暂停",
-        needs_credentials: "需要更新认证信息",
-        error: "连接失败",
-      } as Record<string, string>
-    )[p.runtime.state] ?? "状态未知"
+    <>
+      {before}
+      <strong>{value}</strong>
+      {after}
+    </>
   );
 }
 function ProviderPills({ controller }: { controller: SettingsController }) {
+  useUiLocale();
   const s = useStore(controller.store);
   return (
-    <div className="provider-pills" role="group" aria-label="常用邮箱">
+    <div
+      className="provider-pills"
+      role="group"
+      aria-label={m.studio_account_providers_label()}
+    >
       {QUICK_PROVIDERS.map((id) => {
         const preset = providerById(id);
         const active = s.wizard.provider === id;
@@ -65,7 +89,7 @@ function ProviderPills({ controller }: { controller: SettingsController }) {
             aria-pressed={active}
             onClick={() => controller.chooseProvider(id)}
           >
-            {preset?.short ?? "自定义 IMAP"}
+            {preset?.short ?? m.studio_account_custom_imap()}
           </button>
         );
       })}
@@ -81,17 +105,24 @@ function ProbeLine({
   result: ProbeStage;
   preset: ProviderPreset | null;
 }) {
-  const label = side === "incoming" ? "收信" : "发信";
+  useUiLocale();
+  const label =
+    side === "incoming" ? m.studio_account_incoming() : m.studio_account_outgoing();
   return (
     <div className={`probe-line${result.ok ? "" : " failed"}`}>
       <span className={`tag${result.ok ? "" : " warn"}`}>
-        {label}：{result.ok ? "探测通过" : `未通过 · ${stageLabel(result.stage)}`}
+        {result.ok
+          ? m.studio_account_probe_passed({ side: label })
+          : m.studio_account_probe_failed({
+              side: label,
+              stage: stageLabel(result.stage),
+            })}
       </span>
       {!result.ok && (
         <p className="probe-advice">{probeAdvice(result.stage, side, preset)}</p>
       )}
       {!result.ok && result.detail && (
-        <code className="probe-detail" aria-label={`${label}诊断详情`}>
+        <code className="probe-detail" aria-label={m.studio_account_probe_detail({ side: label })}>
           {result.detail}
         </code>
       )}
@@ -99,6 +130,7 @@ function ProbeLine({
   );
 }
 function Editor({ controller }: { controller: SettingsController }) {
+  useUiLocale();
   const s = useStore(controller.store),
     e = s.editor!,
     w = s.wizard;
@@ -120,7 +152,7 @@ function Editor({ controller }: { controller: SettingsController }) {
     if (controller.requestLeave(() => controller.store.patch({ editor: null })))
       controller.store.patch({ editor: null });
   };
-  const secretLabel = preset?.secretLabel ?? "密码或应用专用密码";
+  const secretLabel = preset?.secretLabel ?? m.studio_account_secret_default();
   function SecretInput({
     role,
     label,
@@ -138,7 +170,7 @@ function Editor({ controller }: { controller: SettingsController }) {
             value={e.secrets[role] ?? ""}
             maxLength={8192}
             aria-label={label}
-            placeholder={saved?.credentials[role] === "saved" ? "留空以保留已保存的密码" : `输入${label}`}
+            placeholder={saved?.credentials[role] === "saved" ? m.studio_account_secret_keep() : m.studio_account_secret_enter({ label })}
             autoComplete="new-password"
             autoCapitalize="none"
             spellCheck={false}
@@ -148,10 +180,10 @@ function Editor({ controller }: { controller: SettingsController }) {
             type="button"
             className="text-button"
             aria-pressed={reveal}
-            aria-label={reveal ? `隐藏${label}` : `显示${label}`}
+            aria-label={reveal ? m.studio_account_secret_hide_label({ label }) : m.studio_account_secret_show_label({ label })}
             onClick={() => setReveal(!reveal)}
           >
-            {reveal ? "隐藏" : "显示"}
+            {reveal ? m.studio_account_secret_hide() : m.studio_account_secret_show()}
           </button>
         </span>
       </Field></div>
@@ -161,7 +193,7 @@ function Editor({ controller }: { controller: SettingsController }) {
     const ep = draft[side]!;
     return (
       <div className="settings-fields">
-        <Field label={side === "incoming" ? "IMAP 服务器" : "SMTP 服务器"}>
+        <Field label={side === "incoming" ? m.studio_account_server_imap() : m.studio_account_server_smtp()}>
           <input
             value={ep.server ?? ""}
             required
@@ -172,7 +204,7 @@ function Editor({ controller }: { controller: SettingsController }) {
           />
         </Field>
         <div className="settings-field-pair">
-          <Field label="端口">
+          <Field label={m.studio_account_port()}>
             <input
               type="number"
               min={1}
@@ -183,19 +215,19 @@ function Editor({ controller }: { controller: SettingsController }) {
             />
           </Field>
           <Field
-            label="连接安全"
-            hint="切换时，标准端口会随之调整。"
+            label={m.studio_account_security()}
+            hint={m.studio_account_security_hint()}
           >
             <Choice disabled={s.busy || !s.online}
               value={ep.security ?? "implicit"}
               onValueChange={(value) => endpoint(side, { security: value })}
             >
-              <option value="implicit">直接加密（TLS）</option>
-              <option value="starttls">升级加密（STARTTLS）</option>
+              <option value="implicit">{m.studio_account_security_tls()}</option>
+              <option value="starttls">{m.studio_account_security_starttls()}</option>
             </Choice>
           </Field>
         </div>
-        <Field label={side === "incoming" ? "收信用户名" : "发信用户名"}>
+        <Field label={side === "incoming" ? m.studio_account_username_incoming() : m.studio_account_username_outgoing()}>
           <input
             value={ep.username ?? ""}
             required
@@ -208,7 +240,7 @@ function Editor({ controller }: { controller: SettingsController }) {
         </Field>
         {side === "incoming" ? (
           <>
-            <Field label="收信文件夹">
+            <Field label={m.studio_account_mailbox()}>
               <input
                 value={ep.mailbox ?? "INBOX"}
                 required
@@ -222,27 +254,31 @@ function Editor({ controller }: { controller: SettingsController }) {
                 checked={ep.idle ?? true}
                 onChange={(v) => endpoint(side, { idle: v.target.checked })}
               />
-              使用 IMAP IDLE 接收新邮件
+              {m.studio_account_idle()}
             </label>
           </>
         ) : (
           <>
-            <Field label="发信认证">
+            <Field label={m.studio_account_outgoing_auth()}>
               <Choice disabled={s.busy || !s.online}
                 value={ep.credential ?? "incoming"}
                 onValueChange={(value) => endpoint(side, { credential: value })}
               >
                 <option value="incoming" disabled={plugin}>
-                  与收信共用{preset ? CREDENTIAL_LABEL[preset.credential] : "密码"}
+                  {m.studio_account_outgoing_shared({
+                    credential: preset
+                      ? CREDENTIAL_LABEL[preset.credential]
+                      : m.studio_account_credential_password(),
+                  })}
                 </option>
-                <option value="separate">使用独立密码</option>
+                <option value="separate">{m.studio_account_outgoing_separate()}</option>
               </Choice>
             </Field>
             {ep.credential === "separate" &&
               SecretInput({
                 role: "outgoing",
-                label: "发信密码",
-                hint: "已有密码不回填，留空表示不修改。",
+                label: m.studio_account_outgoing_password(),
+                hint: m.studio_account_outgoing_password_hint(),
               })}
           </>
         )}
@@ -258,11 +294,11 @@ function Editor({ controller }: { controller: SettingsController }) {
         void controller.saveAccount();
       }}
     >
-      {!e.id && <div className="settings-editor-heading"><div><div className="section-label">连接现有邮箱</div><h3>添加邮箱账户</h3><p className="page-intro">输入邮箱地址，选择服务商并探测连接。</p></div></div>}
-      {e.id && <div className="studio-editor-label">账户资料</div>}
+      {!e.id && <div className="settings-editor-heading"><div><div className="section-label">{m.studio_account_new_eyebrow()}</div><h3>{m.studio_account_add_mailbox()}</h3><p className="page-intro">{m.studio_account_new_intro()}</p></div></div>}
+      {e.id && <div className="studio-editor-label">{m.studio_account_profile()}</div>}
       <fieldset disabled={s.busy || !s.online}>
         {!e.id && (
-          <Field label="接入方式">
+          <Field label={m.studio_account_access()}>
             <Choice disabled={s.busy || !s.online}
               value={plugin ? "plugin" : "imap"}
               onValueChange={(value) =>
@@ -289,15 +325,15 @@ function Editor({ controller }: { controller: SettingsController }) {
             >
               <option value="imap">IMAP / SMTP</option>
               <option value="plugin" disabled={!providers.length}>
-                已安装的邮箱服务扩展
+                {m.studio_account_access_plugin()}
               </option>
             </Choice>
           </Field>
         )}
         {!e.id && !plugin && <ProviderPills controller={controller} />}
         <div className="settings-field-pair studio-account-identity">
-          <Field label="显示名称"><input value={draft.display_name} required maxLength={160} onChange={v => controller.setDisplayName(v.target.value)} /></Field>
-          <Field label="邮箱地址"><input type="email" value={draft.address} required maxLength={320} autoCapitalize="none" autoComplete="email" spellCheck={false}
+          <Field label={m.studio_account_display_name()}><input value={draft.display_name} required maxLength={160} onChange={v => controller.setDisplayName(v.target.value)} /></Field>
+          <Field label={m.studio_account_address()}><input type="email" value={draft.address} required maxLength={320} autoCapitalize="none" autoComplete="email" spellCheck={false}
             placeholder={preset ? `name@${preset.domains[0]}` : "name@example.com"} onChange={v => controller.setAddress(v.target.value)} /></Field>
         </div>
         {!plugin && !e.id && (
@@ -305,13 +341,16 @@ function Editor({ controller }: { controller: SettingsController }) {
             {preset ? (
               <span>
                 <span className="status-dot" aria-hidden="true" />
-                已识别为 <strong>{preset.name}</strong>，服务器参数已自动填好。
+                {emphasize(
+                  (provider) => m.studio_account_provider_detected({ provider }),
+                  preset.name,
+                )}
               </span>
             ) : domain ? (
               <>
                 <span>
                   {w.discovered ??
-                    `${domain} 不在内置服务商列表中。`}
+                    m.studio_account_domain_unknown({ domain })}
                 </span>
                 {!w.discovered && (
                   <button
@@ -320,18 +359,20 @@ function Editor({ controller }: { controller: SettingsController }) {
                     disabled={w.discovering}
                     onClick={() => void controller.discover()}
                   >
-                    {w.discovering ? "正在检测…" : "自动检测服务器"}
+                    {w.discovering
+                      ? m.studio_account_discovering()
+                      : m.studio_account_discover()}
                   </button>
                 )}
               </>
             ) : (
-              <span>输入地址后自动识别 QQ、网易、Gmail、iCloud 等常见邮箱。</span>
+              <span>{m.studio_account_detect_hint()}</span>
             )}
           </div>
         )}
         {plugin ? (
           <>
-            <Field label="邮箱服务扩展">
+            <Field label={m.studio_account_plugin()}>
               <Choice disabled={s.busy || !s.online}
                 value={draft.incoming.provider ?? ""}
                 onValueChange={(value) =>
@@ -343,18 +384,25 @@ function Editor({ controller }: { controller: SettingsController }) {
               >
                 {!providers.some((p) => p.id === draft.incoming.provider) && (
                   <option value={draft.incoming.provider ?? ""}>
-                    {draft.incoming.provider || "尚无可用扩展"}（不可用）
+                    {m.studio_account_plugin_unavailable({
+                      name:
+                        draft.incoming.provider ||
+                        m.studio_account_plugin_none(),
+                    })}
                   </option>
                 )}
                 {providers.map((p) => (
                   <option key={p.id} value={p.id}>
-                    {p.name} · {p.provider_registered ? "可探测" : "尚未就绪"}
+                    {packageText(p).name} ·{" "}
+                    {p.provider_registered
+                      ? m.studio_account_plugin_ready()
+                      : m.studio_account_plugin_not_ready()}
                   </option>
                 ))}
               </Choice>
             </Field>
             <p className="group-note">
-              填写扩展中已经存在的邮箱地址。探测只读取远程状态，不会创建邮箱或保存绑定。
+              {m.studio_account_plugin_note()}
             </p>
             {providers.find((p) => p.id === draft.incoming.provider)
               ?.has_ui && (
@@ -365,7 +413,7 @@ function Editor({ controller }: { controller: SettingsController }) {
                   void controller.openProvider(draft.incoming.provider!)
                 }
               >
-                打开服务扩展管理
+                {m.studio_account_plugin_open()}
               </button>
             )}
           </>
@@ -375,10 +423,13 @@ function Editor({ controller }: { controller: SettingsController }) {
               role: "incoming",
               label: secretLabel,
               hint: saved
-                ? "已保存的密码不会回填。留空表示保存时不修改；重新探测需要输入。"
+                ? m.studio_account_secret_saved_hint()
                 : preset
-                  ? `${preset.name} 需要${CREDENTIAL_LABEL[preset.credential]}，不是网页登录密码。`
-                  : "多数服务商要求使用应用专用密码或授权码。",
+                  ? m.studio_account_secret_preset_hint({
+                      provider: preset.name,
+                      credential: CREDENTIAL_LABEL[preset.credential],
+                    })
+                  : m.studio_account_secret_generic_hint(),
             })}
             {w.secretNotice && (
               <p className="secret-notice" role="status">
@@ -387,7 +438,11 @@ function Editor({ controller }: { controller: SettingsController }) {
             )}
             {preset && (
               <details className="credential-guide" open={!e.id}>
-                <summary>如何获取{CREDENTIAL_LABEL[preset.credential]}</summary>
+                <summary>
+                  {m.studio_account_credential_guide({
+                    credential: CREDENTIAL_LABEL[preset.credential],
+                  })}
+                </summary>
                 {preset.caveat && <p className="provider-caveat" role="note">{preset.caveat}</p>}
                 <ol>
                   {preset.steps.map((step) => (
@@ -400,7 +455,7 @@ function Editor({ controller }: { controller: SettingsController }) {
                     className="text-button"
                     onClick={() => void controller.openHelp(preset.helpUrl!)}
                   >
-                    打开 {preset.short} 官方设置页
+                    {m.studio_account_open_help({ provider: preset.short })}
                   </button>
                 )}
               </details>
@@ -409,11 +464,11 @@ function Editor({ controller }: { controller: SettingsController }) {
         )}
         <div className="studio-connection-groups">
           {!plugin ? <details className="studio-connection" open={!e.id}>
-            <summary><span>收信</span><strong>{draft.incoming.server || "配置收信服务器"}{draft.incoming.port ? ` : ${draft.incoming.port}` : ""}</strong><small>IMAP · {draft.incoming.security === "starttls" ? "STARTTLS" : "TLS"}</small><Icon name="back" /></summary>
-            <div className="studio-connection-fields">{Server({ side: "incoming" })}{<Field label="轮询间隔（秒）"><input type="number" min={1} value={draft.incoming.poll_secs ?? 60} onChange={v => endpoint("incoming", { poll_secs: Number(v.target.value) })} /></Field>}</div>
-          </details> : <Field label="轮询间隔（秒）"><input type="number" min={1} value={draft.incoming.poll_secs ?? 60} onChange={v => endpoint("incoming", { poll_secs: Number(v.target.value) })} /></Field>}
+            <summary><span>{m.studio_account_incoming()}</span><strong>{draft.incoming.server || m.studio_account_incoming_configure()}{draft.incoming.port ? ` : ${draft.incoming.port}` : ""}</strong><small>IMAP · {draft.incoming.security === "starttls" ? "STARTTLS" : "TLS"}</small><Icon name="back" /></summary>
+            <div className="studio-connection-fields">{Server({ side: "incoming" })}{<Field label={m.studio_account_poll()}><input type="number" min={1} value={draft.incoming.poll_secs ?? 60} onChange={v => endpoint("incoming", { poll_secs: Number(v.target.value) })} /></Field>}</div>
+          </details> : <Field label={m.studio_account_poll()}><input type="number" min={1} value={draft.incoming.poll_secs ?? 60} onChange={v => endpoint("incoming", { poll_secs: Number(v.target.value) })} /></Field>}
           <details className="studio-connection" open={!e.id}>
-            <summary><span>发信</span><strong>{!draft.outgoing ? "未启用" : draft.outgoing.kind === "plugin" ? (draft.outgoing.provider || "邮箱服务扩展") : `${draft.outgoing.server || "配置发信服务器"} : ${draft.outgoing.port ?? ""}`}</strong><small>{draft.outgoing?.kind === "smtp" ? `SMTP · ${draft.outgoing.security === "starttls" ? "STARTTLS" : "TLS"}` : "服务扩展"}</small><Icon name="back" /></summary>
+            <summary><span>{m.studio_account_outgoing()}</span><strong>{!draft.outgoing ? m.studio_account_outgoing_disabled() : draft.outgoing.kind === "plugin" ? (draft.outgoing.provider || m.studio_account_plugin()) : `${draft.outgoing.server || m.studio_account_outgoing_configure()} : ${draft.outgoing.port ?? ""}`}</strong><small>{draft.outgoing?.kind === "smtp" ? `SMTP · ${draft.outgoing.security === "starttls" ? "STARTTLS" : "TLS"}` : m.studio_account_service_extension()}</small><Icon name="back" /></summary>
             <div className="studio-connection-fields">
             <label className="settings-check">
               <input
@@ -435,11 +490,11 @@ function Editor({ controller }: { controller: SettingsController }) {
                   })
                 }
               />
-              启用发信
+              {m.studio_account_outgoing_enable()}
             </label>
             {draft.outgoing && (
               <>
-                <Field label="发信方式">
+                <Field label={m.studio_account_outgoing_method()}>
                   <Choice disabled={s.busy || !s.online}
                     value={draft.outgoing.kind}
                     onValueChange={(value) =>
@@ -464,19 +519,19 @@ function Editor({ controller }: { controller: SettingsController }) {
                       })
                     }
                   >
-                    <option value="smtp">标准发信（SMTP）</option>
+                    <option value="smtp">{m.studio_account_outgoing_smtp()}</option>
                     <option value="plugin" disabled={!providers.length}>
-                      邮箱服务扩展
+                      {m.studio_account_plugin()}
                     </option>
                   </Choice>
                 </Field>
                 {draft.outgoing.kind === "smtp" ? (
                   <>
-                    <h3>发信</h3>
+                    <h3>{m.studio_account_outgoing()}</h3>
                     {Server({ side: "outgoing" })}
                   </>
                 ) : (
-                  <Field label="发信服务扩展">
+                  <Field label={m.studio_account_outgoing_plugin()}>
                     <Choice disabled={s.busy || !s.online}
                       value={draft.outgoing.provider ?? ""}
                       onValueChange={(value) =>
@@ -487,13 +542,19 @@ function Editor({ controller }: { controller: SettingsController }) {
                         (p) => p.id === draft.outgoing?.provider,
                       ) && (
                         <option value={draft.outgoing.provider ?? ""}>
-                          {draft.outgoing.provider || "尚无可用扩展"}（不可用）
+                          {m.studio_account_plugin_unavailable({
+                            name:
+                              draft.outgoing.provider ||
+                              m.studio_account_plugin_none(),
+                          })}
                         </option>
                       )}
                       {providers.map((p) => (
                         <option key={p.id} value={p.id}>
-                          {p.name} ·{" "}
-                          {p.provider_registered ? "可探测" : "尚未就绪"}
+                          {packageText(p).name} ·{" "}
+                          {p.provider_registered
+                            ? m.studio_account_plugin_ready()
+                            : m.studio_account_plugin_not_ready()}
                         </option>
                       ))}
                     </Choice>
@@ -513,17 +574,17 @@ function Editor({ controller }: { controller: SettingsController }) {
           </div>
         )}
       </fieldset>
-        <div className="studio-editor-options"><span>重新探测连接需要输入密码</span>{saved && <AccountMore profile={saved} controller={controller} disabled={controller.dirty} />}</div>
+        <div className="studio-editor-options"><span>{m.studio_account_probe_needs_password()}</span>{saved && <AccountMore profile={saved} controller={controller} disabled={controller.dirty} />}</div>
         <div className="settings-actions studio-account-save">
-          <span>保存后应用到账户；不会改变服务器上的邮件</span>
-          <button type="button" className="secondary" disabled={s.busy || s.closeLocked} onClick={end}>取消</button>
+          <span>{m.studio_account_save_note()}</span>
+          <button type="button" className="secondary" disabled={s.busy || s.closeLocked} onClick={end}>{m.studio_account_cancel()}</button>
           <button
             type="button"
             className="secondary"
             disabled={!s.online || s.busy || s.closeLocked}
             onClick={() => void controller.probe()}
           >
-            探测连接
+            {m.studio_account_probe()}
           </button>
           <button
             type="submit"
@@ -534,17 +595,22 @@ function Editor({ controller }: { controller: SettingsController }) {
                 (!!draft.outgoing && !s.probe?.outgoing?.ok)))
             }
           >
-            {s.busy ? "处理中…" : e.id ? "保存更改" : "保存并连接"}
+            {s.busy
+              ? m.studio_account_busy()
+              : e.id
+                ? m.studio_account_save()
+                : m.studio_account_save_connect()}
           </button>
         </div>
         {!e.id && <p className="group-note">
-          凭据只保存在系统钥匙串；关闭窗口后，后台以极低内存静默收信。
+          {m.studio_account_keychain_note()}
         </p>}
     </form>
   );
 }
 
 export function AccountMore({ profile, controller, disabled = false }: { profile: AccountProfile; controller: SettingsController; disabled?: boolean }) {
+  useUiLocale();
   const s = useStore(controller.store);
   const confirm = (remove: boolean) => {
     if (disabled || controller.dirty || !s.online || s.busy || s.closeLocked) return;
@@ -553,24 +619,25 @@ export function AccountMore({ profile, controller, disabled = false }: { profile
     controller.confirmAccount(profile, remove);
   };
   return <details className="account-more">
-    <summary aria-label={`${profile.display_name} 的更多操作`}>更多账户操作 <Icon name="more" /></summary>
+    <summary aria-label={m.studio_account_more_label({ account: profile.display_name })}>{m.studio_account_more()} <Icon name="more" /></summary>
     <div>
-      <button type="button" disabled={disabled || !s.online || s.busy || s.closeLocked} onClick={() => confirm(false)}>{profile.enabled ? "暂停同步" : "启用"}</button>
-      <button type="button" className="danger" disabled={disabled || !s.online || s.busy || s.closeLocked} onClick={() => confirm(true)}>移除账户</button>
-      {disabled && <small>先保存或取消更改</small>}
-      <small>账户 ID：{profile.id} · 版本 {profile.revision}</small>
-      <small>{profile.credentials.incoming === "saved" ? "收信凭据已保存在系统钥匙串" : "未保存收信凭据"}；关闭窗口不影响后台收信</small>
+      <button type="button" disabled={disabled || !s.online || s.busy || s.closeLocked} onClick={() => confirm(false)}>{profile.enabled ? m.studio_account_pause() : m.studio_account_enable()}</button>
+      <button type="button" className="danger" disabled={disabled || !s.online || s.busy || s.closeLocked} onClick={() => confirm(true)}>{m.studio_account_remove()}</button>
+      {disabled && <small>{m.studio_account_save_first()}</small>}
+      <small>{m.studio_account_id_revision({ id: profile.id, revision: profile.revision })}</small>
+      <small>{profile.credentials.incoming === "saved" ? m.studio_account_credentials_saved() : m.studio_account_credentials_missing()}</small>
     </div>
   </details>;
 }
 
 export function Accounts({ controller }: { controller: SettingsController }) {
+  useUiLocale();
   const s = useStore(controller.store);
   const change = (next: () => void) => { if (controller.requestLeave(next)) next(); };
   return <>
     <section className="studio-accounts">
-      <div className="studio-account-list-heading"><span>已连接的邮箱</span>
-        <button type="button" className="text-button" disabled={!s.online || s.busy || s.loading || s.closeLocked || controller.dirty} onClick={() => void controller.load()}><Icon name="refresh" />刷新状态</button>
+      <div className="studio-account-list-heading"><span>{m.studio_accounts_connected()}</span>
+        <button type="button" className="text-button" disabled={!s.online || s.busy || s.loading || s.closeLocked || controller.dirty} onClick={() => void controller.load()}><Icon name="refresh" />{m.studio_accounts_refresh()}</button>
       </div>
       {s.editor && (!s.editor.id || !s.profiles?.some(p => p.id === s.editor?.id)) && <Editor key={s.editor.id ?? "new"} controller={controller} />}
       {s.profiles?.map(p => {
@@ -580,18 +647,18 @@ export function Accounts({ controller }: { controller: SettingsController }) {
             <span className="account-monogram" aria-hidden="true">{(p.display_name || p.address).slice(0,1)}</span>
             <div className="account-details">
               <strong>{p.display_name || p.address}</strong><p>{p.address}</p>
-              {p.incoming.provider && <small>{s.packages?.plugins.find(x => x.id === p.incoming.provider)?.name ?? p.incoming.provider}</small>}
-              {!p.editable && <small>配置文件账户，只读</small>}
+              {p.incoming.provider && <small>{providerName(s.packages?.plugins, p.incoming.provider)}</small>}
+              {!p.editable && <small>{m.studio_account_readonly()}</small>}
               {needsRepair(p) && <p className="account-alert" role="status">
-                {p.runtime.state === "needs_credentials" ? "服务器不再接受已保存的认证信息。请更新授权码或应用专用密码。" : "最近一次连接失败，请检查服务器参数或网络后重新探测。"}
-                {p.runtime.detail && <code>{p.runtime.detail}</code>}
+                {p.runtime.state === "needs_credentials" ? m.studio_account_alert_credentials() : m.studio_account_alert_error()}
+                <AccountReason source={p.runtime} />
               </p>}
             </div>
             <span className="studio-account-state"><i className={`status-dot${p.runtime.state === "online" ? "" : " warn"}`} />{accountState(p)}</span>
             {p.editable && <div className="settings-actions">
               <button type="button" className="text-button studio-account-manage" aria-expanded={expanded} disabled={!s.online || s.busy || s.closeLocked}
                 onClick={() => change(() => expanded ? controller.store.patch({ editor: null }) : controller.beginAccount(p))}>
-                {expanded ? "收起" : needsRepair(p) ? (p.runtime.state === "needs_credentials" ? "更新凭据" : "修复连接") : "管理"}<Icon name="back" />
+                {expanded ? m.studio_account_collapse() : needsRepair(p) ? (p.runtime.state === "needs_credentials" ? m.studio_account_update_credentials() : m.studio_account_repair()) : m.studio_account_manage()}<Icon name="back" />
               </button>
               {!expanded && <AccountMore profile={p} controller={controller} disabled={controller.dirty} />}
             </div>}
@@ -600,11 +667,11 @@ export function Accounts({ controller }: { controller: SettingsController }) {
         </article>;
       })}
       {s.profiles?.length === 0 && !s.editor && <div className="settings-empty">
-        <h3>从你的第一个邮箱开始</h3><p>连接现有邮箱，无需注册 {BRAND.productName} 账户。</p>
+        <h3>{m.studio_accounts_empty_title()}</h3><p>{m.studio_accounts_empty_body({ product: BRAND.productName })}</p>
         <div className="provider-pills">{QUICK_PROVIDERS.map(id => <button key={id} type="button" className="provider-pill" disabled={!s.online || s.busy || s.closeLocked}
-          onClick={() => controller.beginAccount(undefined, id)}>{providerById(id)?.short ?? "自定义 IMAP"}</button>)}</div>
+          onClick={() => controller.beginAccount(undefined, id)}>{providerById(id)?.short ?? m.studio_account_custom_imap()}</button>)}</div>
       </div>}
     </section>
-    <p className="studio-accounts-note">暂停同步会保留本地邮件。移除账户前，会单独说明本地数据、凭据和服务器邮件的处理范围。</p>
+    <p className="studio-accounts-note">{m.studio_accounts_note()}</p>
   </>;
 }

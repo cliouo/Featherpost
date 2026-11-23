@@ -1,7 +1,7 @@
 use clap::Parser;
 
 #[derive(Parser)]
-#[command(name = maild_brand::LAUNCHER_BIN, version, about = "原生修复与后台管理")]
+#[command(name = maild_brand::LAUNCHER_BIN, version, about = "Native recovery and background management")]
 struct Arguments {
     /// Open the native recovery window without opening a mailbox.
     #[arg(long)]

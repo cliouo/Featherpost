@@ -1,9 +1,10 @@
+import { m } from '@featherpost/i18n/messages';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 
 import { App } from './app/App';
 import { ErrorBoundary } from './app/ErrorBoundary';
-import { tauriBridge } from './bridge/tauri';
+import { startupLocaleReady, tauriBridge } from './bridge/tauri';
 import { Host } from './host/host';
 import { mailboxModule } from './mailbox/module';
 import { sampleExcerptModule } from './sample/module';
@@ -31,14 +32,17 @@ composer.setBeforeClose(()=>settings.beforeClose());
 composer.store.subscribe(()=>{if(!composer.store.getSnapshot().closing)settings.releaseClose();});
 host.registerBuiltin(settingsModule(host,settings));
 // 示例扩展默认关闭：没有启用可选扩展时三栏界面保持原样，在「设置 → 扩展」里开。
-host.registerOptional('maild.sample-excerpt', { title: '邮件摘录（示例）', bundle: () => sampleExcerptModule(host), defaultEnabled: false });
+host.registerOptional('maild.sample-excerpt', { get title() { return m.common_sample_excerpt_title(); }, bundle: () => sampleExcerptModule(host), defaultEnabled: false });
 host.finishAssembly();
 void host.start();
 
-createRoot(document.getElementById('root')!).render(
-  <StrictMode>
-    <ErrorBoundary onReset={() => { void host.bridge.refresh().catch(() => {}); }}>
-      <App host={host} />
-    </ErrorBoundary>
-  </StrictMode>,
-);
+// ADR-0048：首帧前等启动语言（最多几百毫秒），英文用户不会先看到一帧中文。
+void startupLocaleReady().then(() => {
+  createRoot(document.getElementById('root')!).render(
+    <StrictMode>
+      <ErrorBoundary onReset={() => { void host.bridge.refresh().catch(() => {}); }}>
+        <App host={host} />
+      </ErrorBoundary>
+    </StrictMode>,
+  );
+});

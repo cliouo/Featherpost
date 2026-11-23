@@ -42,7 +42,7 @@ impl FileSelections {
     pub fn select(&self, path: &Path) -> Result<PickedFile, UiError> {
         let mut files = self.files.lock().unwrap();
         if files.len() >= 16 {
-            return Err(UiError::invalid("最多同时准备 16 个文件，请先完成或移除。"));
+            return Err(UiError::invalid("too_many_files", "最多同时准备 16 个文件，请先完成或移除。"));
         }
         let mut options = OpenOptions::new();
         options.read(true);
@@ -52,28 +52,28 @@ impl FileSelections {
             options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
         }
         if std::fs::symlink_metadata(path)
-            .map_err(|e| UiError::failed("select", e, "无法读取文件。"))?
+            .map_err(|e| UiError::failed("select", e, "file_read_failed", "无法读取文件。"))?
             .file_type()
             .is_symlink()
         {
-            return Err(UiError::invalid("请选择原文件，不能使用符号链接。"));
+            return Err(UiError::invalid("file_symlink", "请选择原文件，不能使用符号链接。"));
         }
         let file = options
             .open(path)
-            .map_err(|e| UiError::failed("select", e, "无法读取文件。"))?;
+            .map_err(|e| UiError::failed("select", e, "file_read_failed", "无法读取文件。"))?;
         let meta = file
             .metadata()
-            .map_err(|e| UiError::failed("select", e, "无法读取文件。"))?;
+            .map_err(|e| UiError::failed("select", e, "file_read_failed", "无法读取文件。"))?;
         if !meta.is_file() || meta.len() > MAX_FILE {
-            return Err(UiError::invalid("请选择不超过 20 MiB 的普通文件。"));
+            return Err(UiError::invalid("file_too_large", "请选择不超过 20 MiB 的普通文件。"));
         }
         let filename = path
             .file_name()
             .and_then(|s| s.to_str())
-            .ok_or_else(|| UiError::invalid("文件名需要使用 UTF-8。"))?
+            .ok_or_else(|| UiError::invalid("file_name_encoding", "文件名需要使用 UTF-8。"))?
             .to_owned();
         let mut bytes = [0u8; 16];
-        getrandom::fill(&mut bytes).map_err(|e| UiError::failed("token", e, "无法准备附件。"))?;
+        getrandom::fill(&mut bytes).map_err(|e| UiError::failed("token", e, "attachment_prepare_failed", "无法准备附件。"))?;
         let token: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
         files.insert(
             token.clone(),
@@ -109,9 +109,9 @@ impl FileSelections {
             .unwrap()
             .get(token)
             .cloned()
-            .ok_or_else(|| UiError::not_found("所选文件已释放，请重新选择。"))?;
+            .ok_or_else(|| UiError::not_found("file_released", "所选文件已释放，请重新选择。"))?;
         if file.busy.swap(true, Ordering::SeqCst) {
-            return Err(UiError::invalid("这个文件正在上传。"));
+            return Err(UiError::invalid("file_uploading", "这个文件正在上传。"));
         }
         struct Busy(Arc<Selected>);
         impl Drop for Busy {
@@ -123,21 +123,21 @@ impl FileSelections {
         let init:Result<maild_client::AttachmentUpload,UiError>=bridge.compose_call::<UploadReply>("beginAttachmentUpload",json!({"draft_id":draft_id,"filename":file.name,"mime_type":"application/octet-stream","size":file.size})).await.map(|r|r.upload);
         let upload = init?;
         let result=async{
-            {let mut f=file.file.lock().unwrap();f.seek(SeekFrom::Start(0)).map_err(|e|UiError::failed("seek",e,"无法读取附件。"))?;}
+            {let mut f=file.file.lock().unwrap();f.seek(SeekFrom::Start(0)).map_err(|e|UiError::failed("seek",e,"attachment_read_failed", "无法读取附件。"))?;}
             let mut offset=0;
             loop {
-                if file.cancel.load(Ordering::SeqCst){return Err(UiError::invalid("已取消附件上传。"));}
+                if file.cancel.load(Ordering::SeqCst){return Err(UiError::invalid("upload_cancelled", "已取消附件上传。"));}
                 let f=file.clone();
                 let bytes=tokio::task::spawn_blocking(move||{
                     let mut bytes=vec![0;CHUNK];let n=f.file.lock().unwrap().read(&mut bytes)?;bytes.truncate(n);Ok::<_,std::io::Error>(bytes)
-                }).await.map_err(|e|UiError::failed("read",e,"读取附件失败。"))?.map_err(|e|UiError::failed("read",e,"读取附件失败。"))?;
+                }).await.map_err(|e|UiError::failed("read",e,"attachment_read_error", "读取附件失败。"))?.map_err(|e|UiError::failed("read",e,"attachment_read_error", "读取附件失败。"))?;
                 if bytes.is_empty(){break;}
                 let reply:UploadReply=bridge.compose_call("writeAttachmentUpload",json!({"upload_id":upload.upload_id,"offset":offset,"data":base64::engine::general_purpose::STANDARD.encode(&bytes)})).await?;
                 offset+=bytes.len() as u64;
-                if reply.upload.upload_id!=upload.upload_id || reply.upload.offset!=offset{return Err(UiError::invalid("上传回执不一致，请重新选择文件。"));}
+                if reply.upload.upload_id!=upload.upload_id || reply.upload.offset!=offset{return Err(UiError::invalid("upload_receipt_mismatch", "上传回执不一致，请重新选择文件。"));}
                 progress(FileProgress{token:token.into(),offset,size:file.size});
             }
-            if offset!=file.size || file.cancel.load(Ordering::SeqCst){return Err(UiError::invalid("文件已变化或上传已取消。"));}
+            if offset!=file.size || file.cancel.load(Ordering::SeqCst){return Err(UiError::invalid("file_changed", "文件已变化或上传已取消。"));}
             Ok(upload.upload_id.clone())
         }.await;
         if result.is_err() {

@@ -704,6 +704,19 @@ impl Plugin for NotifyPlugin {
     }
 }
 
+/// 此刻成文系统通知该用的内核文案（ADR-0048 决策 6）。
+///
+/// 每条通知**成文时**调用一次：读 daemon 的语言偏好 `effective` 列表与 `maild-l10n` 协商；
+/// `system` 模式下 `effective` 会重读系统语言，所以切换偏好或系统语言后下一条通知即跟随。
+/// 上下文里没有偏好服务（未从配置文件装配、单元测试）时按 `FALLBACK_LANGUAGE` 协商，即简体中文。
+pub fn kernel_messages(ctx: &Context) -> &'static maild_l10n::Messages {
+    let effective = ctx
+        .get::<crate::locale_preference::LocalePreference>()
+        .map(|preference| preference.effective())
+        .unwrap_or_else(|| vec![crate::locale_preference::FALLBACK_LANGUAGE.to_string()]);
+    maild_l10n::negotiate(&effective).messages()
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};

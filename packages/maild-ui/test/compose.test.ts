@@ -1,6 +1,7 @@
 import { Host } from "../src/host/host";
 import { composeModule } from "../src/compose/module";
 import { FakeBridge } from "./fakeBridge";
+import { applyEffectiveLocales } from "@featherpost/i18n";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ComposeController, sourceKey } from "../src/compose/controller";
 import { FakeCompose } from "./fakeCompose";
@@ -94,6 +95,13 @@ describe("compose", () => {
     expect(c.store.getSnapshot().draft!.id).toBe(id);
     expect(c.store.getSnapshot().fields?.body).toBe("reply to inbox");
     expect(bridge.replyCalls).toHaveLength(2);
+  });
+  it("asks for the reply quote in the current interface language (ADR-0048 decision 7)", async () => {
+    const { bridge, controller: c } = await setup();
+    await c.reply({ account: "demo", folder: "INBOX", uid: "1" }, "reply");
+    applyEffectiveLocales(["en-US"]);
+    await c.reply({ account: "demo", folder: "INBOX", uid: "2" }, "forward");
+    expect(bridge.replyLocales).toEqual(["zh-CN", "en"]);
   });
   it("freezes repeated send clicks and persists accepted delivery", async () => {
     const { bridge, controller: c } = await setup();
@@ -380,4 +388,28 @@ it("ordinary SMTP permits a Bcc-only envelope", async () => {
   c.change("subject", "private copy");
   await c.send();
   expect(bridge.sends).toBe(1);
+});
+
+it("validation errors and command titles follow the UI language", async () => {
+  const { controller: c } = await setup();
+  applyEffectiveLocales(["en"]);
+  try {
+    c.change("to", "unfinished@");
+    await c.send();
+    expect(c.store.getSnapshot().errors.to).toBe("Enter full email addresses, separated by commas.");
+    vi.stubGlobal("window", {
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    });
+    const host = new Host(new FakeBridge());
+    const bundle = composeModule(host, c);
+    host.registerBuiltin(bundle);
+    expect(host.registry.findCommand("maild.compose.reply-all")?.title).toBe("Reply All");
+    applyEffectiveLocales([]);
+    expect(host.registry.findCommand("maild.compose.reply-all")?.title).toBe("全部回复");
+    bundle.dispose?.();
+  } finally {
+    applyEffectiveLocales([]);
+    vi.unstubAllGlobals();
+  }
 });

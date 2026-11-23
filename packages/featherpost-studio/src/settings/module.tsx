@@ -1,4 +1,12 @@
-import { lifecycleLabel, permissionLabel } from "../../../maild-ui/src/i18n";
+import { m } from "@featherpost/i18n/messages";
+import {
+  identityFailureText,
+  lifecycleLabel,
+  packageText,
+  permissionLabel,
+  uiLocale,
+  useUiLocale,
+} from "../../../maild-ui/src/i18n";
 import { useEffect, useState } from "react";
 import { SettingsController } from "../../../maild-ui/src/settings/controller";
 import { Accounts } from "./Accounts";
@@ -11,11 +19,30 @@ import type { Host } from "../../../maild-ui/src/host/host";
 import { useExternal, useStore } from "../../../maild-ui/src/host/hooks";
 import type { Bundle, ViewProps } from "../../../maild-ui/src/host/types";
 import { Appearance } from "./Appearance";
+import { LanguageController } from "../../../maild-ui/src/settings/language";
 import { Icon } from "../../../maild-ui/src/app/Icon";
 import { BRAND } from "../../../maild-ui/src/brand";
 
 export const SETTINGS_VIEW = "maild.settings.page";
 
+// i18n-lint-allow-cjk: 全角加号是按钮的装饰图标（aria-hidden），不是文案
+const PLUS = "＋";
+
+function plural(count: number, one: () => string, other: () => string) {
+  return new Intl.PluralRules(uiLocale()).select(count) === "one"
+    ? one()
+    : other();
+}
+
+/** 各设置分区的说明；存消息函数，渲染时按当前语言取值。 */
+const descriptions: Record<string, () => string> = {
+  "maild.settings.accounts": m.studio_settings_description_accounts,
+  "maild.settings.appearance": m.studio_settings_description_appearance,
+  "maild.settings.notifications": m.studio_settings_description_notifications,
+  "maild.settings.addresses": m.studio_settings_description_addresses,
+  "maild.settings.extensions": m.studio_settings_description_extensions,
+  "maild.settings.connection": m.studio_settings_description_connection,
+};
 
 function Row({
   title,
@@ -41,7 +68,12 @@ export function settingsModule(
   host: Host,
   controller = new SettingsController(host.bridge.settings),
 ): Bundle {
+  // ADR-0048：语言选择与默认前端共用一个控制器；偏好归 daemon。
+  const language = new LanguageController(host.bridge.locale);
+  language.start();
+
   function Connection(_props: ViewProps) {
+    useUiLocale();
     const { snapshot, frontendInfo, frontendInfoError } = useStore(host.state);
     const [opening, setOpening] = useState(false);
     const [recoveryError, setRecoveryError] = useState<string | null>(null);
@@ -50,25 +82,21 @@ export function settingsModule(
       setOpening(true);
       setRecoveryError(null);
       try { await host.bridge.settings.packageAction({ action: "recovery" }); }
-      catch { setRecoveryError(`修复入口未能打开，请从完整 ${BRAND.appBundleName} 打开修复与后台管理。`); }
+      catch { setRecoveryError(m.studio_connection_recovery_error({ app: BRAND.appBundleName })); }
       finally { setOpening(false); }
     }
     return (
       <>
-        <h2>后台与存储</h2>
-        <p className="page-intro">
-          关闭窗口后，独立后台可继续收信。账户与邮件保存在本机，凭据由系统凭据库管理。
-        </p>
-        <p className="group-note">
-          备份与恢复需要独立维护流程：停止相关进程、验证候选库并保留回滚记录。此页不提供会直接覆盖邮件库的开关。
-        </p>
-        <p className="page-intro">
-          这个窗口是一个可替换的前端包，以自己的身份连接后台；它能做什么由下面的授权决定，第三方前端走同一张表。
-        </p>
+        <h2>{m.studio_settings_section_connection()}</h2>
+        <p className="page-intro">{m.studio_connection_intro()}</p>
+        <p className="group-note">{m.studio_connection_backup_note()}</p>
+        <p className="page-intro">{m.studio_connection_frontend_intro()}</p>
         <Row
-          title="后台"
+          title={m.studio_connection_daemon()}
           description={
-            snapshot.version ? `maild ${snapshot.version}` : "尚未取得版本"
+            snapshot.version
+              ? `maild ${snapshot.version}`
+              : m.studio_connection_version_unknown()
           }
         >
           <span className={`tag${snapshot.phase === "online" ? "" : " warn"}`}>
@@ -76,36 +104,44 @@ export function settingsModule(
           </span>
         </Row>
         <Row
-          title="会话主体"
+          title={m.studio_connection_principal()}
           description={
-            snapshot.principal ?? snapshot.identity_failure ?? "未绑定"
+            snapshot.principal ??
+            identityFailureText(snapshot) ??
+            m.studio_connection_unbound()
           }
         >
           <span className={`tag${snapshot.principal ? "" : " warn"}`}>
-            {snapshot.principal ? "前端主体" : "未绑定"}
+            {snapshot.principal
+              ? m.studio_connection_principal_frontend()
+              : m.studio_connection_unbound()}
           </span>
         </Row>
-        <Row title="修复与后台管理" description={snapshot.phase === "online"
-          ? "在独立原生窗口恢复内置前端、启动或停止后台。"
-          : `后台未连接，请打开 ${BRAND.appBundleName} 的修复入口。`}>
+        <Row title={m.studio_connection_recovery()} description={snapshot.phase === "online"
+          ? m.studio_connection_recovery_online()
+          : m.studio_connection_recovery_offline({ app: BRAND.appBundleName })}>
           <button type="button" disabled={opening || snapshot.phase !== "online"} onClick={() => void openRecovery()}>
-            {opening ? "正在打开…" : "打开修复窗口"}
+            {opening ? m.studio_connection_opening() : m.studio_connection_open_recovery()}
           </button>
         </Row>
         {recoveryError && <p className="group-note" role="alert">{recoveryError}</p>}
         {frontendInfo && (
           <>
             <Row
-              title={frontendInfo.name}
-              description={`${frontendInfo.id} · ${frontendInfo.version} · ${lifecycleLabel(frontendInfo.lifecycle)}`}
+              title={packageText(frontendInfo).name}
+              description={[packageText(frontendInfo).description, `${frontendInfo.id} · ${frontendInfo.version} · ${lifecycleLabel(frontendInfo.lifecycle)}`].filter(Boolean).join(" — ")}
             >
               <span className="tag">
                 {frontendInfo.is_default
-                  ? "默认前端"
-                  : `默认：${frontendInfo.default_frontend}`}
+                  ? m.studio_connection_default_frontend()
+                  : m.studio_connection_default_other({
+                      frontend: frontendInfo.default_frontend,
+                    })}
               </span>
             </Row>
-            <div className="section-label">已授权的功能</div>
+            <div className="section-label">
+              {m.studio_connection_permissions()}
+            </div>
             {[
               ...frontendInfo.permissions,
               ...frontendInfo.capabilities.flatMap(routeToWords),
@@ -127,6 +163,7 @@ export function settingsModule(
   }
 
   function Extensions(_props: ViewProps) {
+    useUiLocale();
     const registry = useExternal(
       host.registry.subscribe,
       host.registry.getSnapshot,
@@ -151,9 +188,7 @@ export function settingsModule(
     );
     return (
       <>
-        <p className="group-note">
-          停用示例模块会撤走它的按钮、工作页与设置分区，不影响后台服务包。
-        </p>
+        <p className="group-note">{m.studio_extensions_note()}</p>
         {rows.map((module) => {
           const enabled =
             host.isModuleEnabled(module.moduleId) || module.builtin;
@@ -161,16 +196,32 @@ export function settingsModule(
             <Row
               key={module.moduleId}
               title={module.title}
-              description={`${module.moduleId}${enabled ? ` · ${module.contributions} 项贡献` : ""}`}
+              description={`${module.moduleId}${
+                enabled
+                  ? ` · ${plural(
+                      module.contributions,
+                      () =>
+                        m.studio_extensions_contributions_one({
+                          count: module.contributions,
+                        }),
+                      () =>
+                        m.studio_extensions_contributions_other({
+                          count: module.contributions,
+                        }),
+                    )}`
+                  : ""
+              }`}
             >
               {module.builtin ? (
-                <span className="tag">内置</span>
+                <span className="tag">{m.studio_extensions_builtin()}</span>
               ) : (
                 <button
                   type="button"
                   role="switch"
                   aria-checked={enabled}
-                  aria-label={`启用 ${module.title}`}
+                  aria-label={m.studio_extensions_enable({
+                    module: module.title,
+                  })}
                   className="toggle"
                   onClick={() =>
                     host.setModuleEnabled(module.moduleId, !enabled)
@@ -184,7 +235,9 @@ export function settingsModule(
         })}
         {diagnostics.length > 0 && (
           <>
-            <div className="section-label">诊断</div>
+            <div className="section-label">
+              {m.studio_extensions_diagnostics()}
+            </div>
             {diagnostics.map((line, index) => (
               <p key={index} className="group-note">
                 {line}
@@ -197,6 +250,7 @@ export function settingsModule(
   }
 
   function Page(_props: ViewProps) {
+    useUiLocale();
     const registry = useExternal(
       host.registry.subscribe,
       host.registry.getSnapshot,
@@ -218,14 +272,6 @@ export function settingsModule(
     const accounts = active?.id === "maild.settings.accounts";
     const refreshDisabled = state.busy || state.loading || state.closeLocked || !state.online || controller.dirty;
     const refresh = () => void (state.section === "maild.settings.extensions" ? controller.reconcilePackages() : controller.load());
-    const descriptions: Record<string, string> = {
-      "maild.settings.accounts": "管理账户资料、认证信息与收发连接",
-      "maild.settings.appearance": "主题同时应用于界面与邮件阅读区",
-      "maild.settings.notifications": "决定何时提醒，以及通知中显示多少内容",
-      "maild.settings.addresses": "管理各个邮箱的本地发件身份",
-      "maild.settings.extensions": "管理服务扩展、前端与当前窗口的模块",
-      "maild.settings.connection": "查看后台连接、本机存储与前端授权",
-    };
     return (
       <div className="page settings-page studio-settings">
         <header className="studio-settings-topbar" data-tauri-drag-region>
@@ -235,17 +281,17 @@ export function settingsModule(
             </svg>
             <strong data-tauri-drag-region>Featherpost</strong>
           </div>
-          <span className="studio-settings-location" data-tauri-drag-region>设置</span>
+          <span className="studio-settings-location" data-tauri-drag-region>{m.studio_settings_title()}</span>
           <button type="button" className="secondary studio-return" onClick={() => host.openRole("mailbox")}>
-            <Icon name="back" />返回邮件
+            <Icon name="back" />{m.studio_settings_back()}
           </button>
         </header>
         <div className="settings-layout">
-          <nav className="settings-nav" aria-label="设置分区">
-            <h1>设置</h1>
+          <nav className="settings-nav" aria-label={m.studio_settings_nav_label()}>
+            <h1>{m.studio_settings_title()}</h1>
             {[
-              { label: "邮箱与偏好", rows: sections.filter(section => (section.order ?? 0) < 70) },
-              { label: "应用", rows: sections.filter(section => (section.order ?? 0) >= 70) },
+              { label: m.studio_settings_group_mail(), rows: sections.filter(section => (section.order ?? 0) < 70) },
+              { label: m.studio_settings_group_app(), rows: sections.filter(section => (section.order ?? 0) >= 70) },
             ].map(group => group.rows.length > 0 && (
               <div className="studio-settings-nav-group" key={group.label}>
                 <p>{group.label}</p>
@@ -261,35 +307,35 @@ export function settingsModule(
             ))}
             <div className="studio-settings-nav-footer">
               <strong>Featherpost Studio</strong>
-              <span><i className={state.online ? "status-dot" : "status-dot warn"} />后台{state.online ? "已连接" : "未连接"}</span>
+              <span><i className={state.online ? "status-dot" : "status-dot warn"} />{state.online ? m.studio_settings_daemon_online() : m.studio_settings_daemon_offline()}</span>
             </div>
           </nav>
           <div className="settings-content">
             <div className="page-column">
               <div className="studio-settings-heading">
                 <div>
-                  <div className="studio-settings-title"><h2>{active?.title ?? "设置"}</h2>
-                    {accounts && state.profiles !== null && <span>{state.profiles.length} 个邮箱</span>}
+                  <div className="studio-settings-title"><h2>{active ? active.title : m.studio_settings_title()}</h2>
+                    {accounts && state.profiles !== null && <span>{plural(state.profiles.length, () => m.studio_mailbox_count_one({ count: state.profiles!.length }), () => m.studio_mailbox_count_other({ count: state.profiles!.length }))}</span>}
                   </div>
-                  {active && descriptions[active.id] && <p>{descriptions[active.id]}</p>}
+                  {active && Object.prototype.hasOwnProperty.call(descriptions, active.id) && <p>{descriptions[active.id]()}</p>}
                 </div>
                 {accounts ? (
                   <button type="button" className="primary" disabled={!state.online || state.busy || state.loading || state.closeLocked || state.profiles === null}
                     onClick={() => { const next = () => controller.beginAccount(); if (controller.requestLeave(next)) next(); }}>
-                    <span aria-hidden="true">＋</span> 添加邮箱账户
+                    <span aria-hidden="true">{PLUS}</span> {m.studio_account_add_mailbox()}
                   </button>
                 ) : active?.id === "maild.settings.appearance" ? (
-                  <div className="studio-heading-actions"><span className="studio-instant">✓ 更改即时生效</span>
-                    <button type="button" className="text-button" aria-label="刷新设置" title="刷新设置" disabled={refreshDisabled} onClick={refresh}><Icon name="refresh" /></button>
+                  <div className="studio-heading-actions"><span className="studio-instant">✓ {m.studio_settings_instant()}</span>
+                    <button type="button" className="text-button" aria-label={m.studio_settings_refresh_label()} title={m.studio_settings_refresh_label()} disabled={refreshDisabled} onClick={refresh}><Icon name="refresh" /></button>
                   </div>
                 ) : (
-                  <button type="button" className="text-button" disabled={refreshDisabled} onClick={refresh}><Icon name="refresh" />刷新</button>
+                  <button type="button" className="text-button" disabled={refreshDisabled} onClick={refresh}><Icon name="refresh" />{m.studio_settings_refresh()}</button>
                 )}
               </div>
-              {!state.online && <p className="settings-alert" role="status">后台未连接。已有资料可查看，管理操作暂不可用。</p>}
+              {!state.online && <p className="settings-alert" role="status">{m.studio_settings_offline()}</p>}
               {state.error && <p className="settings-alert" role="alert">{state.error}</p>}
               {state.notice && <p className="settings-alert settings-notice" role="status">{state.notice}</p>}
-              {(state.loading || state.busy) && <p className="settings-progress" role="status">{state.busy ? "操作进行中…" : "正在读取…"}</p>}
+              {(state.loading || state.busy) && <p className="settings-progress" role="status">{state.busy ? m.studio_settings_busy() : m.studio_settings_loading()}</p>}
               <fieldset disabled={state.closeLocked} className={accounts || active?.id === "maild.settings.appearance" ? "studio-section-bare" : "studio-settings-section"}>
                 {Section && <Section active />}
               </fieldset>
@@ -307,7 +353,7 @@ export function settingsModule(
                 className="secondary"
                 onClick={() => controller.cancelConfirmation()}
               >
-                取消
+                {m.studio_settings_cancel()}
               </button>
               <button
                 className={
@@ -337,14 +383,19 @@ export function settingsModule(
     if (intent.route === "settings") host.openView(SETTINGS_VIEW);
   });
 
+  // 标题写成 getter：注册表保留访问器（copyContribution），切换界面语言后按当前语言重新成文。
   return {
     moduleId: "maild.settings",
     apiVersion: 1,
-    title: "设置",
+    get title() {
+      return m.studio_settings_title();
+    },
     views: [
       {
         id: SETTINGS_VIEW,
-        title: "设置",
+        get title() {
+          return m.studio_settings_title();
+        },
         icon: "settings",
         role: "settings",
         order: 1000,
@@ -354,37 +405,49 @@ export function settingsModule(
     settings: [
       {
         id: "maild.settings.accounts",
-        title: "账户",
+        get title() {
+          return m.studio_settings_section_accounts();
+        },
         order: 0,
         render: () => <Accounts controller={controller} />,
       },
       {
         id: "maild.settings.notifications",
-        title: "通知与规则",
+        get title() {
+          return m.studio_settings_section_notifications();
+        },
         order: 50,
         render: () => <Notifications controller={controller} />,
       },
       {
         id: "maild.settings.addresses",
-        title: "地址与别名",
+        get title() {
+          return m.studio_settings_section_addresses();
+        },
         order: 60,
         render: () => <Addresses controller={controller} />,
       },
       {
         id: "maild.settings.appearance",
-        title: "外观与操作",
+        get title() {
+          return m.studio_settings_section_appearance();
+        },
         order: 10,
-        render: () => <Appearance host={host} />,
+        render: () => <Appearance host={host} language={language} />,
       },
       {
         id: "maild.settings.connection",
-        title: "后台与存储",
+        get title() {
+          return m.studio_settings_section_connection();
+        },
         order: 90,
         render: Connection,
       },
       {
         id: "maild.settings.extensions",
-        title: "扩展",
+        get title() {
+          return m.studio_settings_section_extensions();
+        },
         order: 70,
         render: () => (
           <ManagedExtensions controller={controller}>
@@ -397,6 +460,7 @@ export function settingsModule(
       stopIntent();
       stopGuard();
       stopState();
+      language.dispose();
       controller.dispose();
     },
   };
@@ -419,16 +483,16 @@ function routeToWords(route: string): string[] {
 export function phaseLabel(phase: string): string {
   switch (phase) {
     case "online":
-      return "已连接";
+      return m.studio_phase_online();
     case "connecting":
-      return "连接中";
+      return m.studio_phase_connecting();
     case "synchronizing":
-      return "同步中";
+      return m.studio_phase_synchronizing();
     case "retry_waiting":
-      return "等待重连";
+      return m.studio_phase_retry_waiting();
     case "stopped":
-      return "已停止";
+      return m.studio_phase_stopped();
     default:
-      return "未连接";
+      return m.studio_phase_offline();
   }
 }

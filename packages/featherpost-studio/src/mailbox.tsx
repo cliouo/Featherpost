@@ -1,3 +1,4 @@
+import { m } from "@featherpost/i18n/messages";
 import type { Host } from "../../maild-ui/src/host/host";
 import type { Bundle } from "../../maild-ui/src/host/types";
 import { MailboxController } from "../../maild-ui/src/mailbox/controller";
@@ -61,14 +62,19 @@ export function studioMailbox(
         () => host.approveNavigation(MAIL),
       );
   });
+  // 标题写成 getter：注册表保留访问器（copyContribution），切换界面语言后按当前语言重新成文。
   const bundle: Bundle = {
     moduleId: "maild.mailbox",
     apiVersion: 1,
-    title: "Studio 邮箱",
+    get title() {
+      return m.studio_module_mailbox();
+    },
     views: [
       {
         id: MAIL,
-        title: "邮件",
+        get title() {
+          return m.studio_view_mail();
+        },
         role: "mailbox",
         render: () => (
           <Workspace
@@ -82,7 +88,9 @@ export function studioMailbox(
       },
       {
         id: ACTIVITY,
-        title: "同步活动",
+        get title() {
+          return m.studio_view_activity();
+        },
         role: "activity",
         render: () => (
           <Activity
@@ -96,7 +104,9 @@ export function studioMailbox(
     settings: [
       {
         id: "maild.mailbox.reading-privacy",
-        title: "阅读与隐私",
+        get title() {
+          return m.studio_settings_section_reading_privacy();
+        },
         order: 15,
         render: () => (
           <ReadingPrivacySection

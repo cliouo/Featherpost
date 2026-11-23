@@ -1,0 +1,29 @@
+{
+  "name": "@featherpost/i18n",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "默认前端（maild-ui 与 featherpost-studio）共用的界面消息与语言协商（ADR-0048 决策 8）",
+  "exports": {
+    ".": "./src/index.ts",
+    "./messages": "./src/messages.ts",
+    "./react": "./src/react.ts"
+  },
+  "scripts": {
+    "compile": "paraglide-js compile --project ./project.inlang --outdir ./src/paraglide --strategy custom-featherpost baseLocale --emit-ts-declarations --silent",
+    "watch": "paraglide-js compile --project ./project.inlang --outdir ./src/paraglide --strategy custom-featherpost baseLocale --emit-ts-declarations --watch",
+    "postinstall": "pnpm run compile",
+    "lint": "node scripts/lint.mjs",
+    "typecheck": "pnpm run compile && tsc --noEmit -p tsconfig.json"
+  },
+  "peerDependencies": {
+    "react": "^19.1.1"
+  },
+  "devDependencies": {
+    "@inlang/paraglide-js": "2.29.3",
+    "@inlang/plugin-message-format": "4.6.0",
+    "@types/react": "^19.1.12",
+    "react": "^19.1.1",
+    "typescript": "^5.9.2"
+  }
+}

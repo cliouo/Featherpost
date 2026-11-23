@@ -1,32 +1,50 @@
+import { m } from '@featherpost/i18n/messages';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 
 import { BridgeError, errorCode } from './errors';
-import type { MailBridge, OpenIntent, UiError, UiLink, UiSnapshot } from './types';
+import { followDaemonLocale, startupLocale } from './locale';
+import type { LocaleBridge, MailBridge, OpenIntent, UiError, UiLink, UiLocale, UiLocalePreference, UiSnapshot } from './types';
 import { isUiError } from './types';
 import { BRAND } from '../brand';
 
 const STATE_EVENT = 'maild://state';
 const INTENT_EVENT = 'maild://intent';
 const LINK_EVENT = 'maild://link';
+const LOCALE_EVENT = 'maild://locale';
 
-const notInTauri: UiError = { code: 'offline', message: `请在 ${BRAND.productName} 桌面窗口中打开邮箱。` };
+// 每次调用时成文，跟随当前界面语言。
+const notInTauri = (): UiError => ({
+  code: 'offline',
+  message: m.common_bridge_error_not_in_tauri({ product: BRAND.productName }),
+});
 
 async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
-  if (!isTauri()) throw new BridgeError(notInTauri);
+  if (!isTauri()) throw new BridgeError(notInTauri());
   try {
     return await invoke<T>(command, args);
   } catch (error) {
     // Rust 侧已把原因投影成四类固定文案；其他形状（IPC 本身失败）一律当离线。
-    throw new BridgeError(isUiError(error) ? error : { code: 'failed', message: '操作未完成，请稍后重试。' });
+    throw new BridgeError(isUiError(error) ? error : { code: 'failed', message: m.common_bridge_error_failed() });
   }
 }
 
 /** 服务商帮助页等固定 https 链接；邮件正文里的链接仍只走 ui_open_link 令牌通道。 */
 function openExternalUrl(url: string): Promise<void> {
-  if (!/^https:\/\/[^\s]+$/.test(url)) return Promise.reject(new BridgeError({ code: 'invalid', message: '链接无效。' }));
+  if (!/^https:\/\/[^\s]+$/.test(url)) return Promise.reject(new BridgeError({ code: 'invalid', message: m.common_bridge_error_invalid_link() }));
   return call('ui_open_external_url', { url });
 }
+
+// ADR-0048：语言偏好由 daemon 拥有，壳转发；协商与切换在 @featherpost/i18n。
+const tauriLocale: LocaleBridge = {
+  current: () => call<UiLocale>('ui_locale'),
+  subscribe: async (handler) => {
+    if (!isTauri()) return () => {};
+    return listen<UiLocale>(LOCALE_EVENT, (event) => handler(event.payload));
+  },
+  preference: () => call<UiLocalePreference>('ui_locale_preference'),
+  setPreference: (update) => call<UiLocalePreference>('ui_set_locale_preference', { update }),
+};
 
 export const tauriBridge: MailBridge = {
   settings: {
@@ -65,7 +83,7 @@ export const tauriBridge: MailBridge = {
   compose: {
     senders:()=>call('ui_senders'), drafts:(offset=0)=>call('ui_drafts',{offset}), draft:id=>call('ui_draft',{id}),
     create:(account,patch)=>call('ui_new_draft',{account,patch}), save:(id,version,patch)=>call('ui_save_draft',{id,version,patch}),
-    reply:(identity,mode)=>call('ui_reply_draft',{...identity,mode}), send:(id,version)=>call('ui_send_draft',{id,version}),
+    reply:(identity,mode,locale)=>call('ui_reply_draft',{...identity,mode,locale:locale??null}), send:(id,version)=>call('ui_send_draft',{id,version}),
     resolve:(id,version)=>call('ui_resolve_send',{id,version}), discard:(id,version)=>call('ui_discard_draft',{id,version}),
     pick:()=>call('ui_pick_files'), upload:(draftId,token)=>call('ui_upload_file',{draft_id:draftId,token}),
     release:token=>call('ui_release_file',{token}), finish:(id,version)=>call('ui_finish_upload',{id,version}), cancel:id=>call('ui_cancel_upload',{id}),
@@ -101,6 +119,15 @@ export const tauriBridge: MailBridge = {
   readingPolicy: () => call('ui_reading_policy'),
   setReadingPolicy: (patch) => call('ui_set_reading_policy', { patch }),
   openExternalUrl,
+  locale: tauriLocale,
 };
+
+// 默认前端与 Studio 都从这里取桥：导入即开始跟随 daemon 的语言偏好（启动值 + `maild://locale`）。
+const daemonLocale = isTauri() ? followDaemonLocale(tauriLocale) : null;
+
+/** 两个前端的 `main.tsx` 在首帧前等它：启动语言就绪或短暂超时后再渲染（ADR-0048 决策 8）。 */
+export function startupLocaleReady(): Promise<void> {
+  return startupLocale(daemonLocale);
+}
 
 export { BridgeError, errorCode } from './errors';

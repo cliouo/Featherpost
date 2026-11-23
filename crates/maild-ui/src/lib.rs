@@ -11,7 +11,9 @@ pub mod compose_files;
 pub mod documents;
 pub mod html;
 pub mod instance_lock;
-#[cfg(all(target_os = "macos", feature = "studio"))]
+#[cfg(target_os = "macos")]
+mod macos_app_languages;
+#[cfg(target_os = "macos")]
 mod macos_locale;
 #[cfg(target_os = "macos")]
 mod macos_window;
@@ -19,6 +21,7 @@ pub mod mailbox;
 pub mod system;
 pub mod settings;
 pub mod settings_packages;
+mod shell_locale;
 
 /// Packaging contract (ADR-0039): only the `embedded` form serves its assets from the binary.
 /// A default-form build would load `devUrl` from a local port, so `build-bundle.sh` and
@@ -39,7 +42,8 @@ use tauri::{Emitter as _, Manager as _, Url, WindowEvent};
 
 use bridge::UiLink;
 pub use bridge::{
-    Bridge, UiError, UiErrorCode, UiSnapshot, FRONTEND_ID, INTENT_EVENT, LINK_EVENT, STATE_EVENT,
+    Bridge, UiError, UiErrorCode, UiLocale, UiSnapshot, FRONTEND_ID, INTENT_EVENT, LINK_EVENT,
+    LOCALE_EVENT, STATE_EVENT,
 };
 use documents::{
     document_response, navigation_verdict, not_found, part_response, route, DocumentStore,
@@ -56,6 +60,8 @@ pub struct AppState {
     pub guard_ready: AtomicBool,
     /// ADR-0046：退出流水线（撤窗 → `Accessory` → `app.exit(0)`）已经启动；防重入。
     pub exiting: AtomicBool,
+    /// ADR-0048 决策 8（M2）：壳的语言列表，`ui_locale`、`maild://locale` 与原生菜单都读它。
+    pub locale: shell_locale::ShellLocale,
 }
 
 /// 起 Tauri 事件循环。必须在主线程调用；`tauri::async_runtime` 需已由调用方绑定到
@@ -69,7 +75,7 @@ pub fn run(bridge: Arc<Bridge>) -> Result<(), tauri::Error> {
     let documents_for_window = documents.clone();
     let base_for_window = base.clone();
     let builder = tauri::Builder::default();
-    #[cfg(all(target_os = "macos", feature = "studio"))]
+    #[cfg(target_os = "macos")]
     let builder = builder.menu(macos_locale::menu);
     let app = builder
         .manage(AppState {
@@ -81,6 +87,7 @@ pub fn run(bridge: Arc<Bridge>) -> Result<(), tauri::Error> {
             close_allowed: AtomicBool::new(false),
             guard_ready: AtomicBool::new(false),
             exiting: AtomicBool::new(false),
+            locale: shell_locale::ShellLocale::default(),
         })
         // ADR-0033 决策 4：文档与 part 只经令牌可达。处理器在 tokio 上异步跑——part 要经认证连接
         // 向 daemon 取字节。
@@ -173,6 +180,9 @@ pub fn run(bridge: Arc<Bridge>) -> Result<(), tauri::Error> {
             commands::ui_save_attachment,
             commands::ui_reading_policy,
             commands::ui_set_reading_policy,
+            commands::ui_locale,
+            commands::ui_locale_preference,
+            commands::ui_set_locale_preference,
             commands::ui_sync_mailbox,
             commands::ui_server_search,
             commands::ui_fetch_server_message,
@@ -467,18 +477,27 @@ fn spawn_state_pump(app: tauri::AppHandle, bridge: Arc<Bridge>) {
         let mut was_online = false;
         let mut seen_intent_epoch = 0;
         let mut shutdown_seen = false;
+        // 与 actor 初值一致：启动时还没有偏好，webview 与菜单都在基础语言。
+        let mut seen_locale: Option<Vec<String>> = None;
         loop {
-            let (snapshot, intent_epoch, shutdown_requested) = {
+            let (snapshot, intent_epoch, shutdown_requested, locale) = {
                 let current = state.borrow_and_update();
                 (
                     bridge.project(&current),
                     current.intent_epoch,
                     current.shutdown_requested,
+                    current.locale.clone(),
                 )
             };
             let online = snapshot.phase == "online";
             if let Err(error) = app.emit(STATE_EVENT, &snapshot) {
                 eprintln!("[maild-ui] 推送连接快照失败: {error}");
+            }
+            // ADR-0048：daemon 的偏好列表变了才重新解析壳的列表（M2：跟随系统时按本进程的语言，
+            // 含系统设置给本 app 单独设的语言），之后转发给 webview、按同一规则重建原生菜单；
+            // macOS 上先把模式镜像到本 app 的 AppleLanguages（M1，系统画的文字下次启动跟随）。
+            if locale_changed(&mut seen_locale, locale) {
+                shell_locale::spawn_refresh(app.clone(), bridge.clone(), seen_locale.clone());
             }
             // ADR-0045：daemon 推来 `frontend/intent`——菜单栏、通知或再次打开主 app bundle 排了意图。
             // 窗口可能正原生最小化在 Dock，或已被别处藏起（`Accessory` 收不到可靠的 Reopen），
@@ -518,6 +537,15 @@ fn intent_woke(seen: &mut u64, current: u64) -> bool {
     } else {
         false
     }
+}
+
+/// actor 的 `locale` 是否与上次转发的不同（ADR-0048）；是则记下新值。其他快照字段变化不重复转发。
+fn locale_changed(seen: &mut Option<Vec<String>>, current: Option<Vec<String>>) -> bool {
+    if *seen == current {
+        return false;
+    }
+    *seen = current;
+    true
 }
 
 /// `shutdown_requested` 是否第一次变成 `true`（ADR-0046）；是则记下。
@@ -608,6 +636,31 @@ mod intent_tests {
         assert!(!intent_woke(&mut seen, 1), "同一 epoch 的其他快照变化不重复唤醒");
         assert!(intent_woke(&mut seen, 3), "合并的多次推送只需一次唤醒，claim 会排空队列");
         assert_eq!(seen, 3);
+    }
+
+    #[test]
+    fn locale_is_forwarded_only_when_the_preference_list_changes() {
+        let mut seen = None;
+        assert!(!locale_changed(&mut seen, None), "启动时没有偏好，不推送");
+        assert!(locale_changed(&mut seen, Some(vec!["en".into()])));
+        assert!(
+            !locale_changed(&mut seen, Some(vec!["en".into()])),
+            "其他快照字段变化不重复推送"
+        );
+        assert!(locale_changed(&mut seen, Some(vec!["zh-Hans".into(), "en".into()])));
+        assert!(locale_changed(&mut seen, None), "daemon 换成老版本：推送 null，webview 回落基础语言");
+        assert_eq!(seen, None);
+    }
+
+    /// 原生菜单与 webview 用同一条协商规则：繁体中文跳过、空列表回落中文。
+    #[test]
+    fn native_menu_negotiates_like_the_webview() {
+        use maild_l10n::{negotiate, Locale};
+        assert_eq!(negotiate::<String>(&[]), Locale::ZhHans);
+        assert_eq!(negotiate(&["en-US"]), Locale::En);
+        assert_eq!(negotiate(&["zh-Hant-TW", "en"]), Locale::En);
+        assert_eq!(negotiate(&["zh-Hans-CN", "en"]), Locale::ZhHans);
+        assert_eq!(negotiate(&["fr", "ja"]), Locale::ZhHans);
     }
 
     #[test]

@@ -1,9 +1,11 @@
+import { m } from '@featherpost/i18n/messages';
 import { useEffect, useState } from 'react';
 
 import type { MailBridge, UiAttachment, UiLink, UiMessage } from '../bridge/types';
 import { errorCode } from '../bridge/errors';
 import type { Host } from '../host/host';
-import { addressOnly, humanSize } from './format';
+import { useUiLocale } from '../i18n';
+import { addressOnly, humanSize, plural } from './format';
 import type { DocumentController, DocumentState } from './document';
 import { messageKey } from './controller';
 import { BRAND } from '../brand';
@@ -28,6 +30,7 @@ interface BannerProps {
  * 放行时写明依据并给「停止信任」。没有远程引用就没有横幅。
  */
 export function RemoteBanner({ host, detail, state, documents, onPolicyChanged }: BannerProps) {
+  useUiLocale();
   const [busy, setBusy] = useState(false);
   const doc = state.document;
   if (!doc || state.key !== messageKey(detail) || state.status !== 'ready' || doc.remote_refs === 0) return null;
@@ -41,23 +44,23 @@ export function RemoteBanner({ host, detail, state, documents, onPolicyChanged }
       await host.bridge.setReadingPolicy(change);
       onPolicyChanged();
     } catch (error) {
-      host.notify(errorCode(error) === 'denied' ? '当前前端没有修改阅读策略的授权。' : '阅读策略未能保存，请稍后重试。');
+      host.notify(errorCode(error) === 'denied' ? m.mailbox_remote_policy_denied() : m.mailbox_remote_policy_failed());
     } finally {
       setBusy(false);
     }
   };
 
   if (doc.allow_remote) {
-    let text = '本封已加载远程内容（仅本次，不会记住）。';
+    let text = m.mailbox_remote_allowed_once();
     let action: { label: string; run: () => void } | null = null;
     if (reason === 'trusted_address') {
-      text = `来自 ${address} 的远程内容已按信任名单加载。`;
-      action = { label: '停止信任此地址', run: () => void patch({ untrust: [address] }) };
+      text = m.mailbox_remote_allowed_address({ address });
+      action = { label: m.mailbox_remote_untrust_address(), run: () => void patch({ untrust: [address] }) };
     } else if (reason === 'trusted_domain' && domain) {
-      text = `来自 ${domain} 域的远程内容已按信任名单加载。`;
-      action = { label: '停止信任此域', run: () => void patch({ untrust: [domain] }) };
+      text = m.mailbox_remote_allowed_domain({ domain });
+      action = { label: m.mailbox_remote_untrust_domain(), run: () => void patch({ untrust: [domain] }) };
     } else if (reason === 'allow_all') {
-      text = '远程内容已按「阅读与隐私」设置全局加载。';
+      text = m.mailbox_remote_allowed_all();
     }
     return (
       <div className="remote-banner allowed" role="status">
@@ -74,15 +77,16 @@ export function RemoteBanner({ host, detail, state, documents, onPolicyChanged }
   return (
     <div className="remote-banner" role="status">
       <span>
-        已拦截 {doc.remote_refs} 处远程内容（图片等），未向任何服务器发出请求。
-        {doc.cid_missing > 0 && ` 另有 ${doc.cid_missing} 张内嵌图片不在本地缓存中。`}
+        {plural(doc.remote_refs, { one: m.mailbox_remote_blocked_one, other: m.mailbox_remote_blocked_other })}
+        {doc.cid_missing > 0 &&
+          plural(doc.cid_missing, { one: m.mailbox_remote_cid_missing_one, other: m.mailbox_remote_cid_missing_other })}
       </span>
       <button type="button" className="text-button" disabled={busy} onClick={() => documents.allowOnce(detail)}>
-        加载本封
+        {m.mailbox_remote_allow_once()}
       </button>
       {address.includes('@') && (
-        <button type="button" className="text-button" disabled={busy} onClick={() => void patch({ trust: [address] })} title="写入「阅读与隐私」的可信发件人名单；以后来自这个地址的邮件会请求远程资源">
-          始终允许 {address}
+        <button type="button" className="text-button" disabled={busy} onClick={() => void patch({ trust: [address] })} title={m.mailbox_remote_trust_address_title()}>
+          {m.mailbox_remote_trust_address({ address })}
         </button>
       )}
     </div>
@@ -98,6 +102,7 @@ interface StripProps {
 
 /** 附件条（决策 8）：只列非内联附件；`stored` 才有「保存」，否则如实写「尚未保存此附件」。 */
 export function AttachmentStrip({ bridge, detail, notify }: StripProps) {
+  useUiLocale();
   const [saving, setSaving] = useState<number | null>(null);
   const visible = detail.attachments.filter((attachment) => !attachment.inline);
   if (visible.length === 0) return null;
@@ -106,29 +111,29 @@ export function AttachmentStrip({ bridge, detail, notify }: StripProps) {
     setSaving(attachment.part_index);
     try {
       const path = await bridge.saveAttachment({ account: detail.account, folder: detail.folder, uid: detail.uid }, attachment.part_index);
-      if (path) notify(`已保存到 ${path}`);
+      if (path) notify(m.mailbox_attachment_saved({ path }));
     } catch (error) {
-      notify(errorCode(error) === 'not_found' ? '这个附件的字节没有保存在本地缓存里。' : '保存未完成，已有文件未被改动。');
+      notify(errorCode(error) === 'not_found' ? m.mailbox_attachment_not_cached() : m.mailbox_attachment_save_failed());
     } finally {
       setSaving(null);
     }
   };
 
   return (
-    <div className="attachment-strip" aria-label="附件">
+    <div className="attachment-strip" aria-label={m.mailbox_attachment_strip_label()}>
       {visible.map((attachment) => (
         <div key={attachment.part_index} className="attachment">
           <span className="file-icon" aria-hidden="true">{(attachment.mime_type.split('/')[1] ?? 'file').slice(0, 4).toUpperCase()}</span>
           <span className="attachment-copy">
-            <strong>{attachment.filename || `附件 ${attachment.part_index}`}</strong>
+            <strong>{attachment.filename || m.mailbox_attachment_untitled({ index: attachment.part_index })}</strong>
             <small>
               {humanSize(attachment.size)}
-              {attachment.stored ? '' : ' · 尚未保存此附件'}
+              {attachment.stored ? '' : ` · ${m.mailbox_attachment_not_stored()}`}
             </small>
           </span>
           {attachment.stored && (
             <button type="button" className="text-button" disabled={saving !== null} onClick={() => void save(attachment)}>
-              {saving === attachment.part_index ? '保存中…' : '保存'}
+              {saving === attachment.part_index ? m.mailbox_attachment_saving() : m.mailbox_attachment_save()}
             </button>
           )}
         </div>
@@ -155,6 +160,7 @@ async function copyText(text: string): Promise<boolean> {
 
 /** 阅读区顶部的验证码条：一键复制，短暂显示「已复制」。 */
 export function OtpBar({ code, notify }: { code: string; notify: (text: string) => void }) {
+  useUiLocale();
   const [copied, setCopied] = useState(false);
   useEffect(() => setCopied(false), [code]);
   useEffect(() => {
@@ -163,8 +169,8 @@ export function OtpBar({ code, notify }: { code: string; notify: (text: string) 
     return () => clearTimeout(timer);
   }, [copied]);
   return (
-    <div className="otp-bar" role="group" aria-label="验证码">
-      <span className="otp-label">验证码</span>
+    <div className="otp-bar" role="group" aria-label={m.mailbox_otp_label()}>
+      <span className="otp-label">{m.mailbox_otp_label()}</span>
       <code className="otp-code">{code}</code>
       <button
         type="button"
@@ -173,11 +179,11 @@ export function OtpBar({ code, notify }: { code: string; notify: (text: string) 
         onClick={() =>
           void copyText(code).then((ok) => {
             if (ok) setCopied(true);
-            else notify('无法访问剪贴板。');
+            else notify(m.mailbox_clipboard_unavailable());
           })
         }
       >
-        {copied ? '已复制' : '复制验证码'}
+        {copied ? m.mailbox_otp_copied() : m.mailbox_otp_copy()}
       </button>
     </div>
   );
@@ -185,6 +191,7 @@ export function OtpBar({ code, notify }: { code: string; notify: (text: string) 
 
 /** 链接确认面板（决策 6）：先看见真实目标，再决定。 */
 export function LinkSheet({ link, documents, notify, compose }: SheetProps) {
+  useUiLocale();
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') documents.dismissLink();
@@ -194,10 +201,10 @@ export function LinkSheet({ link, documents, notify, compose }: SheetProps) {
   }, [documents]);
 
   const web = link.kind === 'http' || link.kind === 'https';
-  const copy = async (text: string, what: string) => {
-    notify((await copyText(text)) ? `已复制${what}。` : '无法访问剪贴板。');
+  const copy = async (text: string, copied: () => string) => {
+    notify((await copyText(text)) ? copied() : m.mailbox_clipboard_unavailable());
   };
-  const title = web ? '打开链接？' : link.kind === 'mailto' ? '这是一个写信地址' : '这个链接不会被执行';
+  const title = web ? m.mailbox_link_title_web() : link.kind === 'mailto' ? m.mailbox_link_title_mailto() : m.mailbox_link_title_other();
   const scheme = link.href.split(':')[0]?.toLowerCase() ?? '';
 
   return (
@@ -206,32 +213,33 @@ export function LinkSheet({ link, documents, notify, compose }: SheetProps) {
         <h2 id="link-sheet-title">{title}</h2>
         {web && (
           <p className="sheet-lead">
-            将在系统浏览器中打开 <span className="link-host">{link.host || '（未知主机）'}</span>
-            {link.kind === 'http' && <span className="tag warn">未加密 http</span>}
+            {m.mailbox_link_web_lead()}<span className="link-host">{link.host || m.mailbox_link_unknown_host()}</span>
+            {link.kind === 'http' && <span className="tag warn">{m.mailbox_link_http_tag()}</span>}
           </p>
         )}
-        {link.kind === 'mailto' && <p className="sheet-lead">将在当前窗口新建草稿，不会自动发送。</p>}
+        {link.kind === 'mailto' && <p className="sheet-lead">{m.mailbox_link_mailto_lead()}</p>}
         {link.kind === 'other' && (
           <p className="sheet-lead">
-            此链接使用 <code>{scheme || link.host}</code> 协议。{BRAND.productName} 只把 http/https 交给浏览器，其他协议一律不执行。
+            {m.mailbox_link_other_lead_before()}<code>{scheme || link.host}</code>{m.mailbox_link_other_lead_after()}
+            {m.mailbox_link_other_policy({ product: BRAND.productName })}
           </p>
         )}
-        <code className="link-target" aria-label="链接完整目标">{link.href}</code>
+        <code className="link-target" aria-label={m.mailbox_link_target_label()}>{link.href}</code>
         <div className="sheet-actions">
           <button type="button" className="text-button" onClick={() => documents.dismissLink()}>
-            {web ? '取消' : '关闭'}
+            {web ? m.mailbox_action_cancel() : m.mailbox_dialog_close()}
           </button>
-          <button type="button" className="text-button" onClick={() => void copy(link.kind === 'mailto' ? link.host || link.href : link.href, link.kind === 'mailto' ? '地址' : '链接')}>
-            {link.kind === 'mailto' ? '复制地址' : '复制链接'}
+          <button type="button" className="text-button" onClick={() => void copy(link.kind === 'mailto' ? link.host || link.href : link.href, link.kind === 'mailto' ? m.mailbox_link_copied_address : m.mailbox_link_copied_link)}>
+            {link.kind === 'mailto' ? m.mailbox_link_copy_address() : m.mailbox_link_copy_link()}
           </button>
-          {link.kind === 'mailto' && compose && <button type="button" className="primary-button" onClick={()=>{try { const address=decodeURIComponent(link.href.slice(7).split('?')[0]!); compose(address); } catch { notify('写信地址无效。'); }}}>写邮件</button>}
+          {link.kind === 'mailto' && compose && <button type="button" className="primary-button" onClick={()=>{try { const address=decodeURIComponent(link.href.slice(7).split('?')[0]!); compose(address); } catch { notify(m.mailbox_link_mailto_invalid()); }}}>{m.mailbox_link_compose()}</button>}
           {web && (
             <button
               type="button"
               className="primary-button"
-              onClick={() => void documents.openPendingLink().then((ok) => { if (!ok) notify('无法打开系统浏览器。'); })}
+              onClick={() => void documents.openPendingLink().then((ok) => { if (!ok) notify(m.mailbox_link_open_failed()); })}
             >
-              在浏览器中打开
+              {m.mailbox_link_open()}
             </button>
           )}
         </div>

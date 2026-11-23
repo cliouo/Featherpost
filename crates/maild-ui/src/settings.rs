@@ -25,7 +25,7 @@ pub struct AccountEdit {
 impl AccountEdit {
     fn params(&self) -> Result<Value, UiError> {
         maild_client::validate_draft_input(&self.draft)
-            .map_err(|_| UiError::invalid("请检查地址、服务器、端口、TLS 和轮询间隔。"))?;
+            .map_err(|_| UiError::invalid("account_fields_invalid", "请检查地址、服务器、端口、TLS 和轮询间隔。"))?;
         let mut credentials = json!({});
         for (role, secret) in [
             ("incoming", &self.secrets.incoming),
@@ -33,7 +33,7 @@ impl AccountEdit {
         ] {
             if let Some(secret) = secret.as_ref().filter(|s| !s.is_empty()) {
                 if secret.len() > 8192 || secret.contains('\0') {
-                    return Err(UiError::invalid("认证信息无效或过长。"));
+                    return Err(UiError::invalid("credentials_invalid", "认证信息无效或过长。"));
                 }
                 credentials[role] = json!(secret);
             }
@@ -47,7 +47,7 @@ impl AccountEdit {
             let revision = self
                 .revision
                 .filter(|n| *n > 0)
-                .ok_or_else(|| UiError::invalid("账户版本缺失，请重新载入。"))?;
+                .ok_or_else(|| UiError::invalid("account_revision_missing", "账户版本缺失，请重新载入。"))?;
             let mut p = json!({"id":id,"expected_revision":revision,"patch":draft});
             if credentials.as_object().is_some_and(|c| !c.is_empty()) {
                 p["credentials"] = credentials;
@@ -115,7 +115,7 @@ impl UiRules {
                         || rules.contains_key("follow_system_timezone")
                 });
         let mut result: UiRules = serde_json::from_value(value)
-            .map_err(|error| UiError::failed("settings_rules", error, "后台返回的规则无法识别。"))?;
+            .map_err(|error| UiError::failed("settings_rules", error, "rules_unrecognized", "后台返回的规则无法识别。"))?;
         if supports_new_mail {
             result.rules.follow_system_timezone.get_or_insert(false);
             result.rules.notify_new_mail.get_or_insert(false);
@@ -214,42 +214,64 @@ pub enum PackageAction {
 /// Never log server text here: probe responses and errors can contain credentials echoed by peers.
 pub(crate) fn management_error(error: maild_client::ClientError) -> UiError {
     use maild_client::ErrorKind;
-    let (code, message) = match (error.kind, error.rpc_code) {
+    let (code, reason, message) = match (error.kind, error.rpc_code) {
         (ErrorKind::Connection, _) => (
             UiErrorCode::Offline,
+            "management_offline",
             "后台连接不可用。若刚提交过变更，请先刷新确认结果，不要重复提交。",
         ),
-        (_, Some(-32016)) => (UiErrorCode::Denied, "当前前端没有管理这项功能的授权。"),
+        (_, Some(-32016)) => (
+            UiErrorCode::Denied,
+            "management_denied",
+            "当前前端没有管理这项功能的授权。",
+        ),
         (_, Some(-32011)) => (
             UiErrorCode::Conflict,
+            "account_conflict",
             "账户已在别处修改，请重新载入后再编辑。",
         ),
-        (_, Some(-32010)) => (UiErrorCode::NotFound, "账户已不存在或已移除，请刷新列表。"),
+        (_, Some(-32010)) => (
+            UiErrorCode::NotFound,
+            "account_missing",
+            "账户已不存在或已移除，请刷新列表。",
+        ),
         (_, Some(-32012)) => (
             UiErrorCode::Failed,
+            "probe_failed",
             "连接探测未通过，请检查服务器、TLS 与认证信息。",
         ),
-        (_, Some(-32013)) => (UiErrorCode::Failed, "无法访问系统凭据库，请解锁后重试。"),
+        (_, Some(-32013)) => (
+            UiErrorCode::Failed,
+            "credential_store_locked",
+            "无法访问系统凭据库，请解锁后重试。",
+        ),
         (_, Some(-32017)) => (
             UiErrorCode::Failed,
+            "package_operation_failed",
             "包操作未完成。请刷新实际清单，确认版本和状态后再操作；没有自动重试。",
         ),
         (_, Some(-32602)) => (
             UiErrorCode::Invalid,
+            "management_invalid",
             "请检查必填字段、地址、时间范围和端口。",
         ),
         _ => (
             UiErrorCode::Failed,
+            "management_failed",
             "操作未完成，请检查后台与扩展状态，刷新后再试。",
         ),
     };
     UiError {
         code,
+        reason,
         message: message.into(),
     }
 }
+/// 账户页只拿成文所需的部分：daemon 拼的中文整句 `detail` 照旧不过桥；离线原因的稳定 code 与
+/// 服务器原文（ADR-0048 L6）过桥，原文同探测诊断一样再去控制字符、限长。
 fn profile(mut p: AccountProfileView) -> AccountProfileView {
     p.runtime.detail.clear();
+    p.runtime.server_detail = safe_probe_detail(&p.runtime.server_detail);
     p
 }
 
@@ -281,7 +303,7 @@ impl Bridge {
             let revision = request
                 .revision
                 .filter(|r| *r > 0)
-                .ok_or_else(|| UiError::invalid("账户版本缺失，请重新载入。"))?;
+                .ok_or_else(|| UiError::invalid("account_revision_missing", "账户版本缺失，请重新载入。"))?;
             params["id"] = json!(id);
             params["expected_revision"] = json!(revision);
         }
@@ -306,7 +328,7 @@ impl Bridge {
             let r: maild_client::CreateAccountResult =
                 self.management_call("createAccount", params).await?;
             if !r.persisted {
-                return Err(UiError::invalid("后台未确认账户保存。"));
+                return Err(UiError::invalid("account_save_unconfirmed", "后台未确认账户保存。"));
             }
             Ok(profile(r.profile))
         }
@@ -333,10 +355,10 @@ impl Bridge {
                     )
                     .await?;
                 if !r.archived || !r.messages_retained {
-                    return Err(UiError::invalid("后台未确认保留本地邮件，请刷新账户状态。"));
+                    return Err(UiError::invalid("account_keep_unconfirmed", "后台未确认保留本地邮件，请刷新账户状态。"));
                 }
                 if !r.credentials_deleted {
-                    return Err(UiError::invalid("账户已移除、本地邮件已保留，但部分凭据删除未完成。请刷新账户列表，并检查系统凭据库状态。"));
+                    return Err(UiError::invalid("account_credentials_partial", "账户已移除、本地邮件已保留，但部分凭据删除未完成。请刷新账户列表，并检查系统凭据库状态。"));
                 }
             }
         }
@@ -348,7 +370,7 @@ impl Bridge {
                 // 整包提交：新键只在界面拿到过（= 后台认识）时出现，值永远明确——关掉通知、
                 // 清空静音名单也能落到后台，而不是被「缺省不序列化」吞掉。
                 let rules = serde_json::to_value(&patch).map_err(|error| {
-                    UiError::failed("settings_rules", error, "操作未完成，请稍后重试。")
+                    UiError::failed("settings_rules", error, "failed", "操作未完成，请稍后重试。")
                 })?;
                 self.management_call("setSettings", json!({ "rules": rules }))
                     .await?
@@ -379,7 +401,7 @@ impl Bridge {
     ) -> Result<maild_client::ProviderDiscovery, UiError> {
         let input = input.trim().to_string();
         if input.is_empty() || input.len() > 320 || input.chars().any(char::is_control) {
-            return Err(UiError::invalid("请输入有效的邮箱地址或域名。"));
+            return Err(UiError::invalid("provider_query_invalid", "请输入有效的邮箱地址或域名。"));
         }
         self.management_call(
             "discoverEmailProvider",
@@ -457,7 +479,7 @@ impl Bridge {
                 .await
                 .map_err(management_error)?;
             if result["activation_requested"] != true {
-                return Err(UiError::invalid(&format!(
+                return Err(UiError::invalid("recovery_unavailable", &format!(
                     "修复入口未能打开，请从完整 {} 打开修复与后台管理。",
                     maild_brand::APP_BUNDLE_NAME
                 )));
@@ -472,7 +494,7 @@ impl Bridge {
             PackageAction::Remove { kind, id } => {
                 check_kind(&kind)?;
                 if kind == "frontend" && id == self.frontend_id() {
-                    return Err(UiError::invalid("不能从当前窗口移除自身前端。"));
+                    return Err(UiError::invalid("remove_self_frontend", "不能从当前窗口移除自身前端。"));
                 }
                 ("removePlugin", json!({"kind":kind,"id":id}))
             }
@@ -483,6 +505,7 @@ impl Bridge {
         let result: Value = self.management_call(method, params).await?;
         if method == "refreshPlugins" && result["frontend"]["reloaded"] == false {
             return Err(UiError::invalid(
+                "frontend_rescan_failed",
                 "前端目录重新扫描失败，已切入原生修复入口。请检查安装包状态。",
             ));
         }
@@ -515,7 +538,7 @@ pub(crate) fn check_kind(kind: &str) -> Result<(), UiError> {
     if matches!(kind, "plugin" | "frontend") {
         Ok(())
     } else {
-        Err(UiError::invalid("未知包类型。"))
+        Err(UiError::invalid("package_kind_unknown", "未知包类型。"))
     }
 }
 
@@ -534,6 +557,27 @@ mod tests {
         let bounded = safe_probe_detail(&long);
         assert!(bounded.len() <= MAX_PROBE_DETAIL_BYTES);
         assert!(bounded.chars().all(|ch| ch == '长'));
+    }
+
+    /// ADR-0048 L6：账户页拿到离线原因的 code 与有界的服务器原文；中文整句仍不过桥。
+    #[test]
+    fn profile_projection_keeps_the_detail_code_and_bounds_server_text() {
+        let view: AccountProfileView = serde_json::from_value(json!({
+            "id": "acct_abcdefghijklmnopqrstuvwxyz23", "revision": 1, "display_name": "Main",
+            "address": "u@example.test", "enabled": true, "source": "managed", "editable": true,
+            "incoming": {"kind": "imap", "server": "imap.example.test", "port": 993,
+                "security": "implicit", "username": "u", "mailbox": "INBOX", "idle": true,
+                "poll_secs": 60},
+            "credentials": {"incoming": "saved"},
+            "runtime": {"state": "error", "detail": "IMAP 登录失败: no\r\nresponse",
+                "detail_code": "login_failed", "server_detail": format!("no\r\nresponse{}", "x".repeat(400))}
+        }))
+        .unwrap();
+        let projected = profile(view);
+        assert_eq!(projected.runtime.detail, "");
+        assert_eq!(projected.runtime.detail_code.as_deref(), Some("login_failed"));
+        assert!(projected.runtime.server_detail.starts_with("noresponse"));
+        assert!(projected.runtime.server_detail.len() <= MAX_PROBE_DETAIL_BYTES);
     }
 
     /// 新后台：缺省值在内核侧不序列化，桥据 `persisted` 键补成明确值，界面才知道该显示开关。

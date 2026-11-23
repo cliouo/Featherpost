@@ -7,10 +7,11 @@
 # UI bundle（brand.toml 的 ui_bundle_name）的 [launch]（ADR-0039）。开发期手工安装：
 #
 #   <cli_ctl> plugin install --frontend crates/maild-ui/package
-schema_version = 2
+schema_version = 3
 protocol_version = 1
 id = "dev.featherpost.ui"
 name = "Featherpost"
+description = "Read, write and organize your mail"
 version = "0.1.0"
 lifecycle = "independent"
 capabilities = ["inbox", "message", "compose", "settings", "background"]
@@ -25,3 +26,7 @@ permissions = [
   "plugins_manage",      # 设置 → 扩展：安装/升级/回滚/启停受管包
   "notifications_read",  # 设置 → 通知：系统授权状态
 ]
+
+# ADR-0048 决策 5：任何前端的设置页与安装预览都按自己的界面语言挑一条显示，缺省用顶层 description。
+[l10n."zh-Hans"]
+description = "阅读、撰写和整理邮件"

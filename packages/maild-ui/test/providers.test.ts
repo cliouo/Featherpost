@@ -1,6 +1,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { applyEffectiveLocales } from "@featherpost/i18n";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { Accounts } from "../src/settings/Accounts";
 import { SettingsController } from "../src/settings/controller";
@@ -14,6 +15,7 @@ import {
   probeAdvice,
   providerById,
   serversFor,
+  stageLabel,
 } from "../src/settings/providers";
 import { online } from "./fakeBridge";
 import { FakeSettings, account } from "./fakeSettings";
@@ -253,5 +255,45 @@ describe("添加账户向导", () => {
     c.setAddress("me@qq.com");
     expect(editor(c).draft.incoming.server).toBe("imap.example.test");
     expect(c.store.getSnapshot().wizard.manual).toBe(true);
+  });
+});
+
+describe("界面语言（ADR-0048 决策 8）：文案与服务商名称随语言切换", () => {
+  afterEach(() => {
+    applyEffectiveLocales([]);
+  });
+
+  it("凭据标签、步骤、阶段、建议与服务商名称按当前语言成文", () => {
+    const qq = providerById("qq")!;
+    expect(qq.secretLabel).toBe("客户端授权码（16 位）");
+    applyEffectiveLocales(["en"]);
+    expect(qq.name).toBe("QQ Mail / Foxmail");
+    expect(providerById("exmail")?.short).toBe("Exmail");
+    expect(providerById("gmail")?.name).toBe("Gmail / Google");
+    expect(qq.secretLabel).toBe("Client authorization code (16 characters)");
+    expect(qq.steps[2]).toBe("Generate an authorization code and paste it here; it is not your QQ password");
+    expect(stageLabel("tls")).toBe("Encrypted connection");
+    expect(stageLabel("bogus")).toBe("Unknown stage");
+    expect(probeAdvice("auth", "incoming", providerById("gmail"))).toBe(
+      "The server rejected the sign-in. Gmail / Google needs your app password, not your web sign-in password. Make sure IMAP/SMTP is turned on, then generate a new one.",
+    );
+    expect(probeAdvice("dns", "outgoing", null)).toContain("Can't find the SMTP server");
+    expect(providerById("outlook")?.caveat).toContain("only OAuth is accepted");
+    applyEffectiveLocales([]);
+    expect(stageLabel("tls")).toBe("加密连接");
+  });
+
+  it("英文下添加账户向导整页渲染英文，识别提示保留服务商名的强调", () => {
+    const { c } = setup();
+    c.beginAccount(undefined, "gmail");
+    c.setAddress("me@gmail.com");
+    applyEffectiveLocales(["en"]);
+    const html = renderToStaticMarkup(createElement(Accounts, { controller: c }));
+    expect(html).toContain("Add email account");
+    expect(html).toContain("Recognized as <strong>Gmail / Google</strong>. Server settings were filled in automatically.");
+    expect(html).toContain("How to get your app password");
+    // 快捷胶囊上的服务商短名也跟着语言走，整页不再剩中文。
+    for (const short of ["QQ Mail", "NetEase 163", "Exmail"]) expect(html).toContain(`>${short}<`);
+    expect(html).not.toMatch(/[\u4e00-\u9fff]/);
   });
 });

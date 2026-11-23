@@ -1,5 +1,8 @@
+import { m } from "@featherpost/i18n/messages";
+
 import { Store } from "../host/store";
-import { errorCode } from "../bridge/errors";
+import { uiLocale } from "../i18n";
+import { bridgeErrorText, errorCode } from "../bridge/errors";
 import type { MessageIdentity } from "../bridge/types";
 import {
   attachmentInput,
@@ -74,7 +77,10 @@ const patchOf = (f: Fields): Patch => ({
 export const sourceKey = (i: MessageIdentity) =>
   JSON.stringify([i.account, i.folder, i.uid]);
 const failure = (e: unknown) =>
-  e instanceof Error ? e.message : "操作未完成，请重试。";
+  e instanceof Error ? e.message : m.compose_error_generic();
+/** 正文提到附件却没有附件时提醒；按正文内容识别，中英文关键词都认，与界面语言无关。 */
+// i18n-lint-allow-cjk: 附件提醒按正文内容识别的关键词，不是界面文案
+const MENTIONS_ATTACHMENT = /附件|attach/i;
 export class ComposeController {
   readonly store = new Store<ComposeState>({
     draft: null,
@@ -130,7 +136,7 @@ export class ComposeController {
         else {
           for (const f of files)
             if ("Ok" in f) void this.bridge.release(f.Ok.token);
-          this.notify("请先打开要添加附件的草稿。");
+          this.notify(m.compose_attach_no_draft());
         }
       }),
       this.bridge.onClose(() => {
@@ -225,10 +231,10 @@ export class ComposeController {
     for (;;) {
       const s = this.store.getSnapshot();
       if (!s.draft || !s.fields || s.revision === s.savedRevision) return;
-      if (s.conflict) throw new Error(s.error ?? "请先处理草稿冲突。");
+      if (s.conflict) throw new Error(s.error ?? m.compose_error_conflict());
       if (!s.online) {
-        this.store.patch({ error: "后台连接不可用，修改仍保留在这个窗口。" });
-        throw new Error("后台不可用");
+        this.store.patch({ error: m.compose_error_offline_kept() });
+        throw new Error(m.compose_error_offline_short());
       }
       this.store.patch({ saving: true });
       try {
@@ -276,7 +282,7 @@ export class ComposeController {
   }
   private async prepareSwitch() {
     if (this.store.getSnapshot().uploads.length)
-      throw new Error("请先完成或移除正在准备的附件。");
+      throw new Error(m.compose_error_uploads_pending());
     await this.saveLoop();
   }
   async create(to = "") {
@@ -290,7 +296,7 @@ export class ComposeController {
         if (!this.store.getSnapshot().senders.length) await this.refresh();
         const s = this.store.getSnapshot();
         const sender = s.senders.find((v) => v.available) ?? s.senders[0];
-        if (!sender) throw new Error("尚无发件账户，请先在账户设置中配置。");
+        if (!sender) throw new Error(m.compose_error_no_sender());
         const draft = await this.bridge.create(sender.account, {
           from: sender.address,
           to: to ? [to] : [],
@@ -346,7 +352,7 @@ export class ComposeController {
             })
           : null;
         if (!draft || draft.send_state === "sent") {
-          draft = await this.bridge.reply(identity, mode);
+          draft = await this.bridge.reply(identity, mode, uiLocale());
           this.replies.set(key, draft.id);
         }
         this.load(draft, sourceKey(identity), mode !== "forward");
@@ -371,7 +377,7 @@ export class ComposeController {
       await this.flush();
       this.navigate("maild.mailbox.workspace");
     } catch {
-      this.notify("草稿尚未保存，请保留窗口并重试。");
+      this.notify(m.compose_error_not_saved());
     }
   }
   confirm(value: ComposeState["confirm"]) {
@@ -385,16 +391,16 @@ export class ComposeController {
       (v) => v.account === f.account && (v.address === f.from || !f.from),
     );
     if (!sender?.available)
-      errors.from = "该发件身份目前不可用，请配置 SMTP 或选择其他账户。";
+      errors.from = m.compose_validate_sender_unavailable();
     if (
       !addresses(f.to).length &&
       !addresses(f.cc).length &&
       !addresses(f.bcc).length
     )
-      errors.to = "请输入至少一个收件地址。";
+      errors.to = m.compose_validate_to_required();
     for (const key of ["to", "cc", "bcc"] as const) {
       if (addresses(f[key]).some((v) => !/^[^\s<>@,;]+@[^\s<>@,;]+$/.test(v)))
-        errors[key] = "请输入完整邮箱地址，多个地址用逗号分隔。";
+        errors[key] = m.compose_validate_address_invalid();
     }
     if (
       addresses(f.to).length +
@@ -402,11 +408,11 @@ export class ComposeController {
         addresses(f.bcc).length >
       100
     )
-      errors.to = "收件地址合计不能超过 100 个。";
+      errors.to = m.compose_validate_too_many_recipients();
     if (new TextEncoder().encode(f.subject).length > 998)
-      errors.subject = "主题不能超过 998 字节。";
+      errors.subject = m.compose_validate_subject_too_long();
     if (new TextEncoder().encode(f.body).length > 256 * 1024)
-      errors.body = "正文不能超过 256 KiB。";
+      errors.body = m.compose_validate_body_too_long();
     if (
       sender?.simple &&
       (addresses(f.to).length !== 1 ||
@@ -414,7 +420,7 @@ export class ComposeController {
         addresses(f.bcc).length ||
         s.draft!.attachments.length)
     )
-      errors.from = "这个发件服务只支持单收件人纯文本，不支持 Cc/Bcc 或附件。";
+      errors.from = m.compose_validate_simple_sender();
     this.store.patch({ errors });
     return !Object.keys(errors).length;
   }
@@ -436,7 +442,7 @@ export class ComposeController {
       before.uploads.length ||
       before.draft.attachments.some((a) => !a.stored)
     ) {
-      this.store.patch({ error: "请先完成、修复或移除未准备好的附件。" });
+      this.store.patch({ error: m.compose_error_attachments_not_ready() });
       return;
     }
     if (!confirmed) {
@@ -445,7 +451,7 @@ export class ComposeController {
         return;
       }
       if (
-        /附件|attach/i.test(before.fields!.body) &&
+        MENTIONS_ATTACHMENT.test(before.fields!.body) &&
         !before.draft.attachments.length
       ) {
         this.confirm("attachment");
@@ -459,17 +465,17 @@ export class ComposeController {
         await this.saveLoop();
         const s = this.store.getSnapshot();
         if (s.draft?.id !== targetId)
-          throw new Error("编辑上下文已变化，请重新确认要发送的草稿。");
+          throw new Error(m.compose_error_context_changed());
         if (!this.validate()) return;
         if (
           !confirmed &&
-          /附件|attach/i.test(s.fields!.body) &&
+          MENTIONS_ATTACHMENT.test(s.fields!.body) &&
           !s.draft!.attachments.length
         ) {
           this.confirm("attachment");
           return;
         }
-        if (!s.online) throw new Error("后台连接不可用。");
+        if (!s.online) throw new Error(m.compose_error_offline());
         try {
           const d = await this.bridge.send(s.draft!.id, s.draft!.version);
           this.store.patch({ draft: d });
@@ -482,7 +488,7 @@ export class ComposeController {
           }
           this.store.patch({
             uncertain: true,
-            error: "投递结果尚未确认。请核对已发送邮件，切勿直接重发。",
+            error: m.compose_error_send_uncertain(),
           });
           await this.reconcile();
           if (this.editable()) this.store.patch({ error: failure(e) });
@@ -509,7 +515,7 @@ export class ComposeController {
           this.store.patch({
             conflict: true,
             uncertain: false,
-            error: "草稿已在别处修改。请先重新载入并核对内容。",
+            error: m.compose_error_conflict_elsewhere(),
           });
         } else this.store.patch({ draft: d, uncertain: false });
         this.watchSend();
@@ -619,12 +625,12 @@ export class ComposeController {
     const s = this.store.getSnapshot();
     for (const result of results) {
       if ("Err" in result) {
-        this.store.patch({ error: result.Err.message });
+        this.store.patch({ error: bridgeErrorText(result.Err) });
         continue;
       }
       if (!s.draft || !this.editable() || s.busy || s.closing) {
         await this.bridge.release(result.Ok.token);
-        this.notify("请先打开一份可编辑的草稿。");
+        this.notify(m.compose_attach_no_editable_draft());
         continue;
       }
       this.store.patch({
@@ -672,9 +678,9 @@ export class ComposeController {
         ) {
           this.store.patch({
             conflict: true,
-            error: "草稿已在别处修改。请先重新载入并核对内容。",
+            error: m.compose_error_conflict_elsewhere(),
           });
-          throw new Error("附件已完成，但草稿内容已变化；请重新载入核对。");
+          throw new Error(m.compose_error_attach_draft_changed());
         }
         this.store.patch({
           draft: saved,
@@ -738,9 +744,9 @@ export class ComposeController {
         this.sending ||
         this.store.getSnapshot().draft?.send_state === "sending"
       )
-        throw new Error("邮件正在发送，请等待投递结果。");
+        throw new Error(m.compose_error_close_sending());
       if (this.store.getSnapshot().uploads.length)
-        throw new Error("附件仍在准备，请完成或取消后再关闭窗口。");
+        throw new Error(m.compose_error_close_uploads());
       await this.flush();
       await this.bridge.close();
     } catch (e) {
@@ -757,9 +763,9 @@ export class ComposeController {
       await navigator.clipboard.writeText(
         `From: ${f.from}\nTo: ${f.to}\nCc: ${f.cc}\nBcc: ${f.bcc}\nSubject: ${f.subject}\n\n${f.body}`,
       );
-      this.notify("已复制草稿内容。");
+      this.notify(m.compose_copy_done());
     } catch {
-      this.notify("无法访问剪贴板，请在编辑器中选择并复制。");
+      this.notify(m.compose_copy_failed());
     }
   }
 }

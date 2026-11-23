@@ -1,3 +1,6 @@
+import { applyEffectiveLocales } from "@featherpost/i18n";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, expect, it, vi } from "vitest";
 import { Host } from "../src/host/host";
 import { ComposeController, COMPOSE_VIEW } from "../src/compose/controller";
@@ -11,7 +14,10 @@ import {
 } from "../../featherpost-studio/src/mailbox";
 import { FakeBridge, flush } from "./fakeBridge";
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  applyEffectiveLocales([]);
+});
 
 it("assembles Studio with real namespace validation and shared compose/settings roles", async () => {
   vi.stubGlobal("window", {
@@ -47,6 +53,28 @@ it("assembles Studio with real namespace validation and shared compose/settings 
         .getSnapshot()
         .settings.some((section) => section.value.title === "阅读与隐私"),
     ).toBe(true);
+    // 内置贡献的标题是 getter，注册表保留访问器：切换语言后设置页与快照都按新语言成文。
+    applyEffectiveLocales(["en"]);
+    expect(
+      host.registry
+        .getSnapshot()
+        .settings.some((section) => section.value.title === "Reading & privacy"),
+    ).toBe(true);
+    const page = renderToStaticMarkup(
+      createElement(host.registry.resolveRole("settings").render, {
+        active: true,
+      }),
+    );
+    for (const text of [
+      "Settings sections",
+      "Mail &amp; preferences",
+      "Reading &amp; privacy",
+      "Accounts",
+      "Background &amp; storage",
+      "Back to mail",
+    ])
+      expect(page).toContain(text);
+    expect(page).not.toContain("阅读与隐私");
     await flush();
   } finally {
     bundles.forEach((bundle) => bundle.dispose?.());

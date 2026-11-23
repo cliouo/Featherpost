@@ -1,8 +1,10 @@
+import { m } from "@featherpost/i18n/messages";
 import { useState } from "react";
 import type { Host } from "../../maild-ui/src/host/host";
 import { useDarkShell } from "../../maild-ui/src/app/theme";
 import { readingDocumentUrl } from "./readingTheme";
 import { useStore } from "../../maild-ui/src/host/hooks";
+import { useUiLocale } from "../../maild-ui/src/i18n";
 import { Icon } from "../../maild-ui/src/app/Icon";
 import { compatBlocksWrites } from "../../maild-ui/src/bridge/types";
 import {
@@ -47,6 +49,7 @@ export function ReadingPane({
   documents: DocumentController;
   composer: ComposeController;
 }) {
+  useUiLocale();
   const s = useStore(controller.store),
     d = useStore(documents.store),
     compose = useStore(composer.store);
@@ -75,29 +78,29 @@ export function ReadingPane({
     actions = useStudioActions(),
     menuDeps = useMailMenu(controller, composer);
   return (
-    <section className="reader-column" aria-label="邮件正文">
+    <section className="reader-column" aria-label={m.studio_reader_label()}>
       <div className="reader-actions">
         <button
           className="icon-button back-button"
-          aria-label="返回邮件列表"
+          aria-label={m.studio_reader_back()}
           onClick={() => controller.clearSelection()}
         >
           <Icon name="back" />
         </button>
         <button
           className="text-button"
-          title="归档"
-          aria-label="归档"
+          title={m.studio_reader_archive()}
+          aria-label={m.studio_reader_archive()}
           disabled={!row || !writable}
           onClick={() => void controller.perform({ action: "archive" })}
         >
           <Icon name="archive" />
-          <span>归档</span>
+          <span>{m.studio_reader_archive()}</span>
         </button>
         <button
           className="icon-button"
-          title="删除"
-          aria-label="删除"
+          title={m.studio_reader_delete()}
+          aria-label={m.studio_reader_delete()}
           disabled={!row || !writable}
           onClick={() => controller.requestAction("delete")}
         >
@@ -106,18 +109,18 @@ export function ReadingPane({
         <span className="toolbar-divider" />
         <button
           className="text-button"
-          title="移动到文件夹"
-          aria-label="移动到文件夹"
+          title={m.studio_reader_move_title()}
+          aria-label={m.studio_reader_move_title()}
           disabled={!row || !writable}
           onClick={() => controller.requestAction("move")}
         >
           <Icon name="folder" />
-          <span>移动到</span>
+          <span>{m.studio_reader_move()}</span>
         </button>
         <button
           className={`icon-button ${row?.flagged ? "starred" : ""}`}
-          title="切换星标"
-          aria-label="切换星标"
+          title={m.studio_reader_toggle_star()}
+          aria-label={m.studio_reader_toggle_star()}
           aria-pressed={row?.flagged ?? false}
           disabled={!row || !writable}
           onClick={() => void controller.toggleSelected("flagged")}
@@ -131,8 +134,8 @@ export function ReadingPane({
         >
           <summary
             className="icon-button"
-            aria-label="更多邮件操作"
-            title="更多邮件操作"
+            aria-label={m.studio_reader_more()}
+            title={m.studio_reader_more()}
           >
             <Icon name="more" />
           </summary>
@@ -144,7 +147,9 @@ export function ReadingPane({
                 void controller.toggleSelected("seen");
               }}
             >
-              {row?.seen ? "标为未读" : "标为已读"}
+              {row?.seen
+                ? m.studio_reader_mark_unread()
+                : m.studio_reader_mark_read()}
             </button>
             <button
               disabled={!row || s.snapshot.phase !== "online"}
@@ -153,7 +158,9 @@ export function ReadingPane({
                 void controller.openThread();
               }}
             >
-              {s.threadOpen ? "收起会话" : "查看会话"}
+              {s.threadOpen
+                ? m.studio_reader_thread_hide()
+                : m.studio_reader_thread_show()}
             </button>
           </div>
         </details>
@@ -161,21 +168,31 @@ export function ReadingPane({
         {dark && row && body.mode === "html" && (
           <button
             className="text-button reading-theme"
-            title={originalColors ? "切换到深色正文" : "查看邮件的原始配色"}
+            title={
+              originalColors
+                ? m.studio_reader_theme_dark_title()
+                : m.studio_reader_theme_original_title()
+            }
             onClick={() =>
               setOriginalFor(originalColors ? null : messageKey(row))
             }
           >
-            {originalColors ? "深色阅读" : "原始配色"}
+            {originalColors
+              ? m.studio_reader_theme_dark()
+              : m.studio_reader_theme_original()}
           </button>
         )}
         <span className="reader-position">
-          {index >= 0 ? `${index + 1} / ${navigationTotal}` : row ? "会话" : ""}
+          {index >= 0
+            ? `${index + 1} / ${navigationTotal}`
+            : row
+              ? m.studio_reader_position_thread()
+              : ""}
         </span>
         <button
           className="icon-button previous-mail"
-          title="上一封"
-          aria-label="上一封"
+          title={m.studio_reader_previous()}
+          aria-label={m.studio_reader_previous()}
           disabled={!row || index <= 0}
           onClick={() => controller.step(-1)}
         >
@@ -183,8 +200,8 @@ export function ReadingPane({
         </button>
         <button
           className="icon-button next-mail"
-          title="下一封"
-          aria-label="下一封"
+          title={m.studio_reader_next()}
+          aria-label={m.studio_reader_next()}
           disabled={
             !row ||
             (index >= navigationRows.length - 1 &&
@@ -198,14 +215,14 @@ export function ReadingPane({
       {!row ? (
         <div className="reader-empty">
           <Icon name="mail" />
-          <h2>选择一封邮件</h2>
-          <p>在这里阅读和回复</p>
+          <h2>{m.studio_reader_empty_title()}</h2>
+          <p>{m.studio_reader_empty_hint()}</p>
           <div className="empty-shortcuts">
             <span>
-              <kbd>⌘ N</kbd> 写邮件
+              <kbd>⌘ N</kbd> {m.studio_reader_shortcut_compose()}
             </span>
             <span>
-              <kbd>⌘ K</kbd> 搜索
+              <kbd>⌘ K</kbd> {m.studio_reader_shortcut_search()}
             </span>
           </div>
         </div>
@@ -220,7 +237,7 @@ export function ReadingPane({
             }}
           >
             <header className="letter-heading">
-              <h2>{row.subject || "（无主题）"}</h2>
+              <h2>{row.subject || m.studio_message_no_subject()}</h2>
               <div className="letter-sender">
                 <div
                   onContextMenu={(e) =>
@@ -242,8 +259,10 @@ export function ReadingPane({
                     {addressOnly(row.sender)}
                   </span>
                   <p>
-                    发至 {row.recipient || "—"}
-                    {detail?.cc ? ` · 抄送 ${detail.cc}` : ""}
+                    {m.studio_reader_to({ recipient: row.recipient || "—" })}
+                    {detail?.cc
+                      ? ` · ${m.studio_reader_cc({ cc: detail.cc })}`
+                      : ""}
                   </p>
                 </div>
                 <time>{fullDate(row.sort_at)}</time>
@@ -273,7 +292,7 @@ export function ReadingPane({
             </header>
             {s.loadingDetail || body.mode === "loading" ? (
               <div className="body-loading" role="status">
-                正在读取正文…
+                {m.studio_reader_loading_body()}
               </div>
             ) : detail && body.mode === "html" ? (
               <iframe
@@ -282,13 +301,13 @@ export function ReadingPane({
                 src={readingDocumentUrl(body.url, dark && !originalColors)}
                 sandbox=""
                 referrerPolicy="no-referrer"
-                title="邮件正文（隔离显示）"
+                title={m.studio_reader_frame_title()}
               />
             ) : (
               detail && (
                 <>
                   <pre className="studio-letter">
-                    {detail.body || "（正文为空）"}
+                    {detail.body || m.studio_reader_body_empty()}
                   </pre>
                   {body.mode === "text" && body.note && detail.has_html && (
                     <p className="body-note">{body.note}</p>
@@ -304,10 +323,12 @@ export function ReadingPane({
               />
             )}
             {s.threadOpen && <Thread controller={controller} />}
-            <section className="reply-section" aria-label="回复邮件">
+            <section className="reply-section" aria-label={m.studio_reader_reply_label()}>
               <p className="reply-identity">
-                使用 {controller.label(row.account)} ·{" "}
-                {profile?.address || row.account}
+                {m.studio_reader_reply_identity({
+                  account: controller.label(row.account),
+                  address: profile?.address || row.account,
+                })}
               </p>
               {!inline && (
                 <div className="reply-bar">
@@ -317,7 +338,7 @@ export function ReadingPane({
                     onClick={() => void composer.reply(row, "reply")}
                   >
                     <Icon name="reply" />
-                    回复
+                    {m.studio_reader_reply()}
                   </button>
                   <button
                     className="text-button"
@@ -325,7 +346,7 @@ export function ReadingPane({
                     onClick={() => void composer.reply(row, "reply_all")}
                   >
                     <Icon name="reply" />
-                    回复全部
+                    {m.studio_reader_reply_all()}
                   </button>
                   <button
                     className="text-button"
@@ -333,7 +354,7 @@ export function ReadingPane({
                     onClick={() => void composer.reply(row, "forward")}
                   >
                     <Icon name="forward" />
-                    转发
+                    {m.studio_reader_forward()}
                   </button>
                 </div>
               )}

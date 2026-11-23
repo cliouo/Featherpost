@@ -1,9 +1,12 @@
-import { folderLabel } from "../i18n";
+import { m } from "@featherpost/i18n/messages";
+
+import { folderLabel, useUiLocale } from "../i18n";
 import { Choice } from "../settings/Choice";
 import { useState } from "react";
 import { useStore } from "../host/hooks";
 import { Dialog } from "./Dialog";
 import type { MailboxController } from "./controller";
+import { plural } from "./format";
 export function Actions({
   controller,
   openActivity,
@@ -11,6 +14,7 @@ export function Actions({
   controller: MailboxController;
   openActivity: () => void;
 }) {
+  useUiLocale();
   const s = useStore(controller.store),
     prompt = s.prompt;
   const [target, setTarget] = useState("");
@@ -22,14 +26,19 @@ export function Actions({
   return (
     <>
       {s.checked.length > 0 && (
-        <div className="batch-toolbar" aria-label="批量邮件操作">
-          <strong>已选 {s.checked.length} 封</strong>
+        <div className="batch-toolbar" aria-label={m.mailbox_batch_toolbar_label()}>
+          <strong>
+            {plural(s.checked.length, {
+              one: m.mailbox_batch_selected_one,
+              other: m.mailbox_batch_selected_other,
+            })}
+          </strong>
           <button
             className="text-button"
             disabled={s.busy}
             onClick={() => controller.selectLoaded(false)}
           >
-            取消选择
+            {m.mailbox_batch_clear_selection()}
           </button>
           <span className="spacer" />
           <button
@@ -43,7 +52,7 @@ export function Actions({
               })
             }
           >
-            标为已读
+            {m.mailbox_batch_mark_read()}
           </button>
           <button
             className="text-button"
@@ -56,7 +65,7 @@ export function Actions({
               })
             }
           >
-            未读
+            {m.mailbox_batch_mark_unread()}
           </button>
           <button
             className="text-button"
@@ -69,28 +78,28 @@ export function Actions({
               })
             }
           >
-            加星
+            {m.mailbox_batch_star()}
           </button>
           <button
             className="text-button"
             disabled={s.busy || s.snapshot.phase !== "online"}
             onClick={() => void controller.perform({ action: "archive" })}
           >
-            归档
+            {m.mailbox_batch_archive()}
           </button>
           <button
             className="text-button"
             disabled={s.busy || s.snapshot.phase !== "online"}
             onClick={() => controller.requestAction("move")}
           >
-            移动
+            {m.mailbox_batch_move()}
           </button>
           <button
             className="text-button danger-text"
             disabled={s.busy || s.snapshot.phase !== "online"}
             onClick={() => controller.requestAction("delete")}
           >
-            删除
+            {m.mailbox_batch_delete()}
           </button>
         </div>
       )}
@@ -100,19 +109,27 @@ export function Actions({
           role="status"
         >
           <span>
-            {s.report.queued} 封已排队
-            {s.report.unchanged ? `，${s.report.unchanged} 封已是目标状态` : ""}
-            {s.report.unconfirmed ? `，${s.report.unconfirmed} 封未确认` : ""}。
-            {s.report.error || "服务器同步结果可在活动页查看。"}
+            {plural(s.report.queued, {
+              one: m.mailbox_batch_report_queued_one,
+              other: m.mailbox_batch_report_queued_other,
+            })}
+            {s.report.unchanged
+              ? m.mailbox_batch_report_unchanged({ count: s.report.unchanged })
+              : ""}
+            {s.report.unconfirmed
+              ? m.mailbox_batch_report_unconfirmed({ count: s.report.unconfirmed })
+              : ""}
+            {m.mailbox_batch_report_end()}
+            {s.report.error || m.mailbox_batch_report_hint()}
           </span>
           <button className="text-button" onClick={openActivity}>
-            同步活动
+            {m.mailbox_activity_title()}
           </button>
           <button
             className="text-button"
             onClick={() => controller.dismissReport()}
           >
-            关闭
+            {m.mailbox_dialog_close()}
           </button>
         </div>
       )}
@@ -120,8 +137,14 @@ export function Actions({
         <Dialog
           title={
             prompt.kind === "delete"
-              ? `删除 ${frozen.length} 封邮件`
-              : `移动 ${frozen.length} 封邮件`
+              ? plural(frozen.length, {
+                  one: m.mailbox_batch_delete_title_one,
+                  other: m.mailbox_batch_delete_title_other,
+                })
+              : plural(frozen.length, {
+                  one: m.mailbox_batch_move_title_one,
+                  other: m.mailbox_batch_move_title_other,
+                })
           }
           busy={s.busy}
           onClose={() => controller.closePrompt()}
@@ -129,7 +152,7 @@ export function Actions({
           <ul className="action-message-list">
             {frozen.map((r) => (
               <li key={JSON.stringify([r.account, r.folder, r.uid])}>
-                <strong>{r.subject || "（无主题）"}</strong>
+                <strong>{r.subject || m.mailbox_subject_empty()}</strong>
                 <span>
                   {controller.label(r.account)} · {r.folder} · {r.sender}
                 </span>
@@ -148,26 +171,29 @@ export function Actions({
                   .find((f) => f.role === "trash");
                 return (
                   <p key={JSON.stringify([r.account, r.folder])}>
-                    {controller.label(r.account)} / {r.folder}：
+                    {m.mailbox_delete_policy_scope({
+                      account: controller.label(r.account),
+                      folder: r.folder,
+                    })}
                     {trash && trash.name !== r.folder
-                      ? `移至 ${folderLabel(trash)}。`
-                      : "标记为已删除，由服务器按邮件协议处理；本应用不提供撤销。"}
+                      ? m.mailbox_delete_policy_trash({ folder: folderLabel(trash) })
+                      : m.mailbox_delete_policy_flag()}
                   </p>
                 );
               })}
               <p className="group-note">
-                实际策略以后台入队时的文件夹映射为准。服务器离线时操作会等待同步。
+                {m.mailbox_delete_policy_note()}
               </p>
             </div>
           ) : (
             <label className="move-target">
-              目标文件夹
+              {m.mailbox_move_target()}
               <Choice
-                aria-label="目标文件夹"
+                aria-label={m.mailbox_move_target()}
                 value={targets.some((f) => f.name === target) ? target : ""}
                 onValueChange={setTarget}
               >
-                <option value="">请选择</option>
+                <option value="">{m.mailbox_move_target_placeholder()}</option>
                 {targets.map((f) => (
                   <option key={f.name} value={f.name}>
                     {folderLabel(f)}
@@ -175,7 +201,7 @@ export function Actions({
                 ))}
               </Choice>
               {targets.length === 0 && (
-                <span>该账户暂时没有其他可用文件夹。</span>
+                <span>{m.mailbox_move_target_empty()}</span>
               )}
             </label>
           )}
@@ -185,7 +211,7 @@ export function Actions({
               disabled={s.busy}
               onClick={() => controller.closePrompt()}
             >
-              取消
+              {m.mailbox_action_cancel()}
             </button>
             <button
               className="primary-button"
@@ -206,10 +232,10 @@ export function Actions({
               }}
             >
               {s.busy
-                ? "正在提交"
+                ? m.mailbox_activity_submitting()
                 : prompt.kind === "delete"
-                  ? "确认删除"
-                  : "移动到此文件夹"}
+                  ? m.mailbox_batch_delete_confirm()
+                  : m.mailbox_batch_move_confirm()}
             </button>
           </footer>
         </Dialog>

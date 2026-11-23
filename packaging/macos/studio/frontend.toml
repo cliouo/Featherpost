@@ -1,7 +1,8 @@
-schema_version = 2
+schema_version = 3
 protocol_version = 1
 id = "dev.featherpost.studio"
 name = "Featherpost Studio"
+description = "A redesigned mail workspace"
 version = "0.3.4"
 lifecycle = "on_demand"
 capabilities = ["inbox", "message", "compose", "settings", "background"]
@@ -18,3 +19,7 @@ permissions = [
 [launch]
 kind = "macos_application"
 path = "Featherpost Studio.app"
+
+# ADR-0048 决策 5：任何前端的设置页与安装预览都按自己的界面语言挑一条显示，缺省用顶层 description。
+[l10n."zh-Hans"]
+description = "重新设计的邮件工作台"

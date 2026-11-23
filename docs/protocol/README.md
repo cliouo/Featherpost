@@ -50,6 +50,8 @@
 | `readAttachment` | `{account, folder, uid, part_index, offset?, length?}` | `{attachment, offset, length, data, eof}` | `store` |
 | `getReadingPolicy` | `{}` | `{policy, persisted}` | 无（配置文件方式启动） |
 | `setReadingPolicy` | `{remote_content?, trust?, untrust?}` | `{policy, persisted}` | 无（配置文件方式启动） |
+| `getLocalePreference` | `{}` | `{preference, effective, persisted}` | 无（配置文件方式启动） |
+| `setLocalePreference` | `{mode, languages?}` | `{preference, effective, persisted}` | 无（配置文件方式启动） |
 | `searchMessages` | `{query?, account?, folder?, from?, since?, until?, hasAttachments?, limit?, offset?, scope?}` | `{messages, total, scope, truncated?}` | `store`（`scope=server` 另需该账户在线） |
 | `getThread` | `{account, uid?, threadId?, folder?, limit?, offset?}` | `{threadId, messages, total}` | `store` |
 | `getSearchIndexStatus` | `{}` | `{pending, done}` | `store` |
@@ -59,7 +61,7 @@
 | `listPendingOps` | `{account?, include_settled?, limit?, before_id?, summary_only?}` | `{ops, has_more}` | `store` |
 | `resolvePendingOp` | `{id, resolution, summary_only?}` | `{op}` | `store` |
 | `send` | `{from, to, cc?, bcc?, subject?, body?, body_html?, in_reply_to?, references?, attachments?}` | `{ok, message_id}` | `transport` |
-| `prepareReply` | `{account, uid, folder?, mode}` | `{draft}` | `store` |
+| `prepareReply` | `{account, uid, folder?, mode, locale?}` | `{draft}` | `store` |
 | `listDrafts` | `{account?, limit?, offset?}` | `{drafts, total}` | `store` |
 | `getDraft` | `{id}` | `{draft}` | `store` |
 | `createDraft` | `{account, from?, to?, cc?, bcc?, subject?, body?, body_html?, in_reply_to?, references?, attachments?}` | `{draft}` | `store` |
@@ -77,7 +79,7 @@
 | `claimNextOpenIntent` | `{frontend}` | `{intent}` | `frontend` |
 | `listFrontends` | `{}` | `{default, frontends}` | `frontend` |
 | `getPluginInstallRoot` | `{kind?: "plugin"\|"frontend"}` | `{root}`，仅本机原生复制器使用 | external / frontend，`plugins_manage` |
-| `previewPluginPackage` | `{kind?, staging? , rollback_id?}`，后二者恰有一个 | `{kind,id,name,version,lifecycle,capabilities,permissions,has_ui}` | external / frontend，`plugins_manage` |
+| `previewPluginPackage` | `{kind?, staging? , rollback_id?}`，后二者恰有一个 | `{kind,id,name,description?,l10n?,version,lifecycle,capabilities,permissions,has_ui}` | external / frontend，`plugins_manage` |
 | `setDefaultFrontend` | `{id}` | `{default,persisted:true}` | frontend，`plugins_manage` |
 | `stopManagedAgent` | `{}`；不接受 PID/路径 | `{stopping:true}`；已接受正常退出请求 | 仅同用户 Unix socket / named pipe 的 User；仅平台 Agent 装配 |
 | `repairBuiltinFrontend` | `{}`；不接受路径/id | `{id,version,backup}`；backup 是 `.repair-backups` 下相对目录名 | 仅同用户 Unix socket / named pipe 的 User；需完整应用内固定副本 |
@@ -149,10 +151,11 @@ M3.7 账户方法（ADR-0015 §9）的完整契约：
 
 - **profile 视图**只含非秘密字段：`{id, revision, display_name, address, enabled,
   archived_at?, source: managed|legacy, editable, incoming, outgoing?,
-  credentials: {incoming, outgoing?}, runtime: {state, detail}}`。`credentials.*`
+  credentials: {incoming, outgoing?}, runtime: {state, detail, detail_code?, server_detail?}}`。`credentials.*`
   取值 `saved | missing | unknown | shared | embedded`；`runtime.state` 取值
   `connecting | online | reconnecting | disabled | needs_credentials | error`。
   客户端必须把未知状态字符串按原文展示，不得让整个账户页解码失败。
+  `runtime.detail_code` / `runtime.server_detail` 与账户状态对象同义（见下节），只在有离线原因时出现。
 - **秘密只写不读**：`credentials` 形如 `{"incoming": "…", "outgoing": "…"}`，任何响应、
   通知与错误 `data` 都不回显。受管账户不允许明文（`security` 仅 `implicit|starttls`），
   也不存在自签开关；首版上限：64 个未归档账户、display name 128 字节、地址/用户名
@@ -181,6 +184,26 @@ M3.7 账户方法（ADR-0015 §9）的完整契约：
 
 `state` 当前可能为 `connecting`、`online`、`offline` 或 `reconnecting`。未装配
 accounts 或 store 时，`status` 分别返回空数组和 `message_count: 0`。
+
+离线原因（ADR-0048 L6，additive）：`state = offline` 时，`detail` 仍是收信循环拼的中文整句
+（日志同一句，老客户端照旧显示），另带两个可选键：
+
+```json
+{"account":"personal","state":"offline","detail":"IMAP 登录失败: no response: [AUTHENTICATIONFAILED] bad",
+ "detail_code":"login_failed","server_detail":"no response: [AUTHENTICATIONFAILED] bad"}
+```
+
+- `detail_code`：稳定 snake_case，客户端按它用界面语言成文，**不要**解析 `detail`。首批取值：
+  `credential_unavailable`（从凭据库取回秘密失败）、`credential_invalid`（秘密不是 UTF-8 文本）、
+  `connect_failed`、`connect_timeout`、`tls_failed`、`tls_timeout`、`starttls_unsupported`、
+  `greeting_invalid`、`login_failed`、`login_timeout`、`idle_failed`、`idle_timeout`、
+  `sync_failed`（LIST / SELECT / FETCH / 对账 / 游标 / 写队列命令在连接层失败）、`poll_failed`、
+  `provider_unavailable`、`provider_timeout`、`provider_failed`、`provider_response_invalid`，
+  兜底 `internal`。新增取值不算破坏性变更：认不出的 code 显示通用文案加 `server_detail`；没有
+  `detail_code`（老 daemon）时照旧显示 `detail`。
+- `server_detail`：服务器或系统的原文（去掉 daemon 写的前缀，去控制字符、≤160 字节），作为数据原样
+  展示、不翻译。原因全由 daemon 判断（超时、凭据库、本地库、装配缺失、provider 连接已断）时省略。
+- 在线、连接中与重连中不带这两个键。
 
 `status.runtime`（ADR-0041 决策 6，additive）：`rss_bytes`、`phys_footprint_bytes`（macOS
 Activity Monitor「内存」口径；其他平台 `null`）、`store_db_bytes`、`store_wal_bytes`、
@@ -242,13 +265,41 @@ Agent 内存与本地鉴权 API 中传递，不进入 URL、argv 或通知 ident
 等待草稿保存期间的后续手动导航也必须使原通知失效（ADR-0037）。
 
 `listFrontends` 返回内置恢复前端和通过受管 manifest 检查的第三方前端。每项包含稳定 `id`、
-显示 `name`、`version`、`lifecycle`、`capabilities`、`permissions` 和 `builtin`。字符串生命周期
+显示 `name`、可选的 `description` / `l10n`（见下文）、`version`、`lifecycle`、`capabilities`、
+`permissions` 和 `builtin`。字符串生命周期
 与 capability 允许客户端保留未来未知值；安装格式见
 [外部 frontend package v1](../plugins/README.md)。
 
 `permissions` 是 ADR-0030 的纯授权声明，与作为 intent 路由的 `capabilities` 分开
 （`#[serde(default)]`，旧 daemon 读到空表）。**它是给用户看的**：装一个前端之前应当能看见
 它要什么，尤其是 `plugins_manage`——声明它等于声明「我可以代表用户安装任意受管包」。
+
+#### 包的多语言名称与描述（ADR-0048 决策 5）
+
+`listFrontends` 的每项、`listExternalPlugins` 的每项与 `previewPluginPackage` 的应答另有两个可选字段，
+均来自包作者的 manifest（frontend `schema_version = 3`、external `schema_version = 2` 起）：
+
+```json
+{
+  "id": "org.example.reader",
+  "name": "Example Reader",
+  "description": "A reader for Featherpost",
+  "l10n": {
+    "en": { "description": "A reader for Featherpost" },
+    "zh-Hans": { "name": "示例阅读器", "description": "Featherpost 的阅读器" }
+  }
+}
+```
+
+- `description`：兜底描述（非空、≤1024 字节、无控制字符）；manifest 没写时**省略该键**。
+- `l10n`：BCP 47 标签 → `{name?, description?}`。标签已由 daemon 规范大小写（`zh-hans` → `zh-Hans`），
+  每项至少有 `name` 或 `description` 之一，缺的字段**省略**而不是 `null`；最多 16 种语言。映射为空时
+  **省略该键**；内置 `builtin-repair` 恒无这两个字段。
+- daemon **原样透传、不按语言偏好挑选**：前端拿自己协商出的语言查 `l10n`，找不到的字段回落到顶层
+  `name` / `description`。
+- `previewPluginPackage` 的这两个字段与其余字段一样参与 `expected_preview` 逐字段比对（用户批准的是
+  看到的文字），客户端应把收到的预览对象**原样**回传，不要只挑认识的字段重组。
+- 旧 daemon 不返回这两个键，共享 client 的 DTO 均为 `#[serde(default)]`。
 
 `openFrontend` 由菜单栏或其他同一信任域内的本地插件提交同一 DTO。省略 `frontend` 使用默认
 消费者，显式值只允许已安装 ID；`builtin-repair` 是原生恢复入口。服务端先入队，再尝试激活，
@@ -260,7 +311,8 @@ Agent 内存与本地鉴权 API 中传递，不进入 URL、argv 或通知 ident
 > **分片迁移（[ADR-0039](../decisions/0039-native-recovery-and-tauri-default.md)）**：09-B 保留旧阅读器默认，恢复改用 `builtin-repair`。09-C 才预装并切换默认 Tauri 包 `com.maild.ui`、迁移旧 ID、删除 egui。协议代数不变。
 
 `listExternalPlugins` 是只读、粗粒度生命周期观测。每项为
-`{id,name,version,lifecycle,capabilities,enabled,state,restart_count,has_ui}`；`has_ui`
+`{id,name,description?,l10n?,version,lifecycle,capabilities,enabled,state,restart_count,has_ui}`
+（`description` / `l10n` 见上文[包的多语言名称与描述](#包的多语言名称与描述adr-0048-决策-5)）；`has_ui`
 表示 package 声明了可由 Agent 打开的原生管理界面。`state` 当前可为
 `independent`、`disabled`、`starting`、`running`、`backoff`、`stopped`、`leaked` 或 `failed`。`leaked`（ADR-0020）表示停止流程结束后进程组内仍有存活成员；客户端应把
 未来未知字符串原样保留。`openExternalPluginUi` 仅启动管理界面，不会自动启用插件；配置和安全边界见
@@ -451,6 +503,39 @@ addr-spec，小写后先比地址、再比**精确**域名（`news.example.com` 
 - 只读从不创建文件；`maild backup` **不覆盖**这个文件（它是隐私偏好，不是邮箱数据；恢复一份旧邮件
   备份不该静默恢复旧的信任名单）。
 
+### `getLocalePreference` / `setLocalePreference`
+
+用户的语言偏好（ADR-0048 决策 1/2）。与阅读策略一样是 **daemon 拥有的持久状态**
+（`locale_preference.toml`，与活动配置同目录，纪律同 `reading_policy.toml`），内核界面、默认前端与
+第三方前端读到同一份。协议下发**有序偏好列表**而不是「定好的一种语言」：各前端拿 `effective`
+与自己支持的语言协商，内核不替它挑。
+
+```json
+{
+  "preference": { "mode": "system", "languages": [] },
+  "effective": ["zh-Hans-CN", "en-US"],
+  "persisted": true
+}
+```
+
+- 授权：`getLocalePreference` 任何主体可用（与 `getAgentInfo` 同级，后台插件也可能要按用户语言
+  渲染自己的文字）；`setLocalePreference` 要 `settings_write`，不新增授权词。
+- `mode` 缺省 `system`（文件不存在时）；`system` 时 `languages` 恒为空数组。
+- `effective` 是解析后的有序列表，**永不为空**：`explicit` 时等于 `languages`；`system` 时是 Agent 读到的
+  系统首选语言（macOS：`+[NSLocale preferredLanguages]`，即 `CFLocaleCopyPreferredLanguages`；其他平台按
+  `LC_ALL` → `LC_MESSAGES` → `LANG`），规范化、去重后截到 8 项；读取失败或为空时为 `["zh-Hans"]`。
+  `system` 模式下每次调用都重读系统值。
+- `setLocalePreference` 是**整包替换**：`mode = "system"` 时不得带 `languages`（`[]` 也不行）；
+  `mode = "explicit"` 时 `languages` 必填，1..=8 个 BCP 47 标签（RFC 5646 形状，不查注册表），
+  每个不超过 35 字节，规范化大小写（`zh-hans-cn` → `zh-Hans-CN`）后去重存储。任一项非法、超长、
+  超过 8 项或带未知键，整包 `-32602` 不落盘。成功应答与 `getLocalePreference` 同形；`effective`
+  因此变化时向所有流式连接推送 `preferences/locale`（见「服务端通知」）。
+- `getLocalePreference` 的参数必须为空对象。
+- `persisted = false` 表示偏好文件损坏或来自未来版本：读到的是**缺省偏好**（`system`），
+  `setLocalePreference` 返回 `-32001` 且**绝不覆盖**磁盘上那份。
+- 只读从不创建文件，首次写入才创建；`maild backup` **不覆盖**这个文件（它是偏好，不是邮箱数据）。
+- 老 daemon 对 `getLocalePreference` 返回 `-32601`：前端回落自己的基础语言。
+
 ### `searchMessages` / `getThread` / `getSearchIndexStatus`
 
 三者都在 `messages_read` 域（ADR-0029 决策 12）：换一个检索维度不构成新的权限面，读到的是
@@ -556,7 +641,11 @@ ADR-0037 扩展列表参数：`limit` 1..200（默认 200），`before_id` 为�
 
 `summary_only:true` 返回安全摘要，额外要求 `messages_read`，与原有 `mailbox_write` 同时满足；
 缺任一项为 -32016。摘要无 payload，APPEND 原文在 SQL 查询中就被跳过；其他操作仅投影
-已知 target/flag/value，错误 detail 映射为受控文案（保留可信“用户放弃”标记）。源消息存在时
+已知 target/flag/value，错误 detail 映射为受控文案（保留可信“用户放弃”标记），并附稳定的
+`detail_code`（`discarded` / `rejected` / `server_rejected` / `unconfirmed`，ADR-0048 决策 3）：前端按 code 用界面语言成文，
+`detail` 的中文只是兼容老前端的兜底。收信循环写下的服务器命令失败（`APPEND 失败: …`、`STORE 失败: …`、
+`SELECT <文件夹> 失败: …` 等）给 `server_rejected`，并在 `server_detail` 附去掉前缀的服务器原文（有界脱敏，
+作为数据展示）；`unconfirmed` 的说明里有服务器原文时同样附上（ADR-0048 L6）。源消息存在时
 另查最多 512 字符 subject，源消息消失或 APPEND 无源 UID 时为 null。这个通道不读取正文。
 省略 summary_only 保留原有原始队列接口及授权，供原有受信任客户端使用。
 
@@ -610,6 +699,7 @@ staging 目录路径（形状见 ADR-0019 的 `.incoming`），属独立切片�
 
 `account` 与 `uid` 必填，`folder` 可选（省略时按 `getMessage` 的规则消歧），
 `mode` 取 `reply` / `reply_all` / `forward`。消息不存在返回 `-32002`。
+`locale` 可选（BCP 47 字符串或 `null`），决定引用块的语言，见下文。出现其他字段或类型不对时返回 `-32602`。
 
 回复与转发的成型在**内核**完成——换前端不该换掉 `References` 的正确性。返回：
 
@@ -635,7 +725,16 @@ staging 目录路径（形状见 ADR-0019 的 `.incoming`），属独立切片�
   也去掉已经在 `to` 里的人。
 - **`forward`** 的 `to` 为空、不继承 `in_reply_to`/`references`（转发开启新会话），
   `attachments` 是原信的**非内联**附件引用，可直接放进 `send` 的 `attachments`。
-- 引用块的文案目前只有中文——maild 还没有 i18n 框架，这是一个独立的后续切片。
+- **引用块语言（ADR-0048 决策 7）**：引用块会写进发出去的正文，是**邮件内容的语言**，可以与界面语言
+  不同。回复引用行（`在 …，… 写道：` / `On …, … wrote:`）、转发头（分隔线与发件人/日期/主题/收件人四行）
+  以及其中给人读的本地日期（`2026年11月18日 周三 19:35（UTC+08:00）` /
+  `Wed, Nov 18, 2026 at 19:35 (UTC+08:00)`）都随协商结果成文：给了 `locale` 就只用它与内核支持的语言
+  （`zh-Hans`、`en`）协商，省略或 `null` 时用语言偏好的 `effective`（见 `getLocalePreference`）协商；
+  协商不出结果（如 `ja`、繁体 `zh-Hant*`）回落 `zh-Hans`。`locale` 按 `setLocalePreference` 的同一规则校验
+  （BCP 47 形状、≤35 字节），非法即 `-32602`。原信日期不可信（早于 1971）时回退的 RFC 5322 日期与语言无关。
+  `effective` 首选中文时不带 `locale` 的输出与引入本参数之前逐字节一致。
+- 主题前缀与 `locale` **无关**：归一照旧识别上面全部已知前缀，加上的前缀恒为 `Re:` / `Fwd:`。
+- 老 daemon 拒绝未知参数：共享 client 的 `prepare_reply` 只在给了 `locale` 时才发送该键。
 
 共享 client 的 typed send 会在请求进入传输前执行同一组字段校验。桌面 compose 为避免
 大文本编辑器持续布局超长正文，另设 64 KiB 输入上限；这不是协议收窄，`maildctl` 与其他
@@ -888,7 +987,7 @@ M4-01 新增会话级主体：未认证连接恒为 `user`（历史行为不变�
   `has_identity` 布尔观测字段（旧 daemon 缺省 false），绝不返回凭证或哈希。
 - **方法级授权（ADR-0018）**：插件主体按 manifest `capabilities` 授权，默认拒绝；
   未声明的调用返回 `-32016`（连接不断开），拒绝计数经 `denied_calls` 观测字段
-  可见。`authenticate`/`whoami`/`getAgentInfo` 任何主体可用。前端 route 经
+  可见。`authenticate`/`whoami`/`getAgentInfo`/`getLocalePreference` 任何主体可用。前端 route 经
   固定翻译映射：`inbox|message → messages_read`、`compose → messages_send`、
   `settings → settings_read + settings_write`、`background → 无`。服务端推送同受
   管控：无 `messages_read` 的主体不收邮件/账户事件通知。完整策略表见
@@ -994,9 +1093,10 @@ stdio、Unix socket 与 named pipe 连接可收到无 `id` 的服务端通知。
 | method | `params` |
 |---|---|
 | `message/received` | 消息对象（**不含** `body_html` 与 `attachments`） |
-| `account/state` | 账户状态对象 |
+| `account/state` | 账户状态对象（离线时可带 `detail_code` 与 `server_detail`，见 `status` / `listAccounts`） |
 | `frontend/intent` | `{"frontend":"<id>"}`——只投给主体**恰好**是 `frontend:<id>` 的已认证长连接（ADR-0045） |
 | `agent/stopping` | `{}`——只投给主体为 `frontend:*` 的已认证长连接；守护进程接受 `stopManagedAgent` 后、停机前发出（ADR-0046） |
+| `preferences/locale` | `{"effective":[...]}`——投给**所有**流式连接；`setLocalePreference` 成功且 `effective` 变化时发出（ADR-0048） |
 
 ```json
 {"jsonrpc":"2.0","method":"message/received","params":{"account":"personal","uid":"42","sender":"sender@example.com","recipient":"alias@example.test","subject":"hello","body":"plain text body","received_at":1710000000}}
@@ -1021,6 +1121,16 @@ route、账户或 UID；前端收到后自行 `claimFrontendIntent` 排空队列
 user、插件与未认证连接收不到。参数恒为空对象，客户端不应校验其内容。前端收到后应刷盘草稿、撤下窗口并随后台一起退出
 （`maild-app` 置位 `ViewState.shutdown_requested`，置位后不回落、不进快照同步缓冲）。点击窗口红叉、`⌘Q` 或 Dock
 右键「退出」均仅关闭窗口并彻底清空 Dock 图标，不调用 `stopManagedAgent`，后台与菜单栏继续运行。
+
+`preferences/locale` 是语言偏好变化信号（ADR-0048）：`setLocalePreference` 成功且解析后的列表变化时，
+守护进程向所有流式连接（不论主体，`getLocalePreference` 本身对任何主体开放）推送
+`{"jsonrpc":"2.0","method":"preferences/locale","params":{"effective":["en","zh-Hans"]}}`。前端收到后
+用新列表重新协商语言并重新渲染。`system` 模式下系统语言变化**目前不主动推送**；推送也是尽力而为，
+前端应在窗口聚焦或重连时调用 `getLocalePreference` 追上。共享 client 用
+`Notification::into_server_notification()` 把它解码为类型化的 `ServerNotification::LocalePreference { effective }`
+（参数形状不对是协议错误，与其他已知通知一致）；只关心这一条的消费者也可以直接用
+`Notification::locale_preference_changed()`。`maild-app` 的连接 actor 在每次（重）连接与刷新的快照里另取一次
+`getLocalePreference`，推送即时更新 `ViewState.locale`。
 
 HTTP 不承载通知。
 
@@ -1146,6 +1256,9 @@ maildctl reading-policy show
 maildctl reading-policy set --remote-content block|allow
 maildctl reading-policy trust news@example.com example.org
 maildctl reading-policy untrust example.org
+maildctl locale                                                   # getLocalePreference：mode、显式列表与 effective
+maildctl locale set en zh-Hans                                    # setLocalePreference：有序列表，整包替换
+maildctl locale set --system                                      # 跟随系统首选语言
 maildctl draft list [--account personal]
 maildctl draft new --account personal --to alice@example.com --subject 周会 --body-file -
 maildctl draft show draft_qk3m...
@@ -1162,6 +1275,18 @@ maildctl draft rm draft_qk3m... --version 5
 （`-32006`），不会合并、也不会覆盖。`draft rm` 的 `--version` 可省略（无条件丢弃）。
 `--body-file -` 从 stdin 读正文，大正文不必经过 shell 参数。
 `attach` / `detach` 是一次读-改-写：先取当前引用列表，再带着同一个 `--version` 整体写回。
+
+`locale` 读写 daemon 拥有的语言偏好（见「`getLocalePreference` / `setLocalePreference`」）；`locale` 与
+`locale show` 等价，`set` 的语言与 `--system` 二选一且至少给一个，标签由 daemon 校验（非法 `-32602`，
+退出码 4）。`--json` 打印与协议应答同形的一行 `{preference, effective, persisted}`。
+
+maildctl 自己给人读的结果、确认、警告与输入提示（插件安装/升级/移除/回滚/启停、凭证轮换提醒、
+协议代警告、草稿与策略的提示、秘密输入提示）随语言偏好成文（ADR-0048 L5）：连上 daemon 时用
+`effective` 与内核支持的语言（`zh-Hans`、`en`）协商；连不上、老 daemon 返回 `-32601` 或读取失败时
+改读系统首选语言（与 daemon `system` 模式同一来源），仍无结果回落 `zh-Hans`。`locale set` 的人读输出
+按写入后的新偏好成文。不随语言变化的有：`--json` 输出、`key: value` 行的字段名与取值、`--help`、
+以及错误行（`featherpostctl: …` 与 `--json` 的 `error.message`）——后者与协议 `error.message` 一样
+面向开发者。
 
 ### maildctl account
 

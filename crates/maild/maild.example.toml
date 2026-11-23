@@ -61,7 +61,9 @@ provider = "dev-log"
 [plugins.otp]
 [plugins.otp.config]
 pattern = "\\d{6}"
-title = "验证码"
+# 通知标题。缺省跟随界面语言（ADR-0048 的语言偏好：简体中文为「验证码」，英文为
+# "Verification Code"）；写成旧出厂值「验证码」同样视为未自定义。写别的值则原样使用、不随语言切换。
+# title = "登录码"
 
 [plugins.transport]
 [plugins.transport.config]

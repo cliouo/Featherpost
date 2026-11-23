@@ -1,5 +1,5 @@
 import { createRoot } from "react-dom/client";
-import { tauriBridge } from "../../maild-ui/src/bridge/tauri";
+import { startupLocaleReady, tauriBridge } from "../../maild-ui/src/bridge/tauri";
 import { Host } from "../../maild-ui/src/host/host";
 import { ComposeController } from "../../maild-ui/src/compose/controller";
 import { composeModule } from "../../maild-ui/src/compose/module";
@@ -43,23 +43,26 @@ composer.store.subscribe(() => {
 host.finishAssembly();
 void host.start();
 
-createRoot(document.getElementById("root")!).render(
-  <ErrorBoundary
-    onReset={() => {
-      void host.bridge.refresh().catch(() => {});
-    }}
-  >
-    <ChoiceRenderer.Provider value={StudioSelect}>
-    <Studio
-      host={host}
-      mailbox={mailbox.controller}
-      composer={composer}
-      setup={mailbox.setup}
-      manageAccounts={() => {
-        settings.openAccounts();
-        host.openRole("settings");
+// ADR-0048：首帧前等启动语言（最多几百毫秒），英文用户不会先看到一帧中文。
+void startupLocaleReady().then(() => {
+  createRoot(document.getElementById("root")!).render(
+    <ErrorBoundary
+      onReset={() => {
+        void host.bridge.refresh().catch(() => {});
       }}
-    />
-    </ChoiceRenderer.Provider>
-  </ErrorBoundary>,
-);
+    >
+      <ChoiceRenderer.Provider value={StudioSelect}>
+      <Studio
+        host={host}
+        mailbox={mailbox.controller}
+        composer={composer}
+        setup={mailbox.setup}
+        manageAccounts={() => {
+          settings.openAccounts();
+          host.openRole("settings");
+        }}
+      />
+      </ChoiceRenderer.Provider>
+    </ErrorBoundary>,
+  );
+});

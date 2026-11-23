@@ -124,7 +124,7 @@ impl Bridge {
         account: &str,
         patch: DraftPatchInput,
     ) -> Result<UiDraft, UiError> {
-        let mut p = serde_json::to_value(patch).map_err(|_| UiError::invalid("草稿字段无效。"))?;
+        let mut p = serde_json::to_value(patch).map_err(|_| UiError::invalid("draft_fields_invalid", "草稿字段无效。"))?;
         p["account"] = json!(account);
         self.draft_action("createDraft", p).await
     }
@@ -134,7 +134,7 @@ impl Bridge {
         version: u64,
         patch: DraftPatchInput,
     ) -> Result<UiDraft, UiError> {
-        let mut p = serde_json::to_value(patch).map_err(|_| UiError::invalid("草稿字段无效。"))?;
+        let mut p = serde_json::to_value(patch).map_err(|_| UiError::invalid("draft_fields_invalid", "草稿字段无效。"))?;
         p["id"] = json!(id);
         p["base_version"] = json!(version);
         self.draft_action("updateDraft", p).await
@@ -145,13 +145,24 @@ impl Bridge {
         folder: &str,
         uid: &str,
         mode: &str,
+        locale: Option<&str>,
     ) -> Result<UiDraft, UiError> {
-        let reply: PrepareReplyResult = self
-            .compose_call(
-                "prepareReply",
-                json!({"account":account,"folder":folder,"uid":uid,"mode":mode}),
-            )
-            .await?;
+        let params = json!({"account":account,"folder":folder,"uid":uid,"mode":mode});
+        // ADR-0048 决策 7：引用块语言首版跟随界面语言。早于 L4 的 daemon 拒绝未知参数（-32602），
+        // 去掉 `locale` 重试一次，得到与今天相同的中文引用块。
+        let reply: PrepareReplyResult = match locale {
+            Some(locale) => {
+                let mut localized = params.clone();
+                localized["locale"] = json!(locale);
+                match self.compose_call("prepareReply", localized).await {
+                    Err(error) if error.code == crate::bridge::UiErrorCode::Invalid => {
+                        self.compose_call("prepareReply", params).await?
+                    }
+                    result => result?,
+                }
+            }
+            None => self.compose_call("prepareReply", params).await?,
+        };
         let MessageDraft {
             to,
             cc,

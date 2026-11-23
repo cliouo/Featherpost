@@ -1,3 +1,5 @@
+import { m } from "@featherpost/i18n/messages";
+
 import {followMailIntent} from './navigation';
 import type { ComposeController } from "../compose/controller";
 import { useEffect } from "react";
@@ -24,6 +26,7 @@ import { ShortcutHelp } from "./ShortcutHelp";
 import { Welcome } from "./Welcome";
 import type { AccountSetup } from "./types";
 import { BRAND } from "../brand";
+import { useUiLocale } from "../i18n";
 
 export const MAILBOX_VIEW = "maild.mailbox.workspace";
 export const ACTIVITY_VIEW = "maild.mailbox.activity";
@@ -116,11 +119,15 @@ export function mailboxModule(
   window.addEventListener("keydown", onKey);
 
   function Workspace(_props: ViewProps) {
+    const locale = useUiLocale();
     const state = useStore(controller.store);
     const { help } = useStore(ui);
     useEffect(() => {
-      document.title = `${scopeTitle(state.scope)} · ${BRAND.productName}`;
-    }, [state.scope]);
+      document.title = m.mailbox_document_title({
+        scope: scopeTitle(state.scope),
+        product: BRAND.productName,
+      });
+    }, [state.scope, locale]);
     const helpDialog = help && (
       <ShortcutHelp onClose={() => ui.patch({ help: false })} />
     );
@@ -189,14 +196,20 @@ export function mailboxModule(
     );
   }
 
+  // 贡献标题在注册时成文：注册底座按值复制贡献（host/registry.ts），标题是快照，切换语言后要等宿主支持
+  // 按语言重取（见 ADR-0048 决策 8 实现记录）。
   return {
     moduleId: "maild.mailbox",
     apiVersion: 1,
-    title: "邮箱",
+    get title() {
+      return m.mailbox_module_title();
+    },
     views: [
       {
         id: MAILBOX_VIEW,
-        title: "邮件",
+        get title() {
+          return m.mailbox_view_mail();
+        },
         icon: "inbox",
         role: "mailbox",
         order: 0,
@@ -205,7 +218,9 @@ export function mailboxModule(
       },
       {
         id: ACTIVITY_VIEW,
-        title: "同步活动",
+        get title() {
+          return m.mailbox_activity_title();
+        },
         icon: "activity",
         role: "activity",
         render: ActivityView,
@@ -215,7 +230,9 @@ export function mailboxModule(
     settings: [
       {
         id: "maild.mailbox.reading-privacy",
-        title: "阅读与隐私",
+        get title() {
+          return m.mailbox_reading_title();
+        },
         order: 15,
         render: ReadingPrivacy,
       },
@@ -223,7 +240,9 @@ export function mailboxModule(
     commands: [
       {
         id: "maild.mailbox.search",
-        title: "搜索邮件",
+        get title() {
+          return m.mailbox_shortcut_search_mail();
+        },
         icon: "search",
         locations: ["navigation"],
         order: 20,
@@ -231,7 +250,9 @@ export function mailboxModule(
       },
       {
         id: "maild.mailbox.open-activity",
-        title: "同步活动",
+        get title() {
+          return m.mailbox_activity_title();
+        },
         icon: "activity",
         locations: ["navigation"],
         order: 30,
@@ -239,7 +260,9 @@ export function mailboxModule(
       },
       {
         id: "maild.mailbox.read",
-        title: "标为已读",
+        get title() {
+          return m.mailbox_command_mark_read();
+        },
         icon: "mail",
         locations: ["toolbar", "menu"],
         order: 40,
@@ -254,7 +277,9 @@ export function mailboxModule(
       },
       {
         id: "maild.mailbox.unread",
-        title: "标为未读",
+        get title() {
+          return m.mailbox_command_mark_unread();
+        },
         icon: "mail",
         locations: ["menu"],
         order: 41,
@@ -269,7 +294,9 @@ export function mailboxModule(
       },
       {
         id: "maild.mailbox.archive",
-        title: "归档",
+        get title() {
+          return m.mailbox_command_archive();
+        },
         icon: "archive",
         locations: ["toolbar", "menu"],
         order: 50,
@@ -280,7 +307,9 @@ export function mailboxModule(
       },
       {
         id: "maild.mailbox.move",
-        title: "移动到…",
+        get title() {
+          return m.mailbox_command_move();
+        },
         icon: "folder",
         locations: ["menu"],
         order: 51,
@@ -289,7 +318,9 @@ export function mailboxModule(
       },
       {
         id: "maild.mailbox.delete",
-        title: "删除",
+        get title() {
+          return m.mailbox_command_delete();
+        },
         icon: "trash",
         locations: ["toolbar", "menu"],
         order: 60,
@@ -298,7 +329,9 @@ export function mailboxModule(
       },
       {
         id: "maild.mailbox.refresh",
-        title: "刷新",
+        get title() {
+          return m.mailbox_command_refresh();
+        },
         icon: "refresh",
         locations: ["toolbar", "menu"],
         order: 100,
@@ -306,14 +339,16 @@ export function mailboxModule(
         execute: () => {
           void host.bridge
             .refresh()
-            .catch(() => host.notify("后台连接不可用。"));
+            .catch(() => host.notify(m.mailbox_command_refresh_offline()));
           // 先敲醒后台立即检查新邮件（不支持时降级），再刷新当前列表。
           void controller.syncNow();
         },
       },
       {
         id: "maild.mailbox.shortcuts",
-        title: "键盘快捷键",
+        get title() {
+          return m.mailbox_shortcut_help_title();
+        },
         locations: ["menu"],
         order: 200,
         execute: () => {

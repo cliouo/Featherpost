@@ -633,7 +633,16 @@ fn bundled_manifest_template_matches_the_development_manifest_and_is_launchable(
         &fs::read_to_string(root.join("crates/maild-ui/package/frontend.toml")).unwrap(),
     )
     .unwrap();
-    for key in ["schema_version", "protocol_version", "id", "name", "capabilities", "permissions"] {
+    for key in [
+        "schema_version",
+        "protocol_version",
+        "id",
+        "name",
+        "description",
+        "capabilities",
+        "permissions",
+        "l10n",
+    ] {
         assert_eq!(bundled.get(key), development.get(key), "{key} drifted");
     }
     assert_eq!(bundled["id"].as_str(), Some(BUNDLED_FRONTEND_ID));
@@ -970,6 +979,36 @@ fn studio_and_recovery_are_both_preinstalled_and_studio_removal_is_respected() {
     );
     assert_eq!(studio.refresh(root.path()).unwrap(), RefreshOutcome::Absent);
     assert!(root.path().join(BUNDLED_FRONTEND_ID).is_dir());
+}
+
+/// The real Studio manifest (schema 3 with `description` / `l10n`, ADR-0048) passes the same
+/// inspection the Agent applies before preinstalling the bundled Studio payload.
+#[test]
+fn shipped_studio_manifest_is_preinstallable() {
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let shipped = fs::read_to_string(repo.join("packaging/macos/studio/frontend.toml")).unwrap();
+    let version = shipped
+        .lines()
+        .find_map(|line| line.strip_prefix("version = \""))
+        .and_then(|rest| rest.strip_suffix('"'))
+        .unwrap()
+        .to_owned();
+    let bundle = tempfile::tempdir().unwrap();
+    let (legacy, studio) = studio_source_fixture(bundle.path());
+    fs::write(
+        studio.source.join("frontend.toml"),
+        shipped.replace(&format!("version = \"{version}\""), "version = \"0.3.3\""),
+    )
+    .unwrap();
+    let root = tempfile::tempdir().unwrap();
+    assert_eq!(legacy.preinstall(root.path()).unwrap(), PreinstallOutcome::Installed);
+    assert_eq!(studio.preinstall(root.path()).unwrap(), PreinstallOutcome::Installed);
+    let installed: toml::Table = toml::from_str(
+        &fs::read_to_string(root.path().join(STUDIO_FRONTEND_ID).join("frontend.toml")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(installed["schema_version"].as_integer(), Some(3));
+    assert!(installed["l10n"]["zh-Hans"]["description"].is_str());
 }
 
 #[test]

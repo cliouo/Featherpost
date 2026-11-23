@@ -1,5 +1,137 @@
-/** The shipped interface is Chinese; provider data and user-authored names are not UI copy. */
-export const UI_LOCALE = "zh-CN";
+import { getUiLocale, matchTag, type UiLocale } from "@featherpost/i18n";
+import { m } from "@featherpost/i18n/messages";
+
+export { useUiLocale } from "@featherpost/i18n/react";
+export type { UiLocale };
+
+/**
+ * 当前协商出的界面语言（ADR-0048 决策 8），`Intl` 格式化与 `localeCompare` 也用它。
+ * 未收到偏好时为 `zh-CN`。服务商数据与用户自起的名字不是界面文案，不随它翻译。
+ */
+export function uiLocale(): UiLocale {
+  return getUiLocale();
+}
+
+/** manifest `[l10n.<tag>]` 的一条（ADR-0048 决策 5）；缺的字段回落顶层。 */
+export interface PackageL10nEntry {
+  name?: string;
+  description?: string;
+}
+
+/** 列表、预览与 `listFrontends` 里带名字的包：顶层是兜底，`l10n` 由 daemon 原样透传。 */
+export interface LocalizablePackage {
+  name: string;
+  description?: string | null;
+  l10n?: Readonly<Record<string, PackageL10nEntry>> | null;
+}
+
+/**
+ * 包的名字与说明按当前界面语言成文（ADR-0048 决策 5）：在 `l10n` 里找与界面语言匹配的标签
+ * （与界面协商同一规则，`zh-Hant*` 不算简体中文），逐字段取第一个有值的条目，都没有就用顶层
+ * `name` / `description`。只在渲染时调用——`previewPluginPackage` 的结果必须原样回传，不能改写。
+ */
+export function packageText(pkg: LocalizablePackage): { name: string; description: string | null } {
+  const locale = getUiLocale();
+  const entries = Object.entries(pkg.l10n ?? {})
+    .filter(([tag]) => matchTag(tag) === locale)
+    .map(([, entry]) => entry);
+  const field = (key: keyof PackageL10nEntry) =>
+    entries.map((entry) => entry[key]).find((value) => typeof value === "string" && value.trim() !== "");
+  return {
+    name: field("name") ?? pkg.name,
+    description: field("description") ?? pkg.description ?? null,
+  };
+}
+
+const IDENTITY_FAILURES: Record<string, () => string> = {
+  not_installed: m.common_identity_failure_not_installed,
+  rejected: m.common_identity_failure_rejected,
+  principal_mismatch: m.common_identity_failure_principal_mismatch,
+  unavailable: m.common_identity_failure_unavailable,
+};
+
+/**
+ * 身份绑定失败的说明（ADR-0048 决策 3）：按壳给的稳定 code 用界面语言成文；没有失败时为 `null`。
+ * actor 拼的中文原因只作诊断，不显示给用户；认不出的 code（或老壳没有 code）给通用说明。
+ */
+export function identityFailureText(snapshot: {
+  identity_failure: string | null;
+  identity_failure_code?: string | null;
+}): string | null {
+  if (snapshot.identity_failure === null && !snapshot.identity_failure_code) return null;
+  const code = snapshot.identity_failure_code ?? "";
+  return Object.prototype.hasOwnProperty.call(IDENTITY_FAILURES, code)
+    ? IDENTITY_FAILURES[code]()
+    : m.common_identity_failure_unknown();
+}
+
+/**
+ * 账户状态原因的稳定 code（ADR-0048 L6）→ 当前界面语言的文案。键与 `crates/maild/src/events.rs`
+ * 里 `AccountDetailCode::as_str` 一一对应，`test/statusTexts.test.ts` 核对两边没有遗漏。
+ */
+export const ACCOUNT_DETAIL_CODES: Readonly<Record<string, () => string>> = {
+  connect_failed: m.common_account_detail_connect_failed,
+  connect_timeout: m.common_account_detail_connect_timeout,
+  credential_invalid: m.common_account_detail_credential_invalid,
+  credential_unavailable: m.common_account_detail_credential_unavailable,
+  greeting_invalid: m.common_account_detail_greeting_invalid,
+  idle_failed: m.common_account_detail_idle_failed,
+  idle_timeout: m.common_account_detail_idle_timeout,
+  internal: m.common_account_detail_internal,
+  login_failed: m.common_account_detail_login_failed,
+  login_timeout: m.common_account_detail_login_timeout,
+  poll_failed: m.common_account_detail_poll_failed,
+  provider_failed: m.common_account_detail_provider_failed,
+  provider_response_invalid: m.common_account_detail_provider_response_invalid,
+  provider_timeout: m.common_account_detail_provider_timeout,
+  provider_unavailable: m.common_account_detail_provider_unavailable,
+  starttls_unsupported: m.common_account_detail_starttls_unsupported,
+  sync_failed: m.common_account_detail_sync_failed,
+  tls_failed: m.common_account_detail_tls_failed,
+  tls_timeout: m.common_account_detail_tls_timeout,
+};
+
+/** 带账户状态原因的对象：快照里的账户与账户页的 `runtime` 同形。 */
+export interface AccountReasonSource {
+  detail?: string | null;
+  detail_code?: string | null;
+  server_detail?: string | null;
+}
+
+/**
+ * 账户离线原因（ADR-0048 L6）：有 code 时按 code 用界面语言成文，服务器原文作为次要信息原样给出；
+ * 认不出的 code 给通用说明加原文；没有 code（老后台）时照旧用 `detail`。没有原因时为 `null`。
+ */
+export function accountReason(source: AccountReasonSource): { text: string; server: string | null } | null {
+  const server = source.server_detail?.trim() || null;
+  const code = source.detail_code;
+  if (code) {
+    const text = Object.prototype.hasOwnProperty.call(ACCOUNT_DETAIL_CODES, code)
+      ? ACCOUNT_DETAIL_CODES[code]()
+      : m.common_account_detail_unknown();
+    return { text, server };
+  }
+  const legacy = source.detail?.trim();
+  return legacy ? { text: legacy, server: null } : null;
+}
+
+/** 单行形式（悬停提示等）：原因后接服务器原文。 */
+export function accountReasonLine(source: AccountReasonSource): string | null {
+  const reason = accountReason(source);
+  if (!reason) return null;
+  return reason.server
+    ? m.common_account_detail_with_server({ reason: reason.text, detail: reason.server })
+    : reason.text;
+}
+
+/** 账户的收信插件名：在扩展清单里按 ID 找到就按界面语言成文，找不到就显示 ID。 */
+export function providerName(
+  plugins: ReadonlyArray<LocalizablePackage & { id: string }> | undefined,
+  id: string,
+): string {
+  const plugin = plugins?.find((candidate) => candidate.id === id);
+  return plugin ? packageText(plugin).name : id;
+}
 
 interface DisplayFolder {
   name: string;
@@ -9,24 +141,24 @@ interface DisplayFolder {
 
 const folderNames: Record<
   string,
-  { label: string; aliases: readonly string[] }
+  { label: () => string; aliases: readonly string[] }
 > = {
-  inbox: { label: "收件箱", aliases: ["inbox"] },
+  inbox: { label: m.mailbox_folder_inbox, aliases: ["inbox"] },
   sent: {
-    label: "已发送",
+    label: m.mailbox_folder_sent,
     aliases: ["sent", "sent mail", "sent messages", "sent items"],
   },
-  drafts: { label: "草稿", aliases: ["draft", "drafts"] },
-  archive: { label: "归档", aliases: ["archive", "archives"] },
+  drafts: { label: m.mailbox_folder_drafts, aliases: ["draft", "drafts"] },
+  archive: { label: m.mailbox_folder_archive, aliases: ["archive", "archives"] },
   trash: {
-    label: "已删除",
+    label: m.mailbox_folder_trash,
     aliases: ["trash", "deleted items", "deleted messages"],
   },
   junk: {
-    label: "垃圾邮件",
+    label: m.mailbox_folder_junk,
     aliases: ["junk", "junk email", "junk e-mail", "spam"],
   },
-  all: { label: "全部邮件", aliases: ["all mail", "all messages"] },
+  all: { label: m.mailbox_folder_all, aliases: ["all mail", "all messages"] },
 };
 folderNames.spam = folderNames.junk;
 
@@ -60,47 +192,52 @@ export function folderLabel(
   );
   const visibleLeaf = label.slice(labelSeparator + 1);
   if (!entry.aliases.includes(visibleLeaf.toLowerCase())) return label;
-  return label.slice(0, labelSeparator + 1) + entry.label;
+  return label.slice(0, labelSeparator + 1) + entry.label();
 }
+
+const lifecycleLabels: Record<string, () => string> = {
+  independent: m.extensions_lifecycle_independent,
+  on_demand: m.extensions_lifecycle_on_demand,
+  supervised: m.extensions_lifecycle_supervised,
+};
 
 export function lifecycleLabel(value: string): string {
-  const label = (
-    {
-      independent: "独立运行",
-      on_demand: "按需启动",
-      supervised: "由后台托管运行",
-    } as Record<string, string>
-  )[value];
-  return typeof label === "string"
-    ? label
+  const label = Object.prototype.hasOwnProperty.call(lifecycleLabels, value)
+    ? lifecycleLabels[value]
+    : undefined;
+  return label
+    ? label()
     : value
-      ? `未知运行方式（${value}）`
-      : "未声明运行方式";
+      ? m.extensions_lifecycle_unknown({ value })
+      : m.extensions_lifecycle_undeclared();
 }
 
-export const permissionLabels: Record<string, string> = {
-  messages_read: "读取邮件与账户状态",
-  messages_send: "发送邮件",
-  drafts_read: "读取草稿",
-  drafts_write: "编辑草稿",
-  mailbox_write: "修改邮件与同步队列",
-  accounts_manage: "管理账户与凭据",
-  addresses_manage: "管理发件身份",
-  plugins_manage: "安装和管理其他扩展",
-  settings_read: "读取应用设置",
-  settings_write: "修改应用设置",
-  notifications_read: "读取系统通知授权",
-  frontend_open: "接收导航意图、读取前端清单",
-  transport_provider: "提供邮件收发服务",
-  events_stream: "订阅事件",
-  inbox: "收件箱（读取邮件）",
-  message: "阅读邮件（读取邮件）",
-  compose: "写信（发送邮件）",
-  settings: "设置（读写设置）",
-  background: "后台入口",
+/** 授权词与贡献类型的界面说明；值是消息函数，每次调用按当前语言成文。 */
+export const permissionLabels: Readonly<Record<string, () => string>> = {
+  messages_read: m.extensions_permission_messages_read,
+  messages_send: m.extensions_permission_messages_send,
+  drafts_read: m.extensions_permission_drafts_read,
+  drafts_write: m.extensions_permission_drafts_write,
+  mailbox_write: m.extensions_permission_mailbox_write,
+  accounts_manage: m.extensions_permission_accounts_manage,
+  addresses_manage: m.extensions_permission_addresses_manage,
+  plugins_manage: m.extensions_permission_plugins_manage,
+  settings_read: m.extensions_permission_settings_read,
+  settings_write: m.extensions_permission_settings_write,
+  notifications_read: m.extensions_permission_notifications_read,
+  frontend_open: m.extensions_permission_frontend_open,
+  transport_provider: m.extensions_permission_transport_provider,
+  events_stream: m.extensions_permission_events_stream,
+  inbox: m.extensions_permission_inbox,
+  message: m.extensions_permission_message,
+  compose: m.extensions_permission_compose,
+  settings: m.extensions_permission_settings,
+  background: m.extensions_permission_background,
 };
 
 export function permissionLabel(value: string): string {
-  const label = permissionLabels[value];
-  return typeof label === "string" ? label : "未识别的功能或权限";
+  const label = Object.prototype.hasOwnProperty.call(permissionLabels, value)
+    ? permissionLabels[value]
+    : undefined;
+  return label ? label() : m.extensions_permission_unknown();
 }

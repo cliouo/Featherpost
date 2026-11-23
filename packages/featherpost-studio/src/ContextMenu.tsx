@@ -1,3 +1,4 @@
+import { m } from "@featherpost/i18n/messages";
 import * as Menu from "@radix-ui/react-context-menu";
 import {
   createContext,
@@ -207,7 +208,7 @@ function Entries({ entries, container }: { entries: MenuEntry[]; container?: HTM
                 {entry.entries.length ? (
                   <Entries entries={entry.entries} container={container} />
                 ) : (
-                  <div className="studio-menu-empty">{entry.empty ?? "无可用项"}</div>
+                  <div className="studio-menu-empty">{entry.empty ?? m.studio_menu_empty()}</div>
                 )}
               </Menu.SubContent>
             </Menu.Portal>

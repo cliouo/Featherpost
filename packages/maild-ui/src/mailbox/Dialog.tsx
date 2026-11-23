@@ -1,5 +1,9 @@
+import { m } from "@featherpost/i18n/messages";
 import { useEffect, useRef, type ReactNode } from "react";
 import type React from "react";
+
+import { useUiLocale } from "../i18n";
+
 export function Dialog({
   title,
   children,
@@ -14,6 +18,7 @@ export function Dialog({
   /** 对话框内的按键（如「?」再次按下关闭速查）；在阻止冒泡之前调用。 */
   onKey?: (e: React.KeyboardEvent<HTMLDialogElement>) => void;
 }) {
+  useUiLocale();
   const ref = useRef<HTMLDialogElement>(null),
     close = useRef(onClose);
   close.current = onClose;
@@ -46,9 +51,9 @@ export function Dialog({
           className="text-button"
           disabled={busy}
           onClick={onClose}
-          aria-label="关闭对话框"
+          aria-label={m.mailbox_dialog_close_label()}
         >
-          关闭
+          {m.mailbox_dialog_close()}
         </button>
       </header>
       {children}

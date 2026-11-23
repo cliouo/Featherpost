@@ -10,12 +10,15 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use maild_app::{
-    ActorOptions, CompatVerdict, ConnectionHandle, ConnectionPhase, FrontendIdentity, ViewState,
+    ActorOptions, CompatVerdict, ConnectionHandle, ConnectionPhase, FrontendIdentity,
+    IdentityFailure, ViewState,
 };
 use maild_client::{
     assemble_attachment, AttachmentBytes, AttachmentChunk, ClientError, Endpoint, ErrorKind,
-    FrontendsResult, MailAttachment, MailFolder, MailMessage, MessageResult,
-    MessageSummariesResult, MessageSummary, OpenIntent, ReadingPolicyPatch, ReadingPolicyResult,
+    FrontendsResult, LocalePreferenceResult, LocalePreferenceUpdate, MailAttachment, MailFolder,
+    PackageL10n,
+    MailMessage, MessageResult, MessageSummariesResult, MessageSummary, OpenIntent,
+    ReadingPolicyPatch, ReadingPolicyResult,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -35,6 +38,8 @@ pub const STATE_EVENT: &str = "maild://state";
 pub const INTENT_EVENT: &str = "maild://intent";
 /// 邮件里的链接被点击；载荷是 [`UiLink`]（ADR-0033 决策 6）。
 pub const LINK_EVENT: &str = "maild://link";
+/// 语言偏好变了；载荷是 [`UiLocale`]（ADR-0048）。
+pub const LOCALE_EVENT: &str = "maild://locale";
 
 const MAX_PAGE: u64 = 200;
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(3);
@@ -91,16 +96,17 @@ impl UiCompat {
 
     fn denial(self) -> UiError {
         let product = maild_brand::PRODUCT_NAME;
-        let message = match self {
-            Self::KernelOutdated => format!(
+        let (reason, message) = match self {
+            Self::KernelOutdated => ("kernel_outdated", format!(
                 "后台版本较旧，与当前界面不兼容，写入已暂停。请重新启动后台；若刚回退过 {product}，请从菜单栏「修复与后台管理…」重装内置界面。"
-            ),
-            _ => format!(
+            )),
+            _ => ("app_outdated", format!(
                 "当前界面版本较旧，与后台不兼容，写入已暂停。请从菜单栏「修复与后台管理…」重装内置界面，或更新 {product}。"
-            ),
+            )),
         };
         UiError {
             code: UiErrorCode::Incompatible,
+            reason,
             message,
         }
     }
@@ -131,32 +137,45 @@ struct CompatRecord {
     in_flight: bool,
 }
 
-/// webview 能看到的全部错误信息。`message` 是固定的用户文案，不是 daemon 原文。
+/// webview 能看到的全部错误信息。`message` 是固定的中文文案，不是 daemon 原文。
+///
+/// ADR-0048 决策 3：`reason` 是稳定的原因码（snake_case），webview 据此按当前界面语言成文
+/// （`packages/maild-ui/src/bridge/errors.ts`）；`message` 只作诊断与兜底，不是协议契约。
+/// 新增 reason 时同步在 webview 的映射表与两种语言的消息里登记，前端测试会核对。
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct UiError {
     pub code: UiErrorCode,
+    pub reason: &'static str,
     pub message: String,
 }
 
 impl UiError {
-    pub(crate) fn invalid(message: &str) -> Self {
+    pub(crate) fn invalid(reason: &'static str, message: &str) -> Self {
         Self {
             code: UiErrorCode::Invalid,
+            reason,
             message: message.into(),
         }
     }
 
-    pub(crate) fn not_found(message: &str) -> Self {
+    pub(crate) fn not_found(reason: &'static str, message: &str) -> Self {
         Self {
             code: UiErrorCode::NotFound,
+            reason,
             message: message.into(),
         }
     }
 
-    pub(crate) fn failed(context: &str, detail: impl std::fmt::Display, message: &str) -> Self {
+    pub(crate) fn failed(
+        context: &str,
+        detail: impl std::fmt::Display,
+        reason: &'static str,
+        message: &str,
+    ) -> Self {
         eprintln!("[maild-ui] {context} 失败: {detail}");
         Self {
             code: UiErrorCode::Failed,
+            reason,
             message: message.into(),
         }
     }
@@ -165,32 +184,60 @@ impl UiError {
     /// 也不该被扩展视图（E02）间接读到。
     pub(crate) fn from_client(context: &str, error: ClientError) -> Self {
         eprintln!("[maild-ui] {context} 失败: {error}");
-        let (code, message) = match (error.kind, error.rpc_code) {
-            (ErrorKind::Connection, _) => (UiErrorCode::Offline, "后台连接不可用，正在自动重试。"),
-            (_, Some(-32016)) => (UiErrorCode::Denied, "当前前端没有执行这项操作的授权。"),
-            (_, Some(-32002)) => (UiErrorCode::NotFound, "这封邮件已不在本地缓存中。"),
+        let (code, reason, message) = match (error.kind, error.rpc_code) {
+            (ErrorKind::Connection, _) => (
+                UiErrorCode::Offline,
+                "offline",
+                "后台连接不可用，正在自动重试。",
+            ),
+            (_, Some(-32016)) => (
+                UiErrorCode::Denied,
+                "denied",
+                "当前前端没有执行这项操作的授权。",
+            ),
+            (_, Some(-32002)) => (
+                UiErrorCode::NotFound,
+                "message_not_cached",
+                "这封邮件已不在本地缓存中。",
+            ),
             // ADR-0032 决策 3：两种「拿不到附件」对用户是不同的话。
-            (_, Some(-32003)) => (UiErrorCode::NotFound, "这个附件不在这封邮件里。"),
+            (_, Some(-32003)) => (
+                UiErrorCode::NotFound,
+                "attachment_not_in_message",
+                "这个附件不在这封邮件里。",
+            ),
             (_, Some(-32004)) => (
                 UiErrorCode::NotFound,
+                "attachment_not_stored",
                 "这个附件的字节没有保存在本地缓存里。",
             ),
-            (_, Some(-32005)) => (UiErrorCode::NotFound, "这份草稿已不存在。"),
+            (_, Some(-32005)) => (UiErrorCode::NotFound, "draft_missing", "这份草稿已不存在。"),
             (_, Some(-32006)) => (
                 UiErrorCode::Conflict,
+                "draft_conflict",
                 "草稿已在别处修改。你的输入仍保留，请复制内容或重新载入。",
             ),
-            (_, Some(-32007)) => (UiErrorCode::Limit, "内容或附件超过保存上限，请减少后再试。"),
-            (_, Some(-32008)) => (UiErrorCode::NotFound, "附件上传已过期，请重新选择文件。"),
+            (_, Some(-32007)) => (
+                UiErrorCode::Limit,
+                "draft_too_large",
+                "内容或附件超过保存上限，请减少后再试。",
+            ),
+            (_, Some(-32008)) => (
+                UiErrorCode::NotFound,
+                "upload_expired",
+                "附件上传已过期，请重新选择文件。",
+            ),
             (_, Some(-32021)) => (
                 UiErrorCode::Locked,
+                "draft_locked",
                 "这份草稿正在发送、已发送或结果尚未确认。",
             ),
-            (_, Some(-32602)) => (UiErrorCode::Invalid, "请求参数无效。"),
-            _ => (UiErrorCode::Failed, "操作未完成，请稍后重试。"),
+            (_, Some(-32602)) => (UiErrorCode::Invalid, "invalid_params", "请求参数无效。"),
+            _ => (UiErrorCode::Failed, "failed", "操作未完成，请稍后重试。"),
         };
         Self {
             code,
+            reason,
             message: message.into(),
         }
     }
@@ -201,6 +248,11 @@ pub struct UiAccount {
     pub account: String,
     pub state: String,
     pub detail: String,
+    /// 离线原因的稳定 code（ADR-0048 L6）；webview 按它用界面语言成文，`detail` 的中文只作兜底。
+    /// 老 daemon 没有。
+    pub detail_code: Option<String>,
+    /// 服务器或系统原文（不含 daemon 的前缀），可空；webview 作为次要信息原样显示。
+    pub server_detail: String,
 }
 
 /// 连接快照。故意没有 `last_error` 字段：那串文本可能带 socket 路径，UI 只需要知道
@@ -220,6 +272,9 @@ pub struct UiSnapshot {
     pub principal: Option<String>,
     /// 身份 bootstrap 失败原因（我们自己拼的文案，不含路径）。修复动作是安装前端包。
     pub identity_failure: Option<String>,
+    /// 失败的稳定原因（`not_installed` / `rejected` / `principal_mismatch` / `unavailable`，
+    /// ADR-0048 决策 3）。webview 按它用界面语言成文，上面的中文只作诊断。
+    pub identity_failure_code: Option<&'static str>,
     /// 快照有部分失败（actor 的 `partial_snapshot`）。
     pub partial: bool,
     /// 最近一次版本握手结论（ADR-0016）。重连后在新结论出来前沿用上一次的。
@@ -255,10 +310,13 @@ pub fn project(state: &ViewState, frontend_id: &str, compat: UiCompat) -> UiSnap
                 account: account.account.clone(),
                 state: account.state.clone(),
                 detail: account.detail.clone(),
+                detail_code: account.detail_code.clone(),
+                server_detail: account.server_detail.clone(),
             })
             .collect(),
         principal: state.principal.clone(),
         identity_failure: state.identity_failure.clone(),
+        identity_failure_code: state.identity_failure_code.map(IdentityFailure::code),
         partial: state.partial_snapshot,
         compat,
     }
@@ -473,6 +531,72 @@ pub struct UiReadingPolicyPatch {
     pub untrust: Vec<String>,
 }
 
+/// ADR-0048：[`LOCALE_EVENT`] 的载荷与 `ui_locale` 的结果。`effective` 是壳的有序语言列表：显式模式下
+/// 即 daemon 的 `effective`，跟随系统时是本进程的首选语言（M2，见 `shell_locale`）；
+/// `None` = 尚未取到或 daemon 不提供，webview 回落基础语言。协商由 webview 自己做。
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct UiLocale {
+    pub effective: Option<Vec<String>>,
+}
+
+/// 语言偏好（`getLocalePreference` / `setLocalePreference` 的投影）。`mode` 取 `system` / `explicit`；
+/// `persisted = false` 表示偏好文件停摆：读到的是缺省偏好，写会被拒绝。
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct UiLocalePreference {
+    pub mode: String,
+    pub languages: Vec<String>,
+    pub effective: Vec<String>,
+    pub persisted: bool,
+}
+
+impl From<LocalePreferenceResult> for UiLocalePreference {
+    fn from(result: LocalePreferenceResult) -> Self {
+        Self {
+            mode: result.preference.mode,
+            languages: result.preference.languages,
+            effective: result.effective,
+            persisted: result.persisted,
+        }
+    }
+}
+
+/// webview 提交的偏好：`{mode: "system"}` 或 `{mode: "explicit", languages: [...]}`。
+/// 标签校验与规范化在 daemon（整包拒绝、不落盘）。
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
+pub enum UiLocaleUpdate {
+    System,
+    Explicit { languages: Vec<String> },
+}
+
+/// 语言偏好方法的错误投影。老 daemon 不认识这两个方法：`-32601`，或其授权表对前端主体
+/// fail-closed 的 `-32016`（`getLocalePreference` 在新 daemon 上是 `Open`，所以读时的 `-32016`
+/// 只可能来自老 daemon；写时的 `-32016` 仍是缺授权）。`-32001` 是偏好文件停摆、写入被拒。
+fn locale_error(method: &str, error: ClientError) -> UiError {
+    let unsupported = match error.rpc_code {
+        Some(-32601) => true,
+        Some(-32016) => method == "getLocalePreference",
+        _ => false,
+    };
+    if unsupported {
+        eprintln!("[maild-ui] {method} 失败（后台不支持语言偏好）: {error}");
+        return UiError {
+            code: UiErrorCode::Failed,
+            reason: "locale_unsupported",
+            message: "后台版本不支持语言偏好。".into(),
+        };
+    }
+    if error.rpc_code == Some(-32001) {
+        eprintln!("[maild-ui] {method} 失败: {error}");
+        return UiError {
+            code: UiErrorCode::Failed,
+            reason: "locale_not_persisted",
+            message: "语言偏好文件无法写入，这次更改没有保存。".into(),
+        };
+    }
+    UiError::from_client(method, error)
+}
+
 impl From<MailMessage> for UiMessage {
     fn from(message: MailMessage) -> Self {
         let summary = UiSummary {
@@ -528,6 +652,11 @@ impl From<MessageResult> for UiMessage {
 pub struct UiFrontendInfo {
     pub id: String,
     pub name: String,
+    /// ADR-0048 决策 5：manifest 的兜底说明与 `[l10n.<tag>]` 原样透传，webview 渲染时协商。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "PackageL10n::is_empty")]
+    pub l10n: PackageL10n,
     pub version: String,
     pub lifecycle: String,
     pub capabilities: Vec<String>,
@@ -678,7 +807,7 @@ impl Bridge {
 
     pub async fn list_folders(&self, account: &str) -> Result<Vec<UiFolder>, UiError> {
         if account.is_empty() {
-            return Err(UiError::invalid("account 不能为空"));
+            return Err(UiError::invalid("account_required", "account 不能为空"));
         }
         let result: maild_client::FoldersResult = self
             .handle
@@ -696,10 +825,10 @@ impl Bridge {
         limit: u64,
     ) -> Result<UiPage, UiError> {
         if account.is_empty() || folder.is_empty() {
-            return Err(UiError::invalid("account 与 folder 不能为空"));
+            return Err(UiError::invalid("folder_required", "account 与 folder 不能为空"));
         }
         if !(1..=MAX_PAGE).contains(&limit) {
-            return Err(UiError::invalid("limit 必须是 1 到 200"));
+            return Err(UiError::invalid("page_limit", "limit 必须是 1 到 200"));
         }
         let result: MessageSummariesResult = self
             .handle
@@ -722,7 +851,7 @@ impl Bridge {
         uid: &str,
     ) -> Result<MessageResult, UiError> {
         if account.is_empty() || folder.is_empty() || uid.is_empty() {
-            return Err(UiError::invalid("account、folder、uid 不能为空"));
+            return Err(UiError::invalid("message_identity_required", "account、folder、uid 不能为空"));
         }
         self.handle
             .request_typed(
@@ -753,7 +882,7 @@ impl Bridge {
         part_index: u32,
     ) -> Result<AttachmentBytes, UiError> {
         if account.is_empty() || folder.is_empty() || uid.is_empty() {
-            return Err(UiError::invalid("account、folder、uid 不能为空"));
+            return Err(UiError::invalid("message_identity_required", "account、folder、uid 不能为空"));
         }
         assemble_attachment(|offset| async move {
             self.handle
@@ -822,6 +951,7 @@ impl Bridge {
             UiError::failed(
                 "prepare_document",
                 error,
+                "html_unavailable",
                 "无法准备 HTML 版式，已显示纯文本。",
             )
         })?;
@@ -864,12 +994,12 @@ impl Bridge {
     ) -> Result<(String, Vec<u8>), UiError> {
         let document = store
             .get(token)
-            .ok_or_else(|| UiError::not_found("文档已释放或不存在。"))?;
+            .ok_or_else(|| UiError::not_found("document_released", "文档已释放或不存在。"))?;
         let mime = document
             .parts
             .get(&part_index)
             .cloned()
-            .ok_or_else(|| UiError::not_found("这个附件不属于当前文档。"))?;
+            .ok_or_else(|| UiError::not_found("part_not_in_document", "这个附件不属于当前文档。"))?;
         let identity = &document.identity;
         let bytes = self
             .read_attachment(
@@ -902,7 +1032,7 @@ impl Bridge {
             untrust: patch.untrust.clone(),
         })
         .map_err(|error| {
-            UiError::failed("set_reading_policy", error, "操作未完成，请稍后重试。")
+            UiError::failed("set_reading_policy", error, "failed", "操作未完成，请稍后重试。")
         })?;
         self.guard("setReadingPolicy")?;
         let result: ReadingPolicyResult = self
@@ -911,6 +1041,49 @@ impl Bridge {
             .await
             .map_err(|error| UiError::from_client("setReadingPolicy", error))?;
         Ok(UiReadingPolicy::from(result))
+    }
+
+    /// ADR-0048：actor 手里当前 daemon 的 `effective` 列表（连接快照或 `preferences/locale` 推送）。
+    /// 不发请求，离线也能读。webview 拿到的是壳据此再解析的列表（M2，`shell_locale`）。
+    pub fn locale(&self) -> UiLocale {
+        UiLocale {
+            effective: self.handle.state().locale,
+        }
+    }
+
+    /// 设置页显示的完整偏好（模式与显式列表）。老 daemon 投影成 `locale_unsupported`。
+    pub async fn locale_preference(&self) -> Result<UiLocalePreference, UiError> {
+        let result: LocalePreferenceResult = self
+            .handle
+            .request_typed("getLocalePreference", json!({}))
+            .await
+            .map_err(|error| locale_error("getLocalePreference", error))?;
+        Ok(UiLocalePreference::from(result))
+    }
+
+    /// 写入语言偏好（`settings_write`）。daemon 随后向所有流式连接推送 `preferences/locale`，
+    /// actor 据此更新状态、状态泵再转发给 webview 与原生菜单；应答里的 `effective` 让发起方
+    /// 不必等推送就能切换。
+    pub async fn set_locale_preference(
+        &self,
+        update: &UiLocaleUpdate,
+    ) -> Result<UiLocalePreference, UiError> {
+        let update = match update {
+            UiLocaleUpdate::System => LocalePreferenceUpdate::system(),
+            UiLocaleUpdate::Explicit { languages } => {
+                LocalePreferenceUpdate::explicit(languages.iter().cloned())
+            }
+        };
+        let params = serde_json::to_value(update).map_err(|error| {
+            UiError::failed("set_locale_preference", error, "failed", "操作未完成，请稍后重试。")
+        })?;
+        self.guard("setLocalePreference")?;
+        let result: LocalePreferenceResult = self
+            .handle
+            .request_typed("setLocalePreference", params)
+            .await
+            .map_err(|error| locale_error("setLocalePreference", error))?;
+        Ok(UiLocalePreference::from(result))
     }
 
     /// 让 actor 重拉一次快照（账户状态、总数）；文件夹与列表由 UI 按需重取。
@@ -931,15 +1104,16 @@ impl Bridge {
             .frontends
             .into_iter()
             .find(|frontend| frontend.id == self.frontend_id)
-            .ok_or_else(|| UiError {
-                code: UiErrorCode::NotFound,
-                message: "daemon 的前端清单里没有本前端。".into(),
+            .ok_or_else(|| {
+                UiError::not_found("frontend_not_listed", "daemon 的前端清单里没有本前端。")
             })?;
         Ok(UiFrontendInfo {
             is_default: result.default == me.id,
             default_frontend: result.default,
             id: me.id,
             name: me.name,
+            description: me.description,
+            l10n: me.l10n,
             version: me.version,
             lifecycle: me.lifecycle,
             capabilities: me.capabilities,
@@ -986,8 +1160,10 @@ mod tests {
             version: Some("0.1.0".into()),
             accounts: vec![AccountState {
                 account: "personal".into(),
-                state: "error".into(),
-                detail: "认证失败".into(),
+                state: "offline".into(),
+                detail: "IMAP 登录失败: no response: 认证失败".into(),
+                detail_code: Some("login_failed".into()),
+                server_detail: "no response: 认证失败".into(),
             }],
             messages: Vec::new(),
             total_messages: 0,
@@ -996,8 +1172,10 @@ mod tests {
             revision: 9,
             principal: None,
             identity_failure: Some(format!("前端包 `{FRONTEND_ID}` 未安装或没有身份条目")),
+            identity_failure_code: Some(IdentityFailure::NotInstalled),
             intent_epoch: 0,
             shutdown_requested: false,
+            locale: None,
         }
     }
 
@@ -1014,12 +1192,16 @@ mod tests {
         assert_eq!(snapshot.retry_in_ms, Some(1500));
         assert_eq!(snapshot.revision, 9);
         assert!(snapshot.partial);
-        assert_eq!(snapshot.accounts[0].detail, "认证失败");
+        assert_eq!(snapshot.accounts[0].detail, "IMAP 登录失败: no response: 认证失败");
+        // ADR-0048 L6：离线原因的 code 与服务器原文原样过桥。
+        assert_eq!(snapshot.accounts[0].detail_code.as_deref(), Some("login_failed"));
+        assert_eq!(snapshot.accounts[0].server_detail, "no response: 认证失败");
         assert!(snapshot
             .identity_failure
             .as_deref()
             .unwrap()
             .contains("未安装"));
+        assert_eq!(snapshot.identity_failure_code, Some("not_installed"));
     }
 
     /// ADR-0016：版本不一致时只放行只读请求，新方法默认按写入处理；未知/兼容不挡任何请求。
@@ -1141,6 +1323,70 @@ mod tests {
             assert_eq!(projected.code, code);
             assert!(!projected.message.contains("/tmp"));
         }
+    }
+
+    /// ADR-0048 决策 3：webview 按 `reason` 成文；中文 `message` 只是兜底。
+    #[test]
+    fn errors_carry_a_stable_reason_for_the_webview() {
+        let projected = UiError::from_client("x", rpc(-32006));
+        assert_eq!(
+            serde_json::to_value(&projected).unwrap(),
+            json!({
+                "code": "conflict",
+                "reason": "draft_conflict",
+                "message": "草稿已在别处修改。你的输入仍保留，请复制内容或重新载入。"
+            })
+        );
+        assert_eq!(
+            UiError::from_client("x", ClientError::connection("down")).reason,
+            "offline"
+        );
+        assert_eq!(UiCompat::KernelOutdated.denial().reason, "kernel_outdated");
+        assert_eq!(UiCompat::AppOutdated.denial().reason, "app_outdated");
+    }
+
+    /// 老 daemon 不认识语言偏好方法：读时 -32601/-32016 都是「不支持」，写时 -32016 仍是缺授权。
+    #[test]
+    fn locale_errors_distinguish_an_old_daemon_from_a_denial() {
+        for code in [-32601, -32016] {
+            let error = locale_error("getLocalePreference", rpc(code));
+            assert_eq!((error.code, error.reason), (UiErrorCode::Failed, "locale_unsupported"));
+        }
+        assert_eq!(
+            locale_error("setLocalePreference", rpc(-32601)).reason,
+            "locale_unsupported"
+        );
+        let denied = locale_error("setLocalePreference", rpc(-32016));
+        assert_eq!((denied.code, denied.reason), (UiErrorCode::Denied, "denied"));
+        assert_eq!(
+            locale_error("setLocalePreference", rpc(-32001)).reason,
+            "locale_not_persisted"
+        );
+        assert_eq!(
+            locale_error("setLocalePreference", rpc(-32602)).reason,
+            "invalid_params"
+        );
+    }
+
+    #[test]
+    fn locale_updates_match_the_webview_shape() {
+        let system: UiLocaleUpdate = serde_json::from_value(json!({ "mode": "system" })).unwrap();
+        assert_eq!(system, UiLocaleUpdate::System);
+        let explicit: UiLocaleUpdate =
+            serde_json::from_value(json!({ "mode": "explicit", "languages": ["zh-Hans"] }))
+                .unwrap();
+        assert_eq!(
+            explicit,
+            UiLocaleUpdate::Explicit {
+                languages: vec!["zh-Hans".into()]
+            }
+        );
+        assert!(serde_json::from_value::<UiLocaleUpdate>(json!({ "mode": "auto" })).is_err());
+        assert!(serde_json::from_value::<UiLocaleUpdate>(json!({ "mode": "explicit" })).is_err());
+        assert_eq!(
+            serde_json::to_value(UiLocale { effective: None }).unwrap(),
+            json!({ "effective": null })
+        );
     }
 
     fn rpc(code: i64) -> ClientError {

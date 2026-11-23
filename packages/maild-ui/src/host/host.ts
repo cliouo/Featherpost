@@ -1,9 +1,11 @@
+import { m } from '@featherpost/i18n/messages';
+
 import type { MailBridge, MessageIdentity, OpenIntent, UiFrontendInfo, UiSnapshot } from '../bridge/types';
 import { errorCode } from '../bridge/errors';
 import { compatBlocksWrites } from '../bridge/types';
 import type { Preferences } from '../preferences';
 import { preferenceStorage, readPreferences, savePreferences } from '../preferences';
-import { ContributionRegistry } from './registry';
+import { ContributionRegistry, copyContribution } from './registry';
 import { Store } from './store';
 import type { Bundle, CommandContext, EnabledWhen, View } from './types';
 
@@ -69,7 +71,7 @@ export class Host {
 
   /** 内置模块：注册失败是宿主 bug，直接抛——没有邮箱视图的壳不该起来。 */
   registerBuiltin(bundle: Bundle) {
-    this.registry.register({ ...bundle, builtin: true });
+    this.registry.register(copyContribution(bundle, { builtin: true }));
   }
 
   /** 可选模块：失败只记诊断，不影响其他模块（ADR-0031 决策 5「失败可见」）。 */
@@ -85,7 +87,12 @@ export class Host {
       try {
         entry.handle = this.registry.register(entry.module.bundle());
       } catch (error) {
-        this.diagnose(`扩展 ${moduleId} 未能启用：${error instanceof Error ? error.message : String(error)}`);
+        this.diagnose(
+          m.extensions_host_enable_failed({
+            id: moduleId,
+            reason: error instanceof Error ? error.message : String(error),
+          }),
+        );
         return false;
       }
     } else if (!enabled && entry.handle) {
@@ -137,7 +144,7 @@ export class Host {
 
   openView(id: string): boolean {
     if (!this.registry.findView(id)) {
-      this.diagnose(`视图不存在：${id}`);
+      this.diagnose(m.extensions_host_view_missing({ id }));
       return false;
     }
     if (id !== this.state.getSnapshot().activeViewId) {
@@ -154,8 +161,13 @@ export class Host {
     try {
       command.execute(this.commandContext());
     } catch (error) {
-      this.diagnose(`命令 ${commandId} 执行失败：${error instanceof Error ? error.message : String(error)}`);
-      this.notify('操作未完成。');
+      this.diagnose(
+        m.extensions_host_command_failed({
+          id: commandId,
+          reason: error instanceof Error ? error.message : String(error),
+        }),
+      );
+      this.notify(m.extensions_host_command_failed_toast());
     }
   }
 
@@ -223,7 +235,7 @@ export class Host {
         this.acceptSnapshot(initial);
       }
     } catch {
-      this.diagnose('无法订阅后台连接状态。');
+      this.diagnose(m.extensions_host_subscribe_failed());
     }
   }
 
@@ -256,7 +268,10 @@ export class Host {
       this.state.patch({ frontendInfo: info, frontendInfoError: null });
     } catch (error) {
       this.state.patch({
-        frontendInfoError: errorCode(error) === 'denied' ? '当前前端没有读取前端清单的授权。' : '暂时无法读取前端清单。',
+        frontendInfoError:
+          errorCode(error) === 'denied'
+            ? m.extensions_host_frontend_info_denied()
+            : m.extensions_host_frontend_info_failed(),
       });
     }
   }

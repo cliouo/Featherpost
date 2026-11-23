@@ -1,3 +1,5 @@
+import { m } from "@featherpost/i18n/messages";
+
 import type { UiSnapshot } from "../bridge/types";
 import { Store } from "../host/store";
 import type {
@@ -34,7 +36,7 @@ import {
 
 export const SETTINGS_VIEW = "maild.settings.page";
 export const failure = (e: unknown) =>
-  e instanceof Error ? e.message : "操作未完成，请刷新后再试。";
+  e instanceof Error ? e.message : m.settings_error_generic();
 const copy = <T>(v: T): T => structuredClone(v);
 export const newDraft = (): AccountDraft => ({
   display_name: "",
@@ -188,8 +190,7 @@ export class SettingsController {
       ...(s.editor ? { editor: { ...s.editor, secrets: {} } } : {}),
       ...(s.busy
         ? {
-            error:
-              "连接已变化，提交结果尚未确认。请先刷新实际状态，不要重复提交。",
+            error: m.settings_error_connection_changed(),
           }
         : {}),
     });
@@ -225,8 +226,7 @@ export class SettingsController {
             if (query === this.query && generation === this.generation)
               this.store.patch({
                 profiles: null,
-                error:
-                  "扩展清单已读取，但无法读取关联账户。操作前请确认账户依赖。",
+                error: m.extensions_error_profiles_unavailable(),
               });
           }
           return;
@@ -249,7 +249,7 @@ export class SettingsController {
           const form = this.store.getSnapshot().addressForm;
           if (form && form.account !== account) {
             this.store.patch({
-              error: "正在编辑的账户已不可用，请取消地址输入后重新选择账户。",
+              error: m.settings_address_error_account_gone(),
             });
             return;
           }
@@ -471,7 +471,9 @@ export class SettingsController {
     this.editAccount({ ...e, secrets: { ...e.secrets, [role]: value } });
     if (changed && preset)
       this.setWizard({
-        secretNotice: `已自动去掉${CREDENTIAL_LABEL[preset.credential]}里的空格。`,
+        secretNotice: m.settings_wizard_secret_spaces_removed({
+          credential: CREDENTIAL_LABEL[preset.credential],
+        }),
       });
   }
   toggleServers(open?: boolean) {
@@ -492,7 +494,7 @@ export class SettingsController {
     const address = e.draft.address.trim();
     const domain = domainOf(address);
     if (!domain) {
-      this.store.patch({ error: "请先填写完整的邮箱地址，再自动检测服务器。" });
+      this.store.patch({ error: m.settings_wizard_error_address_required() });
       return;
     }
     const known = matchProvider(address);
@@ -543,8 +545,14 @@ export class SettingsController {
       expanded: true,
       discovering: false,
       discovered: found
-        ? `已自动发现 ${servers.incoming.server}:${servers.incoming.port}，请探测确认。`
-        : `未能自动发现，已按常见规则预填 ${servers.incoming.server} / ${servers.outgoing.server}，请核对后探测。`,
+        ? m.settings_wizard_discovered({
+            server: servers.incoming.server,
+            port: servers.incoming.port,
+          })
+        : m.settings_wizard_guessed({
+            incoming: servers.incoming.server,
+            outgoing: servers.outgoing.server,
+          }),
     });
   }
   /** 打开服务商官方帮助页；宿主不支持时把链接复制给用户。 */
@@ -563,8 +571,8 @@ export class SettingsController {
       }
       this.store.patch({
         notice: copied
-          ? `无法直接打开浏览器，已复制链接：${url}`
-          : `请在浏览器中打开：${url}`,
+          ? m.settings_help_link_copied({ url })
+          : m.settings_help_link_open_manually({ url }),
       });
     }
   }
@@ -647,7 +655,7 @@ export class SettingsController {
       !e.id &&
       (!s.probe?.incoming.ok || (e.draft.outgoing && !s.probe?.outgoing?.ok))
     ) {
-      this.store.patch({ error: "请先通过收信与发信探测，再连接此账户。" });
+      this.store.patch({ error: m.settings_account_error_probe_required() });
       return;
     }
     const ok = await this.write(
@@ -662,7 +670,7 @@ export class SettingsController {
             : [...profiles, p],
           editor: null,
           probe: null,
-          notice: `${p.display_name || p.address} 已保存。连接状态以账户列表为准。`,
+          notice: m.settings_account_saved({ name: p.display_name || p.address }),
         });
         this.changed();
       },
@@ -676,10 +684,22 @@ export class SettingsController {
   confirmAccount(p: AccountProfile, remove: boolean) {
     this.ask(
       remove
-        ? `移除 ${p.display_name || p.address}？`
-        : `${p.enabled ? "暂停" : "启用"} ${p.display_name || p.address}？`,
-      `${p.address}\n${remove ? "停止收发并删除受管凭据，本地邮件保留，服务器邮件不会被删除。尚未完成的写回不会因此撤销，请先在同步活动中处理。" : "本地邮件会保留。暂停后停止此账户的后台收发。"}`,
-      remove ? "移除账户" : p.enabled ? "暂停同步" : "启用账户",
+        ? m.settings_account_confirm_remove_title({
+            name: p.display_name || p.address,
+          })
+        : p.enabled
+          ? m.settings_account_confirm_pause_title({
+              name: p.display_name || p.address,
+            })
+          : m.settings_account_confirm_enable_title({
+              name: p.display_name || p.address,
+            }),
+      `${p.address}\n${remove ? m.settings_account_confirm_remove_body() : m.settings_account_confirm_toggle_body()}`,
+      remove
+        ? m.settings_account_action_remove()
+        : p.enabled
+          ? m.settings_account_action_pause()
+          : m.settings_account_action_enable(),
       remove,
       () => {
         void this.write(
@@ -695,7 +715,7 @@ export class SettingsController {
                   },
             ),
           () => {
-            this.store.patch({ notice: "账户状态已更新。" });
+            this.store.patch({ notice: m.settings_account_updated() });
             this.changed();
           },
         ).then((ok) => {
@@ -719,8 +739,8 @@ export class SettingsController {
           rulesBaseline: JSON.stringify(r.rules),
           rulesPersisted: r.persisted,
           notice: r.persisted
-            ? "规则已保存。"
-            : "规则已应用，仅本次后台运行有效；重启后恢复配置文件中的规则。",
+            ? m.settings_rules_saved()
+            : m.settings_rules_applied_session(),
         }),
     );
   }
@@ -730,7 +750,7 @@ export class SettingsController {
       (notification) =>
         this.store.patch({
           notification,
-          notice: "已请求系统授权，请以系统提示和刷新后的授权状态为准。",
+          notice: m.settings_notifications_requested(),
         }),
     );
   }
@@ -771,17 +791,17 @@ export class SettingsController {
       f = s.addressForm;
     if (!f) return;
     if (f.account !== s.addressAccount) {
-      this.store.patch({ error: "地址表单所属账户已变化，请取消后重新填写。" });
+      this.store.patch({ error: m.settings_address_error_account_changed() });
       return;
     }
     const p = s.profiles?.find((p) => p.id === f.account);
     if (p?.outgoing?.kind !== "smtp") {
-      this.store.patch({ error: "此账户目前只支持主地址发信。" });
+      this.store.patch({ error: m.settings_address_error_primary_only() });
       return;
     }
     const days = f.days === "" ? null : Number(f.days);
     if (days !== null && (!Number.isInteger(days) || days < 1 || days > 365)) {
-      this.store.patch({ error: "有效期请输入 1 到 365 天，或留空。" });
+      this.store.patch({ error: m.settings_address_error_days() });
       return;
     }
     const ok = await this.write(
@@ -798,7 +818,7 @@ export class SettingsController {
       () => {
         this.store.patch({
           addressForm: null,
-          notice: "本地发件身份已登记，请确保服务器允许使用该地址。",
+          notice: m.settings_address_registered(),
         });
         this.changed();
       },
@@ -808,12 +828,16 @@ export class SettingsController {
   confirmAddress(a: Address, remove: boolean) {
     this.ask(
       remove
-        ? "移除发件身份？"
+        ? m.settings_address_confirm_remove_title()
         : a.state === "active"
-          ? "停用发件身份？"
-          : "启用发件身份？",
-      `${a.address}\n只修改本地地址记录，不会删除远程邮箱。已有草稿发送时会重新校验地址。`,
-      remove ? "移除" : a.state === "active" ? "停用" : "启用",
+          ? m.settings_address_confirm_disable_title()
+          : m.settings_address_confirm_enable_title(),
+      `${a.address}\n${m.settings_address_confirm_body()}`,
+      remove
+        ? m.settings_address_action_remove()
+        : a.state === "active"
+          ? m.settings_address_action_disable()
+          : m.settings_address_action_enable(),
       remove,
       () => {
         void this.write(
@@ -856,7 +880,7 @@ export class SettingsController {
   async reconcilePackages() {
     const ok = await this.write(
       () => this.bridge.packageAction({ action: "refresh" }),
-      () => this.store.patch({ notice: "已重新扫描安装目录。" }),
+      () => this.store.patch({ notice: m.extensions_rescanned() }),
     );
     if (ok) await this.load();
   }
@@ -869,7 +893,10 @@ export class SettingsController {
       () => this.bridge.installPackage(choice.token),
       (r) =>
         this.store.patch({
-          notice: `${r.id} ${r.version} 已${r.action === "upgraded" ? "升级" : "安装"}。`,
+          notice:
+            r.action === "upgraded"
+              ? m.extensions_upgraded({ id: r.id, version: r.version })
+              : m.extensions_installed({ id: r.id, version: r.version }),
         }),
     );
     if (this.store.getSnapshot().choice === choice)
@@ -898,7 +925,7 @@ export class SettingsController {
       () =>
         this.store.patch({
           rollback: null,
-          notice: "已切换到确认的回滚版本。",
+          notice: m.extensions_rolled_back(),
         }),
     );
     if (ok) {
@@ -916,23 +943,35 @@ export class SettingsController {
       kind === "plugin" &&
       this.store.getSnapshot().packages?.plugins.find((p) => p.id === id)
         ?.lifecycle === "independent";
-    const body = `${id}\n${this.store.getSnapshot().profiles === null ? "关联账户未能读取，影响范围尚未确认。\n" : ""}${dependencies.length ? `关联账户：${dependencies.join("、")}。\n` : ""}${action === "remove" ? "包将被移除，账户和本地邮件仍保留。相关服务会不可用，重新安装后可恢复。" : action === "default" ? "仅影响之后的通知与启动入口；当前窗口保持打开。" : action === "disable" ? (independent ? "此包独立运行，仅记录停用意图；已经由其他方式启动的进程不会因此停止。" : "停止该包提供的后台服务，关联账户可能暂时离线。") : independent ? "此包独立运行，仅记录启用意图，不会自动启动进程。" : "启用后后台可能启动此包的服务。"}`;
+    const effect =
+      action === "remove"
+        ? m.extensions_confirm_remove_body()
+        : action === "default"
+          ? m.extensions_confirm_default_body()
+          : action === "disable"
+            ? independent
+              ? m.extensions_confirm_disable_independent_body()
+              : m.extensions_confirm_disable_body()
+            : independent
+              ? m.extensions_confirm_enable_independent_body()
+              : m.extensions_confirm_enable_body();
+    const body = `${id}\n${this.store.getSnapshot().profiles === null ? `${m.extensions_confirm_profiles_unknown()}\n` : ""}${dependencies.length ? `${m.extensions_confirm_dependencies({ accounts: dependencies.join(m.extensions_list_separator()) })}\n` : ""}${effect}`;
     this.ask(
       action === "default"
-        ? "设为默认前端？"
+        ? m.extensions_confirm_default_title()
         : action === "remove"
-          ? "移除扩展？"
+          ? m.extensions_confirm_remove_title()
           : action === "disable"
-            ? "停用扩展？"
-            : "启用扩展？",
+            ? m.extensions_confirm_disable_title()
+            : m.extensions_confirm_enable_title(),
       body,
       action === "default"
-        ? "设为默认"
+        ? m.extensions_action_make_default()
         : action === "remove"
-          ? "移除"
+          ? m.extensions_action_remove()
           : action === "disable"
-            ? "停用"
-            : "启用",
+            ? m.extensions_action_disable()
+            : m.extensions_action_enable(),
       action === "remove" || action === "disable",
       () => {
         void this.write(
@@ -944,7 +983,7 @@ export class SettingsController {
                   ? { action, id }
                   : { action: "enable", id, enabled: action === "enable" },
             ),
-          () => this.store.patch({ notice: "扩展设置已更新。" }),
+          () => this.store.patch({ notice: m.extensions_settings_updated() }),
         ).then((ok) => {
           if (ok) {
             this.changed();
@@ -957,7 +996,8 @@ export class SettingsController {
   async openProvider(id: string) {
     await this.write(
       () => this.bridge.packageAction({ action: "open", id }),
-      () => this.store.patch({ notice: "已请求打开服务扩展自己的管理窗口。" }),
+      () =>
+        this.store.patch({ notice: m.extensions_provider_open_requested() }),
     );
   }
   ask(
@@ -1005,7 +1045,7 @@ export class SettingsController {
       return false;
     }
     if (this.store.getSnapshot().busy || this.store.getSnapshot().closeLocked) {
-      this.store.patch({ error: "操作正在进行，请等待结果后再离开。" });
+      this.store.patch({ error: m.settings_leave_error_busy() });
       onCancel();
       return false;
     }
@@ -1015,9 +1055,9 @@ export class SettingsController {
       return true;
     }
     this.ask(
-      "放弃未保存的设置？",
-      "尚未保存的账户、规则或地址输入将被清空。已保存的邮件与账户不会改变。",
-      "放弃并离开",
+      m.settings_leave_confirm_title(),
+      m.settings_leave_confirm_body(),
+      m.settings_leave_confirm_action(),
       true,
       () => {
         this.discard();

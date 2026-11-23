@@ -11,7 +11,7 @@ use maild::store::Store;
 use maild::{run_daemon_until, DaemonOptions};
 use maild_client::{Endpoint, OpenIntent, RpcClient};
 use maild_paths::AppPaths;
-use maild_ui::bridge::{UiCompat, UiErrorCode};
+use maild_ui::bridge::{UiCompat, UiErrorCode, UiLocaleUpdate};
 use maild_ui::documents::{route, DocumentStore, ProtocolBase, Route};
 use maild_ui::{Bridge, FRONTEND_ID};
 
@@ -309,7 +309,69 @@ async fn management_methods_deny_a_read_only_frontend_before_side_effects() {
     // The only recovery action exposed to JS is opening the native window. A bare test daemon
     // cannot activate an installed app, which is an explicit UI error rather than an auth bypass.
     assert_eq!(bridge.settings_package_action(maild_ui::settings::PackageAction::Recovery).await.unwrap_err().code,UiErrorCode::Invalid);
+    // ADR-0048：读偏好对任何主体开放，写偏好要 settings_write（只读前端没有 settings 路由）。
+    assert!(bridge.locale_preference().await.is_ok());
+    assert_eq!(bridge.set_locale_preference(&UiLocaleUpdate::Explicit{languages:vec!["en".into()]}).await.unwrap_err().code,UiErrorCode::Denied);
     bridge.shutdown().await;let _=shutdown.send(());task.await.unwrap().unwrap();
+}
+
+/// ADR-0048：桥以前端主体读写语言偏好；写入后 daemon 的 `preferences/locale` 推送经 actor
+/// 更新桥的 `locale()`（状态泵据此转发给 webview 与原生菜单），不必等重连。
+#[tokio::test(flavor = "current_thread")]
+async fn the_shell_reads_writes_and_follows_the_daemon_locale_preference() {
+    let directory = tempfile::tempdir().unwrap();
+    let paths = test_paths(directory.path());
+    write_config(&paths);
+    install_frontend_package(&paths);
+    let (mut task, shutdown) = spawn_daemon(&paths);
+    let socket = paths.runtime_dir.join("mail.sock");
+    wait_socket_or_fail(&mut task, &socket).await;
+    let bridge = Bridge::spawn(Endpoint::Unix { path: socket }).unwrap();
+    wait_for(&bridge, |snapshot| snapshot.phase == "online").await;
+
+    // 首个快照已带回 system 模式下解析出的列表（永不为空）。
+    let initial = bridge.locale().effective.expect("快照应带回语言偏好");
+    assert!(!initial.is_empty());
+    let preference = bridge.locale_preference().await.unwrap();
+    assert_eq!(preference.mode, "system");
+    assert!(preference.languages.is_empty());
+    assert_eq!(preference.effective, initial);
+
+    let mut state = bridge.subscribe();
+    let english = bridge
+        .set_locale_preference(&UiLocaleUpdate::Explicit {
+            languages: vec!["EN".into()],
+        })
+        .await
+        .unwrap();
+    assert_eq!(english.mode, "explicit");
+    assert_eq!(english.effective, vec!["en".to_string()], "daemon 规范化大小写");
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while bridge.locale().effective.as_deref() != Some(&["en".to_string()][..]) {
+            state.changed().await.unwrap();
+        }
+    })
+    .await
+    .expect("preferences/locale 推送应更新桥的 locale");
+
+    let invalid = bridge
+        .set_locale_preference(&UiLocaleUpdate::Explicit {
+            languages: vec!["not a tag".into()],
+        })
+        .await
+        .unwrap_err();
+    assert_eq!((invalid.code, invalid.reason), (UiErrorCode::Invalid, "invalid_params"));
+
+    let system = bridge
+        .set_locale_preference(&UiLocaleUpdate::System)
+        .await
+        .unwrap();
+    assert_eq!(system.mode, "system");
+    assert_eq!(bridge.locale_preference().await.unwrap().mode, "system");
+
+    bridge.shutdown().await;
+    let _ = shutdown.send(());
+    task.await.unwrap().unwrap();
 }
 
 fn spawn_daemon(paths: &AppPaths) -> (DaemonTask, tokio::sync::oneshot::Sender<()>) {
@@ -762,6 +824,7 @@ async fn an_uninstalled_shell_reports_the_missing_package_instead_of_running_as_
             .contains("未安装"),
         "{snapshot:?}"
     );
+    assert_eq!(snapshot.identity_failure_code, Some("not_installed"));
     assert_ne!(snapshot.phase, "online");
     assert_eq!(snapshot.principal, None);
     let error = bridge.list_folders("demo").await.unwrap_err();

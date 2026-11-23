@@ -197,17 +197,61 @@ impl Notification {
             // ADR-0046：后台即将停机（菜单栏「退出 <产品名>」）。参数恒为空对象，不校验其内容——
             // 帧只是信号，旧/新 daemon 多带字段也不应让前端错过关闭。
             "agent/stopping" => Ok(ServerNotification::AgentStopping),
+            LOCALE_PREFERENCE_NOTIFICATION => {
+                serde_json::from_value::<LocalePreferenceChanged>(self.params)
+                    .map(|params| ServerNotification::LocalePreference {
+                        effective: params.effective,
+                    })
+                    .map_err(|error| {
+                        ClientError::rpc(format!(
+                            "{LOCALE_PREFERENCE_NOTIFICATION} 通知参数无效: {error}"
+                        ))
+                    })
+            }
             _ => Ok(ServerNotification::Unknown(self)),
         }
     }
+
+    /// ADR-0048：`preferences/locale` 的类型化解码。不是这条通知时返回 `None`。
+    ///
+    /// [`Self::into_server_notification`] 已把它解码为 [`ServerNotification::LocalePreference`]；
+    /// 本方法留给只想看这一条、不走整套分发的消费者。
+    pub fn locale_preference_changed(
+        &self,
+    ) -> Option<Result<LocalePreferenceChanged, ClientError>> {
+        (self.method == LOCALE_PREFERENCE_NOTIFICATION).then(|| {
+            serde_json::from_value::<LocalePreferenceChanged>(self.params.clone())
+                .map_err(|error| {
+                    ClientError::rpc(format!(
+                        "{LOCALE_PREFERENCE_NOTIFICATION} 通知参数无效: {error}"
+                    ))
+                })
+        })
+    }
 }
 
+/// ADR-0048：语言偏好变化通知的 method 名。
+pub const LOCALE_PREFERENCE_NOTIFICATION: &str = "preferences/locale";
+
+/// `preferences/locale` 的参数：新的解析后有序语言列表（永不为空）。未知字段忽略，便于 additive 扩展。
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+pub struct LocalePreferenceChanged {
+    pub effective: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
 pub struct AccountState {
     pub account: String,
     pub state: String,
     #[serde(default)]
     pub detail: String,
+    /// `detail` 的稳定 code（ADR-0048 L6，如 `login_failed`）；老 daemon 没有。客户端按它用界面
+    /// 语言成文，认不出的 code 显示通用文案加 `server_detail`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail_code: Option<String>,
+    /// 服务器或系统原文（不含 daemon 写的前缀），可空；作为数据原样展示。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub server_detail: String,
 }
 
 /// 附件元数据（ADR-0025）。字节不过协议帧——附件内容走独立取回路径（M4.5-04）。
@@ -458,6 +502,11 @@ pub enum ServerNotification {
     /// ADR-0046：daemon 即将停机（用户在菜单栏点了「退出 <产品名>」）。前端收到后应当刷盘草稿、
     /// 撤下窗口并随后台一起退出。
     AgentStopping,
+    /// ADR-0048：用户的语言偏好变了。`effective` 是解析后的有序偏好列表（永不为空），
+    /// 由各前端与自己支持的语言协商，内核不替前端挑语言。
+    LocalePreference {
+        effective: Vec<String>,
+    },
     Unknown(Notification),
 }
 
@@ -680,11 +729,31 @@ pub struct OpenFrontendResult {
     pub activation_requested: bool,
 }
 
+/// manifest `[l10n.<tag>]` 的一项（ADR-0048 决策 5）：包作者给某种语言提供的名称与描述。
+/// 缺的字段由前端回落到兜底的 `name` / `description`。
+#[derive(Clone, Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
+pub struct PackageL10nEntry {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+/// BCP 47 标签（daemon 已规范大小写）→ 该语言的名称/描述。daemon 原样透传，
+/// **不按语言偏好挑选**；由前端与自己支持的语言协商（ADR-0048 决策 5）。
+pub type PackageL10n = std::collections::BTreeMap<String, PackageL10nEntry>;
+
 /// Public metadata for a discovered out-of-process frontend.
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 pub struct FrontendInfo {
     pub id: String,
     pub name: String,
+    /// ADR-0048 决策 5：manifest 兜底描述（`schema_version = 3` 起），缺省省略。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// ADR-0048 决策 5：manifest 的 `[l10n.<tag>]` 原样透传，空时省略。
+    #[serde(default, skip_serializing_if = "PackageL10n::is_empty")]
+    pub l10n: PackageL10n,
     pub version: String,
     pub lifecycle: String,
     #[serde(default)]
@@ -713,6 +782,12 @@ pub struct FrontendsResult {
 pub struct ExternalPluginInfo {
     pub id: String,
     pub name: String,
+    /// ADR-0048 决策 5：manifest 兜底描述（`schema_version = 2` 起），缺省省略。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// ADR-0048 决策 5：manifest 的 `[l10n.<tag>]` 原样透传，空时省略。
+    #[serde(default, skip_serializing_if = "PackageL10n::is_empty")]
+    pub l10n: PackageL10n,
     pub version: String,
     pub lifecycle: String,
     #[serde(default)]
@@ -754,6 +829,13 @@ pub struct PackagePreview {
     pub kind: String,
     pub id: String,
     pub name: String,
+    /// ADR-0048 决策 5：兜底描述，缺省省略。与其余字段一样参与 `expected_preview` 比对——
+    /// 用户批准的是看到的文字。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// ADR-0048 决策 5：manifest 的 `[l10n.<tag>]` 原样透传，空时省略。
+    #[serde(default, skip_serializing_if = "PackageL10n::is_empty")]
+    pub l10n: PackageL10n,
     pub version: String,
     pub lifecycle: String,
     pub capabilities: Vec<String>,
@@ -1113,6 +1195,57 @@ pub struct ReadingPolicyResult {
     pub policy: ReadingPolicySnapshot,
     #[serde(default)]
     pub persisted: bool,
+}
+
+/// 语言偏好（ADR-0048 决策 1）。`mode` 取 `system` / `explicit`；`system` 时 `languages` 为空。
+#[derive(Clone, Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
+pub struct LocalePreference {
+    #[serde(default)]
+    pub mode: String,
+    #[serde(default)]
+    pub languages: Vec<String>,
+}
+
+/// `getLocalePreference` / `setLocalePreference` 应答（ADR-0048 决策 2）。`effective` 是解析后的
+/// 有序列表，前端用它与自己支持的语言协商；`persisted = false` 表示偏好文件停摆：读到的是缺省
+/// 偏好，写会被拒绝。
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
+pub struct LocalePreferenceResult {
+    pub preference: LocalePreference,
+    #[serde(default)]
+    pub effective: Vec<String>,
+    #[serde(default)]
+    pub persisted: bool,
+}
+
+/// `setLocalePreference` 参数：整包替换。`system` 不带 `languages`；`explicit` 必带 1..=8 个 BCP 47 标签。
+#[derive(Clone, Debug, Serialize, Eq, PartialEq)]
+pub struct LocalePreferenceUpdate {
+    pub mode: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub languages: Option<Vec<String>>,
+}
+
+impl LocalePreferenceUpdate {
+    /// 跟随系统首选语言。
+    pub fn system() -> Self {
+        Self {
+            mode: "system".into(),
+            languages: None,
+        }
+    }
+
+    /// 显式的有序语言列表；daemon 负责校验、规范化大小写与去重。
+    pub fn explicit<I, S>(languages: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        Self {
+            mode: "explicit".into(),
+            languages: Some(languages.into_iter().map(Into::into).collect()),
+        }
+    }
 }
 
 /// 按已收字节推进 `offset` 循环取块，拼成完整附件。两道护栏：应答 `size` 中途改变即报错；
@@ -2492,18 +2625,22 @@ impl RpcClient {
 
     /// `prepareReply`：在内核侧成型回复/全部回复/转发草稿（ADR-0028）。
     /// `mode` 取 `reply` / `reply_all` / `forward`。
+    ///
+    /// `locale`（BCP 47）决定引用块的语言（ADR-0048 决策 7）；`None` 时 daemon 用语言偏好的
+    /// `effective` 协商。`None` 时请求里不带该键，旧 daemon（拒绝未知参数）照常可用。
     pub async fn prepare_reply(
         &self,
         account: &str,
         folder: Option<&str>,
         uid: &str,
         mode: &str,
+        locale: Option<&str>,
     ) -> Result<PrepareReplyResult, ClientError> {
-        self.call_typed(
-            "prepareReply",
-            json!({ "account": account, "folder": folder, "uid": uid, "mode": mode }),
-        )
-        .await
+        let mut params = json!({ "account": account, "folder": folder, "uid": uid, "mode": mode });
+        if let Some(locale) = locale {
+            params["locale"] = json!(locale);
+        }
+        self.call_typed("prepareReply", params).await
     }
 
     /// 富消息发信。`account` 非空时走 `sendFromAccount`（受管账户、可选别名 From），
@@ -2729,6 +2866,20 @@ impl RpcClient {
         let params = serde_json::to_value(patch)
             .map_err(|error| ClientError::rpc(format!("阅读策略 patch 序列化失败: {error}")))?;
         self.call_typed("setReadingPolicy", params).await
+    }
+
+    /// ADR-0048：语言偏好与解析后的 `effective` 列表。老 daemon 返回 `-32601`，调用方回落基础语言。
+    pub async fn locale_preference(&self) -> Result<LocalePreferenceResult, ClientError> {
+        self.call_typed("getLocalePreference", json!({})).await
+    }
+
+    pub async fn set_locale_preference(
+        &self,
+        update: &LocalePreferenceUpdate,
+    ) -> Result<LocalePreferenceResult, ClientError> {
+        let params = serde_json::to_value(update)
+            .map_err(|error| ClientError::rpc(format!("语言偏好参数序列化失败: {error}")))?;
+        self.call_typed("setLocalePreference", params).await
     }
 
     /// 敲醒后台立即同步（ADR-0041 决策 4）。`account = None` = 全部启用账户。不等同步完成。
@@ -3401,12 +3552,17 @@ pub struct CredentialsView {
     pub outgoing: Option<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
 pub struct RuntimeView {
     /// connecting | online | reconnecting | disabled | needs_credentials | error
     pub state: String,
     #[serde(default)]
     pub detail: String,
+    /// 与 [`AccountState::detail_code`] 同一套（ADR-0048 L6）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail_code: Option<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub server_detail: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
@@ -4523,8 +4679,28 @@ mod tests {
                 account: "personal".into(),
                 state: "online".into(),
                 detail: String::new(),
+                ..Default::default()
             })
         );
+
+        // ADR-0048 L6：离线原因带稳定 code 与服务器原文；老 daemon 没有这两个键（上例）。
+        let offline = Notification {
+            method: "account/state".into(),
+            params: json!({
+                "account": "personal",
+                "state": "offline",
+                "detail": "IMAP 登录失败: no response: bad",
+                "detail_code": "login_failed",
+                "server_detail": "no response: bad"
+            }),
+        };
+        let ServerNotification::AccountState(offline) = offline.into_server_notification().unwrap()
+        else {
+            panic!("account/state 应解成类型化事件");
+        };
+        assert_eq!(offline.detail_code.as_deref(), Some("login_failed"));
+        assert_eq!(offline.server_detail, "no response: bad");
+        assert_eq!(offline.detail, "IMAP 登录失败: no response: bad");
 
         let intent = Notification {
             method: "frontend/intent".into(),
@@ -4561,6 +4737,76 @@ mod tests {
             ServerNotification::Unknown(notification)
                 if notification.method == "plugin/custom"
         ));
+    }
+
+    #[test]
+    fn locale_preference_notification_decodes_to_a_typed_variant() {
+        let frame = br#"{"jsonrpc":"2.0","method":"preferences/locale","params":{"effective":["en","zh-Hans"],"future":1}}"#;
+        let Incoming::Notification(notification) = decode_incoming(frame).unwrap() else {
+            panic!("preferences/locale 应解码为通知帧");
+        };
+        assert_eq!(
+            notification.locale_preference_changed().unwrap().unwrap(),
+            LocalePreferenceChanged {
+                effective: vec!["en".into(), "zh-Hans".into()]
+            }
+        );
+        // 经 into_server_notification 得到类型化变体；未知字段忽略。
+        assert_eq!(
+            notification.into_server_notification().unwrap(),
+            ServerNotification::LocalePreference {
+                effective: vec!["en".into(), "zh-Hans".into()]
+            }
+        );
+        assert!(Notification {
+            method: LOCALE_PREFERENCE_NOTIFICATION.into(),
+            params: json!({ "effective": "en" }),
+        }
+        .into_server_notification()
+        .is_err());
+
+        assert!(Notification {
+            method: LOCALE_PREFERENCE_NOTIFICATION.into(),
+            params: json!({ "effective": "en" }),
+        }
+        .locale_preference_changed()
+        .unwrap()
+        .is_err());
+        assert!(Notification {
+            method: "account/state".into(),
+            params: json!({}),
+        }
+        .locale_preference_changed()
+        .is_none());
+    }
+
+    #[test]
+    fn locale_preference_dtos_match_the_wire_shape() {
+        assert_eq!(
+            serde_json::to_value(LocalePreferenceUpdate::system()).unwrap(),
+            json!({ "mode": "system" })
+        );
+        assert_eq!(
+            serde_json::to_value(LocalePreferenceUpdate::explicit(["en", "zh-Hans"])).unwrap(),
+            json!({ "mode": "explicit", "languages": ["en", "zh-Hans"] })
+        );
+        let result: LocalePreferenceResult = serde_json::from_value(json!({
+            "preference": { "mode": "system", "languages": [] },
+            "effective": ["zh-Hans-CN", "en-US"],
+            "persisted": true
+        }))
+        .unwrap();
+        assert_eq!(
+            result,
+            LocalePreferenceResult {
+                preference: LocalePreference {
+                    mode: "system".into(),
+                    languages: Vec::new(),
+                },
+                effective: vec!["zh-Hans-CN".into(), "en-US".into()],
+                persisted: true,
+            }
+        );
     }
 
     #[test]
@@ -5190,6 +5436,83 @@ mod tests {
             }
         );
         server.await.unwrap();
+    }
+
+    /// 起一个只应答一次的 HTTP 端点，返回它收到的 JSON-RPC `params`。
+    async fn capture_params_once(
+        response_result: &'static str,
+    ) -> (String, tokio::task::JoinHandle<Value>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut received = Vec::new();
+            let mut chunk = [0_u8; 4096];
+            let body = loop {
+                let read = stream.read(&mut chunk).await.unwrap();
+                assert!(read > 0, "请求未读完连接就关闭了");
+                received.extend_from_slice(&chunk[..read]);
+                let text = String::from_utf8_lossy(&received).into_owned();
+                let Some((head, body)) = text.split_once("\r\n\r\n") else {
+                    continue;
+                };
+                let length: usize = head
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse().ok())?
+                    })
+                    .unwrap();
+                if body.len() >= length {
+                    break body[..length].to_owned();
+                }
+            };
+            let request: Value = serde_json::from_str(&body).unwrap();
+            let reply = format!(r#"{{"jsonrpc":"2.0","result":{response_result},"id":{}}}"#, request["id"]);
+            stream
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                        reply.len()
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+            request["params"].clone()
+        });
+        (format!("http://{address}/rpc"), server)
+    }
+
+    /// ADR-0048 决策 7：`locale` 只在给出时上线，旧 daemon（拒绝未知参数）不受影响。
+    #[tokio::test(flavor = "current_thread")]
+    async fn prepare_reply_sends_locale_only_when_given() {
+        const DRAFT: &str = r#"{"draft":{"subject":"Re: x","body":"\n\nOn D, A wrote:\n> x"}}"#;
+        for (locale, expected) in [
+            (
+                Some("en"),
+                json!({ "account": "a", "folder": "INBOX", "uid": "7", "mode": "reply", "locale": "en" }),
+            ),
+            (
+                None,
+                json!({ "account": "a", "folder": "INBOX", "uid": "7", "mode": "reply" }),
+            ),
+        ] {
+            let (url, server) = capture_params_once(DRAFT).await;
+            let client = RpcClient::new(Endpoint::Http {
+                url,
+                token: "t".repeat(32),
+            })
+            .unwrap();
+            let draft = client
+                .prepare_reply("a", Some("INBOX"), "7", "reply", locale)
+                .await
+                .unwrap()
+                .draft;
+            assert_eq!(draft.subject, "Re: x");
+            assert_eq!(server.await.unwrap(), expected);
+        }
     }
 
     async fn serve_agent_info_once(response_body: &'static str) -> String {

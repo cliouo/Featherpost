@@ -1,5 +1,6 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { applyEffectiveLocales } from "@featherpost/i18n";
 import { afterEach, describe, expect, it } from "vitest";
 import { Accounts } from "../src/settings/Accounts";
 import {
@@ -257,4 +258,31 @@ describe("静默时段：跟随系统时区、首段自动启用与旧偏移差�
     oldView = renderNotifications(oldC);
     expect(oldView.html).not.toContain(fillLabel);
   });
+});
+
+it("settings module titles and pages follow the UI language without re-registering", () => {
+  const host = new Host(new FakeBridge());
+  const bundle = settingsModule(host);
+  host.registerBuiltin(bundle);
+  try {
+    const titles = () => host.registry.getSnapshot().settings.map(({ value }) => value.title);
+    expect(titles()).toEqual(["账户", "外观与操作", "通知与规则", "地址与别名", "扩展", "后台与存储"]);
+    applyEffectiveLocales(["en"]);
+    expect(titles()).toEqual([
+      "Accounts",
+      "Appearance and behavior",
+      "Notifications and rules",
+      "Addresses and aliases",
+      "Extensions",
+      "Background and storage",
+    ]);
+    expect(host.registry.findView("maild.settings.page")?.title).toBe("Settings");
+    const Connection = bundle.settings!.find((section) => section.id === "maild.settings.connection")!.render;
+    const offline = renderToStaticMarkup(createElement(Connection, { active: true }));
+    expect(offline).toContain(`The background service isn&#x27;t connected. Open recovery from ${BRAND.appBundleName}.`);
+    expect(offline).toMatch(/<button[^>]*disabled=""[^>]*>Open repair window<\/button>/);
+  } finally {
+    applyEffectiveLocales([]);
+    bundle.dispose?.();
+  }
 });

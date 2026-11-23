@@ -33,6 +33,8 @@ clap = { version = "4.6.6", features = ["derive", "env"] }
 futures = "0.3"
 getrandom = "0.4.3"
 maild-client = { path = "../maild-client" }
+# ADR-0048 决策 6/7：内核界面文案（通知）与回复/转发引用块的文案目录
+maild-l10n = { path = "../maild-l10n" }
 maild-paths = { path = "../maild-paths" }
 mailparse = "0.16"
 plist = "1"
@@ -59,7 +61,7 @@ block2 = { version = "0.6.2", default-features = false, features = ["alloc"] }
 dispatch2 = { version = "0.3.1", default-features = false, features = ["std"] }
 objc2 = { version = "0.6.4", default-features = false, features = ["std"] }
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSEvent", "NSGraphicsContext", "NSResponder", "NSRunningApplication", "NSWorkspace", "block2"] }
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSBundle", "NSError", "NSObject", "NSString", "NSURL"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSBundle", "NSError", "NSLocale", "NSObject", "NSString", "NSURL"] }
 objc2-user-notifications = { version = "0.3.2", default-features = false, features = ["std", "UNNotification", "UNNotificationContent", "UNNotificationRequest", "UNNotificationResponse", "UNNotificationSettings", "UNNotificationTrigger", "UNUserNotificationCenter", "block2"] }
 security-framework = "3.7.0"
 

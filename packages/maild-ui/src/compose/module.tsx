@@ -1,3 +1,4 @@
+import { m } from "@featherpost/i18n/messages";
 import { useEffect } from "react";
 import type { Host } from "../host/host";
 import { useStore } from "../host/hooks";
@@ -5,6 +6,20 @@ import type { Bundle } from "../host/types";
 import { ComposeController, COMPOSE_VIEW, DRAFTS_VIEW } from "./controller";
 import { Editor } from "./Editor";
 import { fullDate, isoDateTime, shortDate } from "../mailbox/format";
+import { uiLocale, useUiLocale } from "../i18n";
+
+const REPLY_TITLE = {
+  reply: m.compose_command_reply,
+  reply_all: m.compose_command_reply_all,
+  forward: m.compose_command_forward,
+} as const;
+
+function draftCount(count: number): string {
+  return new Intl.PluralRules(uiLocale()).select(count) === "one"
+    ? m.compose_drafts_count_one({ count })
+    : m.compose_drafts_count_other({ count });
+}
+
 export function composeModule(
   host: Host,
   controller: ComposeController,
@@ -40,6 +55,7 @@ export function composeModule(
     return <Editor controller={controller} />;
   }
   function Drafts() {
+    useUiLocale();
     const state = useStore(controller.store);
     useEffect(() => {
       void controller.refresh();
@@ -48,30 +64,30 @@ export function composeModule(
       <section className="page drafts-page">
         <header className="compose-heading" data-tauri-drag-region="deep">
           <div className="compose-title">
-            <h1>本机草稿</h1>
-            <span className="compose-save">{state.draftTotal} 份</span>
+            <h1>{m.compose_drafts_title()}</h1>
+            <span className="compose-save">{draftCount(state.draftTotal)}</span>
           </div>
           <button
             className="text-button"
             onClick={() => void controller.refresh()}
           >
-            刷新
+            {m.compose_drafts_refresh()}
           </button>
         </header>
         <div className="page-scroll">
           <div className="page-column">
             <p className="group-note">
-              草稿保存在这台电脑的后台，关闭窗口后仍可继续编辑。尚不同步到其他设备。
+              {m.compose_drafts_note()}
             </p>
             {state.drafts.length === 0 ? (
               <div className="empty">
-                <h2>还没有草稿</h2>
-                <p>写到一半的邮件会保留在这里。</p>
+                <h2>{m.compose_drafts_empty_title()}</h2>
+                <p>{m.compose_drafts_empty_body()}</p>
                 <button
                   className="primary-button"
                   onClick={() => void controller.create()}
                 >
-                  写邮件
+                  {m.compose_command_new()}
                 </button>
               </div>
             ) : (
@@ -83,11 +99,12 @@ export function composeModule(
                     onClick={() => void controller.open(d.id)}
                   >
                     <div>
-                      <strong>{d.subject || "（无主题）"}</strong>
+                      <strong>{d.subject || m.compose_draft_no_subject()}</strong>
                       <span>
-                        {d.to.join(", ") || "尚无收件人"} · {d.account}
+                        {d.to.join(", ") || m.compose_draft_no_recipients()} ·{" "}
+                        {d.account}
                       </span>
-                      <p>{d.snippet || "空白草稿"}</p>
+                      <p>{d.snippet || m.compose_draft_empty()}</p>
                     </div>
                     <time
                       dateTime={isoDateTime(d.updated_at)}
@@ -104,7 +121,7 @@ export function composeModule(
                 className="text-button"
                 onClick={() => void controller.moreDrafts()}
               >
-                加载更多草稿
+                {m.compose_drafts_more()}
               </button>
             )}
           </div>
@@ -122,15 +139,34 @@ export function composeModule(
   return {
     moduleId: "maild.compose",
     apiVersion: 1,
-    title: "写信与草稿",
+    // 标题写成 getter：注册表保留访问器，切换语言后按当前语言重新成文。
+    get title() {
+      return m.compose_module_title();
+    },
     views: [
-      { id: COMPOSE_VIEW, title: "写信", role: "compose", render: Workspace },
-      { id: DRAFTS_VIEW, title: "草稿", role: "drafts", render: Drafts },
+      {
+        id: COMPOSE_VIEW,
+        get title() {
+          return m.compose_view_compose();
+        },
+        role: "compose",
+        render: Workspace,
+      },
+      {
+        id: DRAFTS_VIEW,
+        get title() {
+          return m.compose_view_drafts();
+        },
+        role: "drafts",
+        render: Drafts,
+      },
     ],
     commands: [
       {
         id: "maild.compose.new",
-        title: "写邮件",
+        get title() {
+          return m.compose_command_new();
+        },
         icon: "drafts",
         locations: ["navigation"],
         order: 0,
@@ -141,7 +177,9 @@ export function composeModule(
       },
       {
         id: "maild.compose.open-drafts",
-        title: "本机草稿",
+        get title() {
+          return m.compose_drafts_title();
+        },
         icon: "drafts",
         locations: ["navigation"],
         order: 10,
@@ -149,7 +187,9 @@ export function composeModule(
       },
       ...(["reply", "reply_all", "forward"] as const).map((mode, index) => ({
         id: `maild.compose.${mode.replaceAll("_", "-")}`,
-        title: ["回复", "全部回复", "转发"][index]!,
+        get title() {
+          return REPLY_TITLE[mode]();
+        },
         icon: mode === "forward" ? ("forward" as const) : ("reply" as const),
         locations: ["toolbar", "menu"] as const,
         order: 10 + index,
@@ -157,7 +197,7 @@ export function composeModule(
         execute: (context: import("../host/types").CommandContext) => {
           if (context.online && context.selection)
             void controller.reply(context.selection, mode);
-          else host.notify("后台连接不可用。");
+          else host.notify(m.compose_error_offline());
         },
       })),
     ],

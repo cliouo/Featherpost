@@ -1,22 +1,85 @@
+import { m } from "@featherpost/i18n/messages";
+import { useUiLocale } from "@featherpost/i18n/react";
+import { useEffect } from "react";
 import type { Host } from "../../../maild-ui/src/host/host";
 import { useStore } from "../../../maild-ui/src/host/hooks";
 import type { Preferences } from "../../../maild-ui/src/preferences";
+import { Choice } from "../../../maild-ui/src/settings/Choice";
+import {
+  LANGUAGE_OPTIONS,
+  languageChoice,
+  type LanguageChoice,
+  type LanguageController,
+} from "../../../maild-ui/src/settings/language";
 
+// 存消息函数而非文案：每次渲染按当前界面语言取值。
 const themes = [
-  { value: "light", label: "浅色" },
-  { value: "dark", label: "深色" },
-  { value: "system", label: "跟随系统" },
+  { value: "light", label: m.studio_appearance_theme_light },
+  { value: "dark", label: m.studio_appearance_theme_dark },
+  { value: "system", label: m.studio_appearance_theme_system },
 ] as const;
 
-export function Appearance({ host }: { host: Host }) {
+/** ADR-0048：界面语言。偏好归 daemon，所有窗口共用；语言名用其自身语言书写。 */
+function Language({ host, language }: { host: Host; language: LanguageController }) {
+  useUiLocale();
+  const state = useStore(language.store);
+  const online = useStore(host.state).snapshot.phase === "online";
+  useEffect(() => {
+    if (online) void language.load();
+  }, [language, online]);
+  if (!language.available) return null;
+  const choice = languageChoice(state.preference);
+  const locked = state.unsupported || state.preference?.persisted === false;
+  return (
+    <>
+      <div className="studio-appearance-label language-label">
+        <h3 id="studio-language-label">{m.studio_appearance_language_heading()}</h3>
+        <span>
+          {state.unsupported
+            ? m.studio_appearance_language_unavailable()
+            : state.preference?.persisted === false
+              ? m.studio_appearance_language_not_persisted()
+              : m.studio_appearance_language_hint()}
+        </span>
+      </div>
+      <div className="studio-language">
+        <Choice
+          aria-labelledby="studio-language-label"
+          value={choice ?? ""}
+          disabled={state.busy || locked || !online || choice === null}
+          onValueChange={(value) => {
+            if (value === "system" || LANGUAGE_OPTIONS.some((option) => option.value === value))
+              void language.choose(value as LanguageChoice);
+          }}
+        >
+          <option value="system">{m.studio_appearance_language_system()}</option>
+          {LANGUAGE_OPTIONS.map((option) => (
+            <option key={option.value} value={option.value} lang={option.value}>
+              {option.name()}
+            </option>
+          ))}
+          {choice === "custom" && (
+            <option value="custom" disabled>
+              {m.studio_appearance_language_custom({ languages: state.preference!.languages.join(", ") })}
+            </option>
+          )}
+        </Choice>
+        {state.error && <p className="studio-appearance-note" role="alert">{state.error}</p>}
+      </div>
+    </>
+  );
+}
+
+export function Appearance({ host, language }: { host: Host; language?: LanguageController }) {
+  useUiLocale();
   const { preferences } = useStore(host.state);
   const update = (patch: Partial<Preferences>) =>
     host.setPreferences({ ...preferences, ...patch });
   return (
     <section className="studio-appearance">
       <div className="studio-appearance-label">
-        <h3 id="studio-theme-label">主题</h3>
-        <span>当前：{themes.find(theme => theme.value === preferences.theme)?.label}</span>
+        <h3 id="studio-theme-label">{m.studio_appearance_theme_heading()}</h3>
+        <span>{m.studio_appearance_theme_current({ theme: themes.find(theme => theme.value === preferences.theme)?.label() ?? "" })}</span>
       </div>
       <div className="studio-themes" role="group" aria-labelledby="studio-theme-label">
         {themes.map(theme => (
@@ -28,17 +91,17 @@ export function Appearance({ host }: { host: Host }) {
               <span className="studio-mini-list">{[0,1,2,3].map(n => <i key={n} />)}</span>
               <span className="studio-mini-reader"><b />{[0,1,2,3].map(n => <i key={n} />)}</span>
             </span>
-            <span className="studio-theme-label">{theme.label}</span>
+            <span className="studio-theme-label">{theme.label()}</span>
           </label>
         ))}
       </div>
       <div className="studio-appearance-label density-label">
-        <h3 id="studio-density-label">列表密度</h3><span>预览邮件列表的行间距</span>
+        <h3 id="studio-density-label">{m.studio_appearance_density_heading()}</h3><span>{m.studio_appearance_density_hint()}</span>
       </div>
       <div className="studio-density-options" role="group" aria-labelledby="studio-density-label">
         {([
-          { value: "compact", label: "紧凑", copy: "同屏显示更多邮件" },
-          { value: "comfortable", label: "舒适", copy: "保留更宽松的行间距" },
+          { value: "compact", label: m.studio_appearance_density_compact(), copy: m.studio_appearance_density_compact_hint() },
+          { value: "comfortable", label: m.studio_appearance_density_comfortable(), copy: m.studio_appearance_density_comfortable_hint() },
         ] as const).map(density => (
           <label key={density.value} className={`studio-density-option ${density.value}${preferences.density === density.value ? " selected" : ""}`}>
             <span className="studio-density-copy">
@@ -55,7 +118,8 @@ export function Appearance({ host }: { host: Host }) {
           </label>
         ))}
       </div>
-      <p className="studio-appearance-note">✓ 主题与密度会保留到下次打开窗口</p>
+      {language && <Language host={host} language={language} />}
+      <p className="studio-appearance-note">✓ {m.studio_appearance_persist_note()}</p>
     </section>
   );
 }

@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { applyEffectiveLocales } from '@featherpost/i18n';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import { ContributionRegistry } from '../src/host/registry';
 import type { Contributions } from '../src/host/types';
@@ -125,5 +126,45 @@ describe('ContributionRegistry（ADR-0031 决策 5）', () => {
     (bundle.commands as unknown as { id: string }[])[0].id = 'evil.id';
     expect(registry.findCommand('maild.mailbox.refresh')).toBeDefined();
     expect(registry.findCommand('evil.id')).toBeUndefined();
+  });
+});
+
+describe('贡献标题与诊断随界面语言（ADR-0048 决策 8）', () => {
+  afterEach(() => {
+    applyEffectiveLocales([]);
+  });
+
+  it('标题写成 getter 时注册表保留访问器，快照随语言重新成文', () => {
+    const registry = new ContributionRegistry<View>();
+    let lang = 'zh';
+    registry.register({
+      ...mailbox(),
+      get title() {
+        return lang === 'zh' ? '邮箱' : 'Mailbox';
+      },
+      views: [
+        {
+          id: 'maild.mailbox.workspace',
+          get title() {
+            return lang === 'zh' ? '邮件' : 'Mail';
+          },
+          role: 'mailbox',
+          render: view('mailbox'),
+        },
+      ],
+    });
+    expect(registry.getSnapshot().modules[0].title).toBe('邮箱');
+    lang = 'en';
+    expect(registry.getSnapshot().modules[0].title).toBe('Mailbox');
+    expect(registry.findView('maild.mailbox.workspace')?.title).toBe('Mail');
+  });
+
+  it('校验失败的说明按当前语言成文', () => {
+    const registry = new ContributionRegistry<View>();
+    registry.register(mailbox());
+    applyEffectiveLocales(['en']);
+    expect(() => registry.register(mailbox())).toThrow('Module already registered: maild.mailbox');
+    applyEffectiveLocales([]);
+    expect(() => registry.register(mailbox())).toThrow('模块已注册: maild.mailbox');
   });
 });

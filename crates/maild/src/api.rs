@@ -35,11 +35,12 @@ use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::accounts::Accounts;
 use crate::events::{
-    AccountState, AccountStateInfo, AgentLifecycleEvents, FrontendIntentQueued, MailFiltered,
-    MailMessage,
+    AccountState, AccountStateInfo, AgentLifecycleEvents, FrontendIntentQueued,
+    LocalePreferenceChanged, MailFiltered, MailMessage,
 };
 use crate::frontend::is_builtin_frontend;
 use crate::loader::plugin_config;
+use crate::locale_preference::{LocalePreference, LocalePreferenceRequest, SetError};
 use crate::notify::{NotificationAvailability, Notifier};
 use crate::plugin_identity::{
     IdentitySeam, PluginKind, Principal, RotateError, SharedPrincipal, VerifyError,
@@ -584,6 +585,11 @@ enum MethodPolicy {
 fn method_policy(method: &str) -> MethodPolicy {
     match method {
         "authenticate" | "whoami" | "getAgentInfo" => MethodPolicy::Open,
+        // ADR-0048 决策 2：语言偏好不敏感，后台插件也可能要按用户语言渲染自己的文字，
+        // 与 `getAgentInfo` 同级；改偏好与 setSettings / setReadingPolicy 同属应用级开关域，
+        // 不新增授权词。
+        "getLocalePreference" => MethodPolicy::Open,
+        "setLocalePreference" => MethodPolicy::Capability("settings_write"),
         "listAccounts" | "listFolders" | "listMessageSummaries" | "listMessages"
         | "getMessage" | "searchMessages" | "getThread" | "getSearchIndexStatus" => {
             // 换一个检索维度不构成新的权限面：读到的是 `listMessages` 已经能读的同一批
@@ -822,6 +828,8 @@ pub async fn dispatch_with_session(
         "readAttachment" => read_attachment(ctx, &request.params).await,
         "getReadingPolicy" => get_reading_policy(ctx).await,
         "setReadingPolicy" => set_reading_policy(ctx, &request.params).await,
+        "getLocalePreference" => get_locale_preference(ctx, &request.params).await,
+        "setLocalePreference" => set_locale_preference(ctx, &request.params).await,
         "searchMessages" => search_messages(ctx, &request.params).await,
         "getThread" => get_thread(ctx, &request.params).await,
         "getSearchIndexStatus" => search_index_status(ctx, &request.params).await,
@@ -1898,6 +1906,62 @@ async fn set_reading_policy(ctx: &Context, params: &Value) -> HandlerResult {
     Ok(reading_policy_response(&policy, next))
 }
 
+fn locale_preference_unavailable() -> JsonRpcError {
+    JsonRpcError {
+        code: SERVICE_UNAVAILABLE,
+        message: "语言偏好服务未装配（daemon 未以配置文件方式启动）".into(),
+        data: None,
+    }
+}
+
+fn locale_view_response(view: crate::locale_preference::LocaleView) -> HandlerResult {
+    serde_json::to_value(view).map_err(|_| internal("语言偏好序列化失败".into()))
+}
+
+/// `getLocalePreference`：用户的有序语言偏好与解析结果（ADR-0048 决策 2）。`system` 模式下每次
+/// 都重读系统首选语言。
+async fn get_locale_preference(ctx: &Context, params: &Value) -> HandlerResult {
+    require_empty_params(params)?;
+    let preference = ctx
+        .get::<LocalePreference>()
+        .ok_or_else(locale_preference_unavailable)?;
+    locale_view_response(preference.view())
+}
+
+/// `setLocalePreference`：整包替换；任一项非法 `-32602` 不落盘，文件停摆 `-32001` 且不覆盖。
+/// 成功且 `effective` 变化时广播 [`LocalePreferenceChanged`]（→ `preferences/locale` 推送）。
+async fn set_locale_preference(ctx: &Context, params: &Value) -> HandlerResult {
+    let request: LocalePreferenceRequest = serde_json::from_value(params.clone())
+        .map_err(|error| invalid_params(&format!("语言偏好参数无效: {error}")))?;
+    crate::locale_preference::validate_request(&request)
+        .map_err(|reason| invalid_params(&format!("语言偏好参数无效: {reason}")))?;
+    let preference = ctx
+        .get::<LocalePreference>()
+        .ok_or_else(locale_preference_unavailable)?;
+    let before = preference.effective();
+    let view = preference.set(&request).map_err(|error| match error {
+        SetError::Invalid(reason) => invalid_params(&format!("语言偏好参数无效: {reason}")),
+        SetError::Unavailable(reason) => JsonRpcError {
+            code: SERVICE_UNAVAILABLE,
+            message: format!("语言偏好文件停摆，拒绝覆盖: {reason}"),
+            data: None,
+        },
+        SetError::Io(reason) => internal(format!("语言偏好写入失败: {reason}")),
+    })?;
+    if view.effective != before {
+        ctx.emit::<LocalePreferenceChanged>(view.effective.clone());
+    }
+    locale_view_response(view)
+}
+
+/// 进程内读 `effective`（ADR-0048 决策 2）。没有装配偏好服务（纯 store 装配、测试）时回落
+/// [`FALLBACK_LANGUAGE`](crate::locale_preference::FALLBACK_LANGUAGE)，即今天的中文行为。
+fn effective_locales(ctx: &Context) -> Vec<String> {
+    ctx.get::<LocalePreference>()
+        .map(|preference| preference.effective())
+        .unwrap_or_else(|| vec![crate::locale_preference::FALLBACK_LANGUAGE.to_owned()])
+}
+
 // —— 草稿（ADR-0034）——
 
 use crate::drafts::{generate_draft_id, validate_patch, DraftInvalid, DraftPatch};
@@ -2505,12 +2569,28 @@ fn pending_op_summary_json(op: &crate::pending::PendingOp, subject: Option<&str>
     let mut value = pending_op_json(op);
     value.as_object_mut().unwrap().remove("payload");
     value["subject"] = json!(subject);
-    value["detail"] = json!(match op.state {
-        OpState::Failed if op.detail == "用户放弃" => "用户放弃",
-        OpState::Failed => "服务器明确拒绝或重试次数已达上限，请核对账户与目标文件夹。",
-        OpState::Unknown => "未收到最终回执，请先核对目标文件夹。",
-        _ => "",
-    });
+    // ADR-0048 决策 3：摘要的 `detail` 是内核拼的固定句子，另给稳定 `detail_code` 让前端按界面
+    // 语言成文；`detail` 照旧保留，老前端不受影响。
+    // L6：服务器命令失败（`APPEND 失败: …` 等）另给 `server_rejected` 与去掉前缀的服务器原文
+    // `server_detail`（有界脱敏，作为数据展示）；其他失败仍是 `rejected`。
+    let server_text = crate::receive::op_failure_server_text(&op.folder, &op.detail);
+    const REJECTED: &str = "服务器明确拒绝或重试次数已达上限，请核对账户与目标文件夹。";
+    let (detail, code) = match op.state {
+        OpState::Failed if op.detail == "用户放弃" => ("用户放弃", Some("discarded")),
+        OpState::Failed if server_text.is_some() => (REJECTED, Some("server_rejected")),
+        OpState::Failed => (REJECTED, Some("rejected")),
+        OpState::Unknown => ("未收到最终回执，请先核对目标文件夹。", Some("unconfirmed")),
+        _ => ("", None),
+    };
+    value["detail"] = json!(detail);
+    if let Some(code) = code {
+        value["detail_code"] = json!(code);
+        if let Some(text) = server_text.map(crate::probe::sanitize_detail) {
+            if !text.is_empty() {
+                value["server_detail"] = json!(text);
+            }
+        }
+    }
     if op.kind != crate::pending::OpKind::Append {
         if let Ok(payload) = serde_json::from_str::<Value>(&op.payload) {
             for key in ["target", "flag", "value"] {
@@ -3803,10 +3883,10 @@ async fn prepare_reply(ctx: &Context, params: &Value) -> HandlerResult {
         .ok_or_else(|| invalid_params("参数必须是对象"))?;
     if object
         .keys()
-        .any(|key| key != "account" && key != "folder" && key != "uid" && key != "mode")
+        .any(|key| !matches!(key.as_str(), "account" | "folder" | "uid" | "mode" | "locale"))
     {
         return Err(invalid_params(
-            "参数只能包含 `account`、`folder`、`uid` 和 `mode`",
+            "参数只能包含 `account`、`folder`、`uid`、`mode` 和 `locale`",
         ));
     }
     let account = object
@@ -3833,6 +3913,22 @@ async fn prepare_reply(ctx: &Context, params: &Value) -> HandlerResult {
         .and_then(Value::as_str)
         .and_then(compose::DraftMode::parse)
         .ok_or_else(|| invalid_params("`mode` 必须是 reply / reply_all / forward"))?;
+    // ADR-0048 决策 7：引用块是邮件内容的语言，可与界面语言不同。给了 `locale` 就只用它协商，
+    // 否则用偏好的 `effective` 列表；协商不出结果回落中文（即今天的行为）。
+    let locale = match object.get("locale") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(value)) => Some(
+            crate::locale_preference::normalize_tag(value)
+                .map_err(|error| invalid_params(&format!("`locale` 无效：{error}")))?,
+        ),
+        Some(_) => return Err(invalid_params("`locale` 必须是 BCP 47 字符串或 null")),
+    };
+    let quote = &match locale {
+        Some(tag) => maild_l10n::negotiate(&[tag]),
+        None => maild_l10n::negotiate(&effective_locales(ctx)),
+    }
+    .messages()
+    .quote;
 
     let store = ctx.get::<Store>().ok_or_else(|| unavailable("store"))?;
     let lookup = (account.clone(), folder.clone(), uid.clone());
@@ -3854,7 +3950,7 @@ async fn prepare_reply(ctx: &Context, params: &Value) -> HandlerResult {
         .map(|manager| manager.own_addresses(&account))
         .unwrap_or_default();
 
-    let date = compose::attribution_date(original.date_at.unwrap_or(original.received_at));
+    let date = compose::attribution_date(quote, original.date_at.unwrap_or(original.received_at));
     let sender_addresses = compose::extract_addresses(&original.sender);
     let draft = match mode {
         compose::DraftMode::Reply | compose::DraftMode::ReplyAll => {
@@ -3882,7 +3978,7 @@ async fn prepare_reply(ctx: &Context, params: &Value) -> HandlerResult {
                 "to": compose::without_self(to, &mine),
                 "cc": cc,
                 "subject": compose::reply_subject(&original.subject),
-                "body": compose::quote_reply(&original.sender, &date, &original.body),
+                "body": compose::quote_reply(quote, &original.sender, &date, &original.body),
                 "in_reply_to": original.message_id,
                 "references": compose::inherited_references(
                     &original.references,
@@ -3913,6 +4009,7 @@ async fn prepare_reply(ctx: &Context, params: &Value) -> HandlerResult {
                 "cc": [],
                 "subject": compose::forward_subject(&original.subject),
                 "body": compose::quote_forward(
+                    quote,
                     &original.sender,
                     &date,
                     &original.subject,
@@ -4243,6 +4340,7 @@ fn mail_notification(mut msg: MailMessage) -> String {
 fn account_notification(mut info: AccountStateInfo) -> String {
     truncate_utf8(&mut info.account, MAX_PUSH_TEXT_BYTES);
     truncate_utf8(&mut info.detail, MAX_PUSH_TEXT_BYTES);
+    truncate_utf8(&mut info.server_detail, MAX_PUSH_TEXT_BYTES);
     notification(
         "account/state",
         serde_json::to_value(info).unwrap_or(Value::Null),
@@ -4267,6 +4365,11 @@ fn agent_stopping_listener(
             let _ = tx.try_send(line);
         }
     }))
+}
+
+/// ADR-0048：`preferences/locale` 推给所有流式连接（`getLocalePreference` 是 `Open`）。
+fn locale_notification(effective: Vec<String>) -> String {
+    notification("preferences/locale", json!({ "effective": effective }))
 }
 
 fn frontend_intent_notification(principal: &Principal, target: &str) -> Option<String> {
@@ -4416,6 +4519,13 @@ async fn serve_with_shutdown<R, W, F>(
             }
         }))
     };
+    // ADR-0048：语言偏好变化 → 所有流式连接（不按主体过滤，偏好本身对任何主体开放）。
+    let locale_listener = {
+        let tx = tx.clone();
+        ListenerGuard::new(ctx.on_emit::<LocalePreferenceChanged>(move |effective| {
+            let _ = tx.try_send(locale_notification(effective));
+        }))
+    };
     // 用户请求整体停机 → 已认证前端在排空窗口内刷盘草稿、撤下 Dock 图标后自行退出。
     let stopping_listener = agent_stopping_listener(&ctx, tx.clone(), session.shared_principal());
 
@@ -4494,6 +4604,7 @@ async fn serve_with_shutdown<R, W, F>(
     drop(account_listener);
     drop(intent_listener);
     drop(stopping_listener);
+    drop(locale_listener);
     // ADR-0021：连接关闭 → 按属主注销 provider 端点并让其未决调用立即失败。
     if let Some((plugin_id, endpoint)) = session.take_registered() {
         let removed = ctx
@@ -5213,6 +5324,61 @@ mod tests {
     use cordis::FiberState;
     use serde_json::json;
 
+    /// ADR-0048 决策 3：写队列摘要的固定说明带稳定 code，服务器原文不进摘要。
+    #[test]
+    fn pending_op_summaries_carry_a_stable_detail_code() {
+        use crate::pending::{OpKind, OpState, PendingOp};
+        let op = |state, detail: &str| PendingOp {
+            id: 1,
+            account: "demo".into(),
+            folder_id: 1,
+            folder: "INBOX".into(),
+            uid: "7".into(),
+            kind: OpKind::Move,
+            payload: r#"{"target":"Archive"}"#.into(),
+            state,
+            attempts: 3,
+            created_at: 1,
+            updated_at: 1,
+            detail: detail.into(),
+        };
+        for (state, detail, code) in [
+            (OpState::Failed, "用户放弃", Some("discarded")),
+            (OpState::Failed, "NO [TRYCREATE] 文件夹不存在", Some("rejected")),
+            (OpState::Unknown, "连接中断", Some("unconfirmed")),
+            (OpState::Pending, "", None),
+        ] {
+            let summary = pending_op_summary_json(&op(state, detail), None);
+            assert_eq!(summary.get("detail_code").and_then(Value::as_str), code, "{summary}");
+            assert!(!summary["detail"].as_str().unwrap().contains("TRYCREATE"));
+            assert!(summary.get("server_detail").is_none(), "{summary}");
+        }
+        assert!(pending_op_json(&op(OpState::Failed, "x")).get("detail_code").is_none());
+
+        // ADR-0048 L6：收信循环写下的服务器命令失败给 `server_rejected` 与去掉前缀的原文；
+        // `detail` 仍是老前端看到的固定句子。
+        for (state, detail, code, server) in [
+            (OpState::Failed, "APPEND 失败: No Response: [TRYCREATE] gone", "server_rejected", "No Response: [TRYCREATE] gone"),
+            (OpState::Failed, "STORE 失败: Bad Response: bad flag", "server_rejected", "Bad Response: bad flag"),
+            (OpState::Failed, "MOVE 失败: No Response: quota", "server_rejected", "No Response: quota"),
+            (OpState::Failed, "COPY 失败: No Response: quota", "server_rejected", "No Response: quota"),
+            (OpState::Failed, "SELECT INBOX 失败: No Response: missing", "server_rejected", "No Response: missing"),
+            (OpState::Unknown, "COPY 已成功但标记删除失败: connection lost", "unconfirmed", "connection lost"),
+        ] {
+            let summary = pending_op_summary_json(&op(state, detail), None);
+            assert_eq!(summary["detail_code"], code, "{summary}");
+            assert_eq!(summary["server_detail"], server, "{summary}");
+            assert!(!summary["detail"].as_str().unwrap().contains(server), "{summary}");
+        }
+        // 文件夹名不同的 SELECT 前缀不是这个 op 的服务器失败。
+        let other = pending_op_summary_json(&op(OpState::Failed, "SELECT Other 失败: x"), None);
+        assert_eq!(other["detail_code"], "rejected");
+        assert_eq!(
+            pending_op_summary_json(&op(OpState::Failed, "APPEND 失败: No"), None)["detail"],
+            "服务器明确拒绝或重试次数已达上限，请核对账户与目标文件夹。"
+        );
+    }
+
     #[test]
     fn method_policy_table_pins_every_dispatched_method() {
         use MethodPolicy::{Capability, Open, UserOnly};
@@ -5220,6 +5386,9 @@ mod tests {
             ("authenticate", Open),
             ("whoami", Open),
             ("getAgentInfo", Open),
+            // ADR-0048 决策 2：读偏好任何主体可用；写偏好与 setSettings 同域，不新增授权词。
+            ("getLocalePreference", Open),
+            ("setLocalePreference", Capability("settings_write")),
             ("listAccounts", Capability("messages_read")),
             ("listFolders", Capability("messages_read")),
             // ADR-0030 决策 4：信箱写回有自己的词，既不是 messages_read 也不是 messages_send。
@@ -6373,6 +6542,109 @@ mod tests {
         assert_eq!(missing.error.unwrap().code, MESSAGE_NOT_FOUND);
     }
 
+    /// ADR-0048 决策 7：引用块语言 = `locale` 协商，缺省用 `effective` 协商；主题前缀与语言无关。
+    #[tokio::test(flavor = "current_thread")]
+    async fn prepare_reply_quote_language_follows_locale_then_effective() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = Context::new();
+        let store = Arc::new(Store::open("").unwrap());
+        store
+            .upsert_folder("a", "INBOX", "INBOX", Some(FolderRole::Inbox))
+            .unwrap();
+        store
+            .insert_message(&MailMessage {
+                account: "a".into(),
+                uid: "7".into(),
+                sender: "Alice <alice@example.test>".into(),
+                recipient: "me@example.test".into(),
+                subject: "答复: Weekly".into(),
+                body: "line".into(),
+                // < 1971：引用日期回退 RFC 5322，与时区、语言无关，断言才能逐字节。
+                received_at: 1234,
+                date_at: Some(1234),
+                folder: "INBOX".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        ctx.provide::<Store>(store);
+        let draft = |params: Value| {
+            let ctx = ctx.clone();
+            async move {
+                dispatch(&ctx, &request("prepareReply", params, json!(1)))
+                    .await
+                    .result
+                    .expect("成功")["draft"]
+                    .clone()
+            }
+        };
+        let date = crate::compose::rfc5322_date(1234);
+
+        // 没有偏好服务：回落 zh-Hans，与今天逐字节一致。
+        let reply = draft(json!({ "account": "a", "uid": "7", "mode": "reply" })).await;
+        assert_eq!(
+            reply["body"],
+            format!("\n\n在 {date}，Alice <alice@example.test> 写道：\n> line")
+        );
+
+        // 显式 `locale`：英文引用行；主题前缀仍是 `Re:`，中文前缀照样被剥掉。
+        let reply = draft(json!({ "account": "a", "uid": "7", "mode": "reply", "locale": "EN-gb" })).await;
+        assert_eq!(reply["subject"], "Re: Weekly");
+        assert_eq!(
+            reply["body"],
+            format!("\n\nOn {date}, Alice <alice@example.test> wrote:\n> line")
+        );
+        let forward =
+            draft(json!({ "account": "a", "uid": "7", "mode": "forward", "locale": "en" })).await;
+        assert_eq!(forward["subject"], "Fwd: Weekly");
+        assert_eq!(
+            forward["body"],
+            format!(
+                "\n\n---------- Forwarded message ----------\n\
+                 From: Alice <alice@example.test>\nDate: {date}\nSubject: 答复: Weekly\n\
+                 To: me@example.test\n\nline"
+            )
+        );
+
+        // 偏好的 `effective` 为英文首选：不带 `locale` 也是英文；`locale` 优先于 `effective`；
+        // `null` 等于缺省；内核不支持的语言（含繁体）协商回落中文。
+        ctx.provide::<LocalePreference>(Arc::new(LocalePreference::open_with_system(
+            dir.path().join(crate::locale_preference::PREFERENCE_FILE),
+            || vec!["en-US".into(), "zh-Hans-CN".into()],
+        )));
+        for (locale, english) in [
+            (None, true),
+            (Some(Value::Null), true),
+            (Some(json!("zh-CN")), false),
+            (Some(json!("zh-Hant-TW")), false),
+            (Some(json!("ja")), false),
+        ] {
+            let mut params = json!({ "account": "a", "uid": "7", "mode": "reply" });
+            if let Some(locale) = locale.clone() {
+                params["locale"] = locale;
+            }
+            let body = draft(params).await["body"].as_str().unwrap().to_owned();
+            assert_eq!(body.contains(" wrote:"), english, "{locale:?}: {body}");
+            assert_eq!(body.contains("写道："), !english, "{locale:?}: {body}");
+        }
+
+        for locale in [json!(""), json!("not a tag"), json!("x".repeat(36)), json!(5), json!(["en"])] {
+            let response = dispatch(
+                &ctx,
+                &request(
+                    "prepareReply",
+                    json!({ "account": "a", "uid": "7", "mode": "reply", "locale": locale }),
+                    json!(2),
+                ),
+            )
+            .await;
+            assert_eq!(response.error.unwrap().code, INVALID_PARAMS, "{locale}");
+        }
+        assert!(
+            !dir.path().join(crate::locale_preference::PREFERENCE_FILE).exists(),
+            "prepareReply 只读偏好"
+        );
+    }
+
     /// ADR-0034：草稿的参数面也要「拼错就报错」。自动保存每隔几秒发一次，
     /// 一个被静默忽略的字段名意味着用户看着「已保存」而内容其实没存。
     #[tokio::test(flavor = "current_thread")]
@@ -6949,6 +7221,213 @@ mod tests {
         }
     }
 
+    fn locale_ctx(dir: &std::path::Path) -> Context {
+        let ctx = Context::new();
+        ctx.provide::<LocalePreference>(Arc::new(LocalePreference::open_with_system(
+            dir.join(crate::locale_preference::PREFERENCE_FILE),
+            || vec!["en-US".into(), "zh-Hans-CN".into()],
+        )));
+        ctx
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn locale_preference_is_validated_as_a_whole_and_reports_persistence() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(crate::locale_preference::PREFERENCE_FILE);
+        let ctx = locale_ctx(dir.path());
+        let result = dispatch(&ctx, &request("getLocalePreference", json!({}), json!(1)))
+            .await
+            .result
+            .expect("成功");
+        assert_eq!(
+            result,
+            json!({
+                "preference": { "mode": "system", "languages": [] },
+                "effective": ["en-US", "zh-Hans-CN"],
+                "persisted": true
+            })
+        );
+        assert!(!path.exists(), "只读从不落盘");
+        let error = dispatch(&ctx, &request("getLocalePreference", json!({ "x": 1 }), json!(1)))
+            .await
+            .error
+            .unwrap();
+        assert_eq!(error.code, INVALID_PARAMS);
+
+        let nine = json!(["en", "fr", "de", "ja", "ko", "es", "it", "pt", "ru"]);
+        for params in [
+            json!({}),
+            json!({ "mode": "auto" }),
+            json!({ "mode": "explicit" }),
+            json!({ "mode": "explicit", "languages": [] }),
+            json!({ "mode": "explicit", "languages": ["en", "not a tag"] }),
+            json!({ "mode": "explicit", "languages": ["en_US"] }),
+            json!({ "mode": "explicit", "languages": ["en-abcdefgh-abcdefgh-abcdefgh-abcdef"] }),
+            json!({ "mode": "explicit", "languages": nine }),
+            json!({ "mode": "explicit", "languages": "en" }),
+            json!({ "mode": "explicit", "languages": [1] }),
+            json!({ "mode": "system", "languages": ["en"] }),
+            json!({ "mode": "system", "languages": [] }),
+            json!({ "mode": "system", "extra": true }),
+            json!({ "mode": "explicit", "languages": ["en"], "lang": "en" }),
+            Value::Null,
+        ] {
+            let error = dispatch(&ctx, &request("setLocalePreference", params.clone(), json!(2)))
+                .await
+                .error
+                .unwrap_or_else(|| panic!("{params} 应被拒绝"));
+            assert_eq!(error.code, INVALID_PARAMS, "{params}");
+        }
+        assert!(!path.exists(), "整包拒绝不落盘");
+
+        let result = dispatch(
+            &ctx,
+            &request("setLocalePreference", json!({ "mode": "explicit", "languages": ["EN", "zh-hans", "en"] }), json!(3)),
+        )
+        .await
+        .result
+        .expect("成功");
+        assert_eq!(
+            result,
+            json!({
+                "preference": { "mode": "explicit", "languages": ["en", "zh-Hans"] },
+                "effective": ["en", "zh-Hans"],
+                "persisted": true
+            })
+        );
+        assert!(path.exists());
+        assert_eq!(
+            dispatch(&ctx, &request("getLocalePreference", json!({}), json!(4)))
+                .await
+                .result
+                .unwrap(),
+            result,
+            "成功应答与 get 同形"
+        );
+
+        // 服务未装配：合法参数 -32001；非法参数仍先 -32602。
+        let bare = Context::new();
+        for (method, params) in [
+            ("getLocalePreference", json!({})),
+            ("setLocalePreference", json!({ "mode": "system" })),
+        ] {
+            let error = dispatch(&bare, &request(method, params, json!(5))).await.error.unwrap();
+            assert_eq!(error.code, SERVICE_UNAVAILABLE, "{method}");
+        }
+        let error = dispatch(&bare, &request("setLocalePreference", json!({ "mode": "bad" }), json!(6)))
+            .await
+            .error
+            .unwrap();
+        assert_eq!(error.code, INVALID_PARAMS);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn stalled_locale_preference_reads_default_and_refuses_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(crate::locale_preference::PREFERENCE_FILE);
+        std::fs::write(&path, "format_version = 9\nmode = \"system\"\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let ctx = locale_ctx(dir.path());
+        let result = dispatch(&ctx, &request("getLocalePreference", json!({}), json!(1)))
+            .await
+            .result
+            .unwrap();
+        assert_eq!(result["preference"]["mode"], "system");
+        assert_eq!(result["effective"], json!(["en-US", "zh-Hans-CN"]));
+        assert_eq!(result["persisted"], false);
+        let error = dispatch(
+            &ctx,
+            &request("setLocalePreference", json!({ "mode": "explicit", "languages": ["en"] }), json!(2)),
+        )
+        .await
+        .error
+        .unwrap();
+        assert_eq!(error.code, SERVICE_UNAVAILABLE);
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "format_version = 9\nmode = \"system\"\n",
+            "停摆文件不得被覆盖"
+        );
+    }
+
+    /// `setLocalePreference` 成功后，所有流式连接（含发起者与未认证会话）都收到 `preferences/locale`；
+    /// `effective` 没变的写入不再推送。
+    #[tokio::test(flavor = "current_thread")]
+    async fn locale_preference_push_reaches_every_streaming_connection() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = locale_ctx(dir.path());
+
+        let (watcher, server) = tokio::io::duplex(64 * 1024);
+        let (read, write) = tokio::io::split(server);
+        let watcher_task = tokio::spawn(serve(ctx.clone(), BufReader::new(read), write));
+        let (setter, server) = tokio::io::duplex(64 * 1024);
+        let (read, write) = tokio::io::split(server);
+        let setter_task = tokio::spawn(serve(ctx.clone(), BufReader::new(read), write));
+        tokio::task::yield_now().await;
+
+        let (setter_read, mut setter_write) = tokio::io::split(setter);
+        let mut setter_lines = BufReader::new(setter_read).lines();
+        let mut watcher_lines = BufReader::new(watcher).lines();
+        async fn next<R: AsyncBufRead + Unpin>(lines: &mut tokio::io::Lines<R>) -> Value {
+            let line = tokio::time::timeout(Duration::from_secs(1), lines.next_line())
+                .await
+                .expect("帧应到达")
+                .unwrap()
+                .unwrap();
+            serde_json::from_str(&line).unwrap()
+        }
+
+        let set = |id: u64, params: Value| {
+            format!(
+                "{}\n",
+                json!({ "jsonrpc": "2.0", "id": id, "method": "setLocalePreference", "params": params })
+            )
+        };
+        setter_write
+            .write_all(set(1, json!({ "mode": "explicit", "languages": ["fr", "en"] })).as_bytes())
+            .await
+            .unwrap();
+
+        let expected = json!({
+            "jsonrpc": "2.0",
+            "method": "preferences/locale",
+            "params": { "effective": ["fr", "en"] }
+        });
+        assert_eq!(next(&mut watcher_lines).await, expected);
+        let mut setter_frames = [next(&mut setter_lines).await, next(&mut setter_lines).await];
+        setter_frames.sort_by_key(|frame| frame.get("id").is_some());
+        assert_eq!(setter_frames[0], expected);
+        assert_eq!(setter_frames[1]["id"], 1);
+        assert_eq!(setter_frames[1]["result"]["effective"], json!(["fr", "en"]));
+
+        // 同一结果再写一次：应答照常，不推送；随后切回 system 再推一次。
+        setter_write
+            .write_all(set(2, json!({ "mode": "explicit", "languages": ["FR", "en"] })).as_bytes())
+            .await
+            .unwrap();
+        let reply = next(&mut setter_lines).await;
+        assert_eq!(reply["id"], 2, "effective 未变不推送: {reply}");
+        setter_write
+            .write_all(set(3, json!({ "mode": "system" })).as_bytes())
+            .await
+            .unwrap();
+        assert_eq!(
+            next(&mut watcher_lines).await["params"],
+            json!({ "effective": ["en-US", "zh-Hans-CN"] }),
+            "watcher 的下一帧就是切回 system 的推送"
+        );
+
+        drop(setter_write);
+        drop(setter_lines);
+        drop(watcher_lines);
+        let _ = tokio::time::timeout(Duration::from_secs(1), setter_task).await;
+        let _ = tokio::time::timeout(Duration::from_secs(1), watcher_task).await;
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn oversized_get_message_is_bounded_not_truncated() {
         let ctx = Context::new();
@@ -7136,11 +7615,10 @@ mod tests {
         tokio::task::yield_now().await;
 
         ctx.emit::<FrontendIntentQueued>(maild_brand::BUNDLED_FRONTEND_ID.into());
-        ctx.emit::<AccountState>(AccountStateInfo {
-            account: "marker".into(),
-            state: crate::events::AccountStateKind::Online,
-            detail: String::new(),
-        });
+        ctx.emit::<AccountState>(AccountStateInfo::plain(
+            "marker",
+            crate::events::AccountStateKind::Online,
+        ));
         let mut lines = BufReader::new(client).lines();
         let first = tokio::time::timeout(Duration::from_secs(1), lines.next_line())
             .await

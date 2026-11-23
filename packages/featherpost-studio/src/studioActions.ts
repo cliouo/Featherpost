@@ -1,3 +1,4 @@
+import { m } from "@featherpost/i18n/messages";
 import { createContext, useContext } from "react";
 
 /** Shell-owned actions that menus deep in the view tree need. */
@@ -18,12 +19,12 @@ export function clipboardCopier(notify: (text: string) => void) {
   return (text: string, what: string) => {
     const clipboard = globalThis.navigator?.clipboard;
     if (!clipboard) {
-      notify("无法访问剪贴板");
+      notify(m.studio_menu_clipboard_unavailable());
       return;
     }
     clipboard.writeText(text).then(
-      () => notify(`已复制${what}`),
-      () => notify("无法写入剪贴板"),
+      () => notify(m.studio_menu_copied({ what })),
+      () => notify(m.studio_menu_clipboard_failed()),
     );
   };
 }

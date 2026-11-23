@@ -75,7 +75,8 @@ export interface ComposeBridge {
   draft(id: string): Promise<Draft>;
   create(account: string, patch: Patch): Promise<Draft>;
   save(id: string, version: number, patch: Patch): Promise<Draft>;
-  reply(identity: MessageIdentity, mode: ReplyMode): Promise<Draft>;
+  /** `locale`：引用块语言（ADR-0048 决策 7），首版传界面语言；旧后台不认识时桥去掉它重试。 */
+  reply(identity: MessageIdentity, mode: ReplyMode, locale?: string): Promise<Draft>;
   send(id: string, version: number): Promise<Draft>;
   resolve(id: string, version: number): Promise<Draft>;
   discard(id: string, version: number): Promise<void>;

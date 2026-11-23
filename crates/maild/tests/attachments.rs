@@ -3,6 +3,8 @@
 //! 真 daemon + 预置 SQLite。钉住的性质：声明 `messages_read` 的前端主体能跨块取回大附件且字节
 //! 逐一相等；四元组任一元不匹配都拒绝且三种「拿不到」可区分；策略是 daemon 状态——重启后仍在、
 //! 换主体读到同一结论；只声明 `message` 路由的前端改不了策略；损坏的策略文件不被覆盖。
+//! 末尾一条钉住 ADR-0048 的语言偏好：同为 daemon 状态，任何主体可读、`settings_write` 才能改、
+//! 改动推给其他主体的长连接。
 //!
 //! 与 ADR-0030 的验收同一姿态：这里断言的是**协议契约**，不是沙箱。内核不知道渲染层实际加载了
 //! 什么，`remote_content` 是结论，执行它是 M4.5-04 的事。
@@ -670,5 +672,90 @@ async fn a_corrupt_policy_file_stalls_to_defaults_and_is_never_overwritten() {
         .unwrap();
     assert_eq!(inline.bytes, b"png!");
 
+    stop_daemon(task, shutdown).await;
+}
+
+/// ADR-0048 决策 1/2：语言偏好同样是 daemon 状态。`getLocalePreference` 对任何主体开放；改偏好要
+/// `settings_write`；改动经 `preferences/locale` 推给其他主体的长连接。
+#[tokio::test(flavor = "current_thread")]
+async fn the_locale_preference_is_daemon_state_pushed_to_every_stream() {
+    use_memory_credential_store();
+    let root = tempfile::tempdir().unwrap();
+    let paths = test_paths(root.path());
+    write_config(&paths);
+    install_frontend(&paths, "reader.fixture", "\"message\"");
+    install_frontend(&paths, "settings.fixture", "\"message\", \"settings\"");
+    let (mut task, shutdown) = spawn_daemon(&paths);
+    let socket = paths.runtime_dir.join("mail.sock");
+    wait_socket_or_fail(&mut task, &socket).await;
+    let client = unix_client(&socket);
+    let mut reader = frontend_connection(&client, "reader.fixture").await;
+    let mut settings = frontend_connection(&client, "settings.fixture").await;
+    let preference_file = paths.config_dir.join("locale_preference.toml");
+
+    // 缺省 system：effective 来自真实系统值，只断言非空；文件尚未创建。
+    let current = client.locale_preference().await.unwrap();
+    assert_eq!(current.preference.mode, "system");
+    assert!(current.preference.languages.is_empty());
+    assert!(!current.effective.is_empty(), "effective 永不为空");
+    assert!(current.persisted);
+    assert!(!preference_file.exists(), "只读从不落盘");
+
+    // 只声明 `message` 路由的前端：能读（Open），不能改。
+    let read = call_on(&mut reader, "getLocalePreference", serde_json::json!({}))
+        .await
+        .expect("任何主体可读语言偏好");
+    assert_eq!(read["preference"]["mode"], "system");
+    assert_eq!(
+        code_of(
+            call_on(
+                &mut reader,
+                "setLocalePreference",
+                serde_json::json!({ "mode": "explicit", "languages": ["en"] })
+            )
+            .await,
+            "reader 改语言偏好"
+        ),
+        -32016
+    );
+
+    let updated = call_on(
+        &mut settings,
+        "setLocalePreference",
+        serde_json::json!({ "mode": "explicit", "languages": ["EN-gb", "zh-hans"] }),
+    )
+    .await
+    .expect("settings_write 可改语言偏好");
+    assert_eq!(updated["effective"], serde_json::json!(["en-GB", "zh-Hans"]));
+    assert!(preference_file.exists(), "首次写入才创建");
+
+    // 另一个主体的长连接收到推送。
+    let pushed = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let maild_client::Incoming::Notification(notification) =
+                reader.next_incoming().await.expect("连接仍在")
+            {
+                if let Some(changed) = notification.locale_preference_changed() {
+                    return changed.expect("推送参数合法");
+                }
+            }
+        }
+    })
+    .await
+    .expect("preferences/locale 应送达");
+    assert_eq!(pushed.effective, ["en-GB", "zh-Hans"]);
+
+    // 共享 client 的 typed 调用读到同一份。
+    let current = client.locale_preference().await.unwrap();
+    assert_eq!(current.preference.mode, "explicit");
+    assert_eq!(current.effective, ["en-GB", "zh-Hans"]);
+    let reset = client
+        .set_locale_preference(&maild_client::LocalePreferenceUpdate::system())
+        .await
+        .unwrap();
+    assert_eq!(reset.preference.mode, "system");
+
+    drop(reader);
+    drop(settings);
     stop_daemon(task, shutdown).await;
 }

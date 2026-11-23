@@ -642,6 +642,94 @@ fn silent_keywords_and_quiet_hours_apply_to_new_mail() {
     assert!(sent(&ctx).is_empty());
 }
 
+/// ADR-0048 决策 6：通知在**成文时**按 daemon 的语言偏好协商；切换偏好后下一条即跟随，
+/// 用户自定义的 OTP 标题原样保留。
+#[test]
+fn notifications_follow_locale_preference_at_compose_time() {
+    use maild::locale_preference::{LocaleMode, LocalePreference, LocalePreferenceRequest};
+
+    let dir = tempfile::tempdir().unwrap();
+    let preference = Arc::new(LocalePreference::open_with_system(
+        dir.path().join("locale_preference.toml"),
+        || vec!["en-US".to_string()],
+    ));
+    // show_sensitive 缺省打开：验证码不被静默；新邮件用无主题信验证占位文案。
+    let ctx = notify_ctx(enabled(), true);
+    ctx.provide::<LocalePreference>(preference.clone());
+    let untitled = |uid: &str| MailMessage {
+        subject: " ".into(),
+        ..mail("personal", uid)
+    };
+
+    // system 模式 → 系统首选 en-US → 英文。
+    ctx.emit::<MailFiltered>(untitled("l1"));
+    let otp_mail = |uid: &str| MailMessage {
+        subject: "登录验证码".into(),
+        body: "你的验证码是 246810，5 分钟内有效。".into(),
+        ..mail("personal", uid)
+    };
+    ctx.emit::<MailFiltered>(otp_mail("l2"));
+    let english = sent(&ctx);
+    assert_eq!(english.len(), 2, "{english:?}");
+    assert_eq!(english[0].title, "张三", "发件人是用户数据，原样显示");
+    assert!(
+        english[0].body.starts_with("(No Subject) "),
+        "{:?}",
+        english[0].body
+    );
+    assert_eq!(english[1].title, "Verification Code");
+    assert_eq!(
+        english[1].body,
+        "246810 (personal · from \"张三\" <zhang@example.com>)"
+    );
+
+    // 显式切到简体中文：不重启、不重装插件，下一条通知即为中文。
+    preference
+        .set(&LocalePreferenceRequest {
+            mode: LocaleMode::Explicit,
+            languages: Some(vec!["zh-Hans-CN".into(), "en".into()]),
+        })
+        .unwrap();
+    ctx.emit::<MailFiltered>(untitled("l3"));
+    ctx.emit::<MailFiltered>(otp_mail("l4"));
+    let all = sent(&ctx);
+    assert_eq!(all.len(), 4, "{all:?}");
+    assert_eq!(all[2].title, "张三");
+    assert!(all[2].body.starts_with("（无主题） "), "{:?}", all[2].body);
+    assert_eq!(all[3].title, "验证码");
+    assert_eq!(
+        all[3].body,
+        "246810（personal · 来自 \"张三\" <zhang@example.com>）"
+    );
+}
+
+#[test]
+fn custom_otp_title_survives_locale_switch() {
+    use maild::locale_preference::LocalePreference;
+
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = Context::new();
+    ctx.provide::<Store>(Arc::new(Store::open("").unwrap()));
+    ctx.provide::<Notifier>(Arc::new(Notifier::new("dev-log").unwrap()));
+    ctx.provide::<NotifyConfig>(Arc::new(NotifyConfig::default()));
+    ctx.provide::<LocalePreference>(Arc::new(LocalePreference::open_with_system(
+        dir.path().join("locale_preference.toml"),
+        || vec!["en".to_string()],
+    )));
+    ctx.provide::<OtpConfig>(Arc::new(
+        toml::from_str::<OtpConfig>("title = \"登录码\"\n").unwrap(),
+    ));
+    ctx.plugin(Arc::new(OtpPlugin));
+    ctx.emit::<MailFiltered>(MailMessage {
+        body: "Your verification code is 135790".into(),
+        ..mail("personal", "c1")
+    });
+    let sent = sent(&ctx);
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert_eq!(sent[0].title, "登录码", "用户写的标题原样保留");
+    assert!(sent[0].body.starts_with("135790 (personal · from "));
+}
+
 #[test]
 fn burst_of_ten_mails_is_merged() {
     let ctx = notify_ctx(enabled(), true);
