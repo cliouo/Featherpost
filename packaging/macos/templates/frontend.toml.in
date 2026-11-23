@@ -1,12 +1,13 @@
 # Bundled recovery copy of the default Tauri frontend (ADR-0039). Rendered by build-bundle.sh
 # from packaging/macos/brand.env (generated from brand.toml); never edit the rendered copy.
 # The Agent preinstalls it once and native recovery reinstalls it on explicit request.
-# Routes and permissions must stay identical to crates/maild-ui/package/frontend.toml
+# Routes, permissions and description/l10n must stay identical to crates/maild-ui/package/frontend.toml
 # (enforced by the recovery tests); only lifecycle/launch differ from the dev manifest.
-schema_version = 2
+schema_version = 3
 protocol_version = 1
 id = "__BRAND_UI_BUNDLE_ID__"
 name = "__BRAND_PRODUCT_NAME__"
+description = "Read, write and organize your mail"
 version = "__BRAND_BUNDLE_SHORT_VERSION__"
 lifecycle = "on_demand"
 capabilities = ["inbox", "message", "compose", "settings", "background"]
@@ -23,3 +24,7 @@ permissions = [
 [launch]
 kind = "macos_application"
 path = "__BRAND_UI_BUNDLE__"
+
+# ADR-0048 决策 5：任何前端的设置页与安装预览都按自己的界面语言挑一条显示，缺省用顶层 description。
+[l10n."zh-Hans"]
+description = "阅读、撰写和整理邮件"

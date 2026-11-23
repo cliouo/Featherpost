@@ -16,14 +16,14 @@ use maild_paths::AppPaths;
 #[command(
     name = "backup",
     bin_name = format!("{} backup", maild_brand::CLI_DAEMON),
-    about = format!("创建经过校验的 {} SQLite 在线备份", maild_brand::PRODUCT_NAME)
+    about = format!("Create a verified online backup of the {} SQLite database", maild_brand::PRODUCT_NAME)
 )]
 struct BackupArgs {
-    /// 现有 SQLite 数据库文件
+    /// Existing SQLite database file.
     #[arg(long, value_name = "SOURCE.sqlite3")]
     database: PathBuf,
 
-    /// 必须尚不存在的备份文件路径
+    /// Backup file path; must not exist yet.
     #[arg(long, value_name = "DEST.sqlite3")]
     output: PathBuf,
 }
@@ -32,18 +32,18 @@ struct BackupArgs {
 #[command(
     name = "restore",
     bin_name = format!("{} restore", maild_brand::CLI_DAEMON),
-    about = format!("在维护锁保护下恢复经过校验的 {} SQLite 备份", maild_brand::PRODUCT_NAME)
+    about = format!("Restore a verified {} SQLite backup under the maintenance lock", maild_brand::PRODUCT_NAME)
 )]
 struct RestoreArgs {
-    /// 必须停止使用的现有 SQLite 数据库
+    /// Existing SQLite database; nothing may be using it.
     #[arg(long, value_name = "CURRENT.sqlite3")]
     database: PathBuf,
 
-    /// 经过校验后将替换当前数据库的备份文件
+    /// Backup file that replaces the current database after verification.
     #[arg(long, value_name = "BACKUP.sqlite3")]
     input: PathBuf,
 
-    /// 必须尚不存在；恢复前保存当前数据库的完整回滚快照
+    /// Full rollback snapshot of the current database, written before restoring; must not exist yet.
     #[arg(long, value_name = "ROLLBACK.sqlite3")]
     rollback: PathBuf,
 }

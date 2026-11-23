@@ -7,8 +7,9 @@ import { BRAND } from "../brand";
  * 内置邮箱服务商预设：地址里的 @domain → 收发服务器、端口、加密方式与凭据指引。
  * 纯数据 + 纯函数；不发网络请求。未知域名由「自动检测服务器」交给后端发现或按惯例猜测。
  *
- * 服务商名称（`name`、`short`）、域名与主机名是服务商数据，不随界面语言翻译（ADR-0048 非目标）；
- * 凭据标签、获取步骤与限制说明是界面文案，写成 getter，每次读取按当前语言成文。
+ * 域名与主机名是服务商数据，不随界面语言翻译。服务商名称（`name`、`short`）在各语言有通行写法的
+ * （「QQ 邮箱」/ QQ Mail）写成 getter 按当前语言成文；本来就是拉丁字母品牌名的（Gmail、iCloud）保持常量。
+ * 凭据标签、获取步骤与限制说明是界面文案，同样写成 getter，每次读取按当前语言成文。
  */
 export type Security = "implicit" | "starttls";
 export type CredentialKind =
@@ -71,10 +72,12 @@ const smtp = (server: string, port = 465, security: Security = "implicit"): Serv
 export const PROVIDERS: readonly ProviderPreset[] = [
   {
     id: "qq",
-    // i18n-lint-allow-cjk: 服务商名称是品牌数据，不是界面文案
-    name: "QQ 邮箱 / Foxmail",
-    // i18n-lint-allow-cjk: 服务商名称是品牌数据，不是界面文案
-    short: "QQ 邮箱",
+    get name() {
+      return m.settings_provider_qq_name();
+    },
+    get short() {
+      return m.settings_provider_qq_short();
+    },
     domains: ["qq.com", "foxmail.com", "vip.qq.com"],
     incoming: imap("imap.qq.com"),
     outgoing: smtp("smtp.qq.com"),
@@ -94,10 +97,12 @@ export const PROVIDERS: readonly ProviderPreset[] = [
   },
   {
     id: "netease",
-    // i18n-lint-allow-cjk: 服务商名称是品牌数据，不是界面文案
-    name: "网易邮箱",
-    // i18n-lint-allow-cjk: 服务商名称是品牌数据，不是界面文案
-    short: "网易 163",
+    get name() {
+      return m.settings_provider_netease_name();
+    },
+    get short() {
+      return m.settings_provider_netease_short();
+    },
     domains: ["163.com", "126.com", "yeah.net", "vip.163.com", "188.com"],
     incoming: imap("imap.163.com"),
     outgoing: smtp("smtp.163.com"),
@@ -166,10 +171,12 @@ export const PROVIDERS: readonly ProviderPreset[] = [
   },
   {
     id: "exmail",
-    // i18n-lint-allow-cjk: 服务商名称是品牌数据，不是界面文案
-    name: "腾讯企业邮",
-    // i18n-lint-allow-cjk: 服务商名称是品牌数据，不是界面文案
-    short: "企业邮箱",
+    get name() {
+      return m.settings_provider_exmail_name();
+    },
+    get short() {
+      return m.settings_provider_exmail_short();
+    },
     domains: ["exmail.qq.com"],
     incoming: imap("imap.exmail.qq.com"),
     outgoing: smtp("smtp.exmail.qq.com"),
@@ -189,10 +196,12 @@ export const PROVIDERS: readonly ProviderPreset[] = [
   },
   {
     id: "aliyun",
-    // i18n-lint-allow-cjk: 服务商名称是品牌数据，不是界面文案
-    name: "阿里云邮箱",
-    // i18n-lint-allow-cjk: 服务商名称是品牌数据，不是界面文案
-    short: "阿里云",
+    get name() {
+      return m.settings_provider_aliyun_name();
+    },
+    get short() {
+      return m.settings_provider_aliyun_short();
+    },
     domains: ["aliyun.com"],
     incoming: imap("imap.aliyun.com"),
     outgoing: smtp("smtp.aliyun.com"),

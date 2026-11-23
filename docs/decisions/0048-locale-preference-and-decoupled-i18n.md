@@ -223,7 +223,8 @@ description = "..."
 
 - 新增 `packages/i18n`，用 **Paraglide JS v2**（inlang）以 CLI 在此**编译一次**，两个包都从这里导入；
   不在两个 Vite 配置里各挂一个插件（会各生成一份产物，容易不一致）。
-- 消息为 JSON：`packages/i18n/messages/{zh-CN,en}.json`，`zh-CN` 为基础语言。JSON 便于开源后社区翻译。
+- 消息为 JSON：`packages/i18n/messages/{zh-CN,en}/<命名空间>.json`（L3 实施时由单文件改为按命名空间分文件，
+  见下方实现记录），`zh-CN` 为基础语言。JSON 便于开源后社区翻译。
 - **语言策略只用自定义策略**：从桥拿 `effective` 列表 → 与 `["zh-CN", "en"]` 协商 → 失败回落 `zh-CN`。
   不用 URL、cookie、`navigator.language`（WKWebView 下的 `navigator.language` 与 app bundle 声明的
   本地化相关，不可靠）。收到 `preferences/locale` 后切换语言并重新渲染，不重载页面。
@@ -291,9 +292,22 @@ description = "..."
 >   `rejected` / `principal_mismatch` / `unavailable`），经快照到 webview 翻译，中文原因只作诊断；
 >   `listPendingOps` 摘要的固定说明另给 `detail_code`（`discarded` / `rejected` / `unconfirmed`），`detail`
 >   照旧保留给老前端。账户 `detail`（`account/state`）来自同步循环，多为服务器或连接错误原文，按数据原样显示，
->   不加 code。
+>   不加 code。（**已改计划**：同步循环自己写的中文前缀也要换成 code，见切片 L6。）
 > - 首帧：两个前端的 `main.tsx` 在首次渲染前等启动语言就绪，最多 300 ms（壳已有偏好时只是一次读缓存的 IPC；
 >   后台未连上或是老 daemon 时到时即按 `zh-CN` 渲染，之后跟推送切换）。
+
+> 实现记录（L3 补遗）：
+>
+> - 内置服务商预设的名称（`name`、`short`）改为按界面语言成文：中文品牌在英文里有通行写法（「QQ 邮箱」→
+>   QQ Mail、「腾讯企业邮」→ Tencent Exmail、「网易 163」→ NetEase 163、「阿里云邮箱」→ Alibaba Mail），英文界面里
+>   留着中文胶囊不合适。本来就是拉丁字母的品牌（Gmail、iCloud、Outlook…）保持常量。这不违反「不翻译服务商
+>   数据」的非目标：预设是默认前端自己写的界面数据，不是服务商下发的数据；域名、主机名仍不翻译。
+> - 随包的默认 UI manifest（`crates/maild-ui/package/frontend.toml` 与打包模板 `frontend.toml.in`）升到
+>   `schema_version = 3`，带顶层 `description` 与 `[l10n."zh-Hans"]`；恢复测试把 `description`、`l10n` 也纳入
+>   两份清单不得漂移的键。它们只和同一个安装包里的 Agent 一起分发，不会遇到老 daemon。
+> - Studio 的 manifest（`packaging/macos/studio/frontend.toml`）同样升到 schema 3。Studio 是单独的 ZIP、装进用户
+>   已有的 Featherpost，早于 L4 的 daemon 会整包拒绝 schema 3；目前没有外部安装，按项目决定不为此保留 schema 2。
+>   将来若对外分发 Studio，安装脚本应先检查 daemon 版本，给出明确提示。
 
 ## 交付切片
 
@@ -304,6 +318,7 @@ description = "..."
 | L3 | `packages/i18n` + Paraglide + `i18n:lint`；先迁一个模块（`FolderNav`）与原生菜单打通整条链路，再批量迁移两个前端 | 先打通一条链路，再按模块逐个迁移 |
 | L4 | manifest `l10n` 段与三个列表/预览方法透传；`prepareReply` 的 `locale` 参数 | 是 |
 | L5 | `maildctl` 用户可见输出 | 是 |
+| L6（计划） | 账户状态 `detail_code`：同步循环自己写的错误前缀换成稳定 code，服务器原文单独透传 | 是：英文界面的账户离线原因不再夹中文 |
 
 > **L5 实施记录**：
 >
@@ -314,11 +329,36 @@ description = "..."
 >   仍无结果回落 `zh-Hans`。每次调用因此多一次 `getLocalePreference` 往返；协议代握手已判定连不上时跳过，
 >   不重复等待。没有新增全局参数。`maild` 维护子命令不连 daemon（恢复要求它已停止），只读系统语言。
 > - 翻译范围：stdout/stderr 上给人读的结果、确认、警告与秘密输入提示。**不**翻译：`--json` 输出、`key: value`
->   行的字段名与取值、`--help`、以及进入 `AppError` 的解析/校验/IO 报错——它同时是 `--json` 错误行的
+>   行的字段名与取值、`--help`（三个二进制的 `--help` 统一只写英文，与 clap 自带的 Usage / Options 一致）、以及进入 `AppError` 的解析/校验/IO 报错——它同时是 `--json` 错误行的
 >   `message`，与协议 `error.message` 同属面向开发者的文字。唯一例外是 `account test` 的「探测未通过」：
 >   它只在人读分支出现，是结论而不是诊断。`maild` 守护进程启动路径上的报错是日志，不翻译。
 > - 新增 `maildctl locale [show]` / `locale set <LANGUAGE>...` / `locale set --system`，`--json` 与协议应答同形；
 >   `set` 的人读输出按写入后的新偏好成文。
+
+> **L6 计划（账户状态的稳定 code，未实施）**
+>
+> 现状：`account/state` 的 `detail` 是一整句中文，例如 `连接 imap.example.com:993 失败: <OS 报错>`、
+> `IMAP 登录失败: <服务器应答>`、`provider 不可用: <原因>`。中文前缀是同步循环（`receive.rs`）写的界面文字，冒号后
+> 面才是服务器或系统的原文。`receive.rs` 里这样的字符串约 80 处，集中在连接、TLS、登录、IDLE、轮询、对账和委托
+> 收信几段。
+>
+> - 协议（additive）：`account/state` 推送与账户列表里的状态对象增加可选 `detail_code`（稳定 snake_case）与
+>   `server_detail`（去掉中文前缀、经 `sanitize_detail` 的原文，可空）。`detail` 保持今天的整句，老前端与日志
+>   不变。
+> - 首批 code：`credential_unavailable`、`credential_invalid`、`connect_failed`、`connect_timeout`、`tls_failed`、
+>   `tls_timeout`、`starttls_unsupported`、`greeting_invalid`、`login_failed`、`login_timeout`、`idle_failed`、
+>   `idle_timeout`、`sync_failed`（LIST / SELECT / FETCH / 对账 / 游标）、`poll_failed`、`provider_unavailable`、
+>   `provider_timeout`、`provider_failed`、`provider_response_invalid`；兜底 `internal`。新增 code 不算破坏性变更，
+>   前端遇到不认识的 code 显示通用文案加 `server_detail`。
+> - 实现：`serve` 一路的 `Result<_, String>` 换成带 `code` 与原文的错误类型，`Display` 仍拼出今天的中文整句，
+>   日志与 `detail` 逐字节不变；按阶段收成几个 `map_err` 辅助函数，不逐处手写。
+> - 前端：`maild-ui` 与 Studio 的账户状态按 `detail_code` 成文，`server_detail` 作为次要信息原样显示；没有 code
+>   （老 daemon）时照旧显示 `detail`。`maildctl accounts` 的人读输出同样按 code 成文。
+> - 同一轮顺带：写队列 op 的失败说明（`APPEND 失败: …`、`STORE 失败: …`）在 `listPendingOps` 摘要里补
+>   `detail_code = "server_rejected"` 与原文；服务器检索、按需拉取的 RPC 报错仍是协议 `error.message`（面向开发者，
+>   与 L5 口径一致），不在本切片内。
+> - 测试：每个 code 至少一条触发路径（假服务器拒登录、TLS 握手失败、provider 超时等）；`detail` 整句的回归断言
+>   保持；前端核对每个 Rust 侧 code 都有两种语言的文案。
 
 ## 兼容性
 

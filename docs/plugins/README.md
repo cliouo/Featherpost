@@ -103,7 +103,7 @@ description = "Featherpost 的阅读器"
   原生修复作为本机用户维护入口，权限不经前端声明扩大；Tauri 只能导航到它。
 - 默认 Tauri 前端 `com.maild.ui` 的 manifest 在 `crates/maild-ui/package/frontend.toml`
   （[ADR-0031](../decisions/0031-tauri-frontend-shell-and-contribution-registry.md) 决策 6）：
-  schema 2、全部路由、五个授权词。开发期 `lifecycle = "independent"`（自己起进程），
+  schema 3（带 `description` 与 `[l10n."zh-Hans"]`，ADR-0048）、全部路由、七个授权词。开发期 `lifecycle = "independent"`（自己起进程），
   `maildctl plugin install --frontend crates/maild-ui/package` 装好后壳才认得出自己；没装时它
   显示「尚未注册为前端包」而**不会**退成 `user`。M4.5-09-C 改为 `on_demand` + `.app`，id 与授权声明不变。
 - frontend manifest 不接受 `supervised`；通用进程使用下方独立的 external manifest。逐插件

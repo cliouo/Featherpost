@@ -7,7 +7,6 @@ import { Accounts } from "../src/settings/Accounts";
 import { SettingsController } from "../src/settings/controller";
 import {
   PROVIDERS,
-  QUICK_PROVIDERS,
   cleanSecret,
   domainOf,
   guessServers,
@@ -259,16 +258,18 @@ describe("添加账户向导", () => {
   });
 });
 
-describe("界面语言（ADR-0048 决策 8）：文案随语言切换，服务商数据不翻译", () => {
+describe("界面语言（ADR-0048 决策 8）：文案与服务商名称随语言切换", () => {
   afterEach(() => {
     applyEffectiveLocales([]);
   });
 
-  it("凭据标签、步骤、阶段与建议按当前语言成文；服务商名称保持原样", () => {
+  it("凭据标签、步骤、阶段、建议与服务商名称按当前语言成文", () => {
     const qq = providerById("qq")!;
     expect(qq.secretLabel).toBe("客户端授权码（16 位）");
     applyEffectiveLocales(["en"]);
-    expect(qq.name).toBe("QQ 邮箱 / Foxmail");
+    expect(qq.name).toBe("QQ Mail / Foxmail");
+    expect(providerById("exmail")?.short).toBe("Exmail");
+    expect(providerById("gmail")?.name).toBe("Gmail / Google");
     expect(qq.secretLabel).toBe("Client authorization code (16 characters)");
     expect(qq.steps[2]).toBe("Generate an authorization code and paste it here; it is not your QQ password");
     expect(stageLabel("tls")).toBe("Encrypted connection");
@@ -291,10 +292,8 @@ describe("界面语言（ADR-0048 决策 8）：文案随语言切换，服务�
     expect(html).toContain("Add email account");
     expect(html).toContain("Recognized as <strong>Gmail / Google</strong>. Server settings were filled in automatically.");
     expect(html).toContain("How to get your app password");
-    // 快捷胶囊上的服务商短名（「QQ 邮箱」「网易 163」「企业邮箱」）是品牌数据，不随语言翻译。
-    const withoutBrands = QUICK_PROVIDERS.map((id) => providerById(id)?.short)
-      .filter((short): short is string => Boolean(short))
-      .reduce((rest, short) => rest.split(`>${short}<`).join("><"), html);
-    expect(withoutBrands).not.toMatch(/[\u4e00-\u9fff]/);
+    // 快捷胶囊上的服务商短名也跟着语言走，整页不再剩中文。
+    for (const short of ["QQ Mail", "NetEase 163", "Exmail"]) expect(html).toContain(`>${short}<`);
+    expect(html).not.toMatch(/[\u4e00-\u9fff]/);
   });
 });

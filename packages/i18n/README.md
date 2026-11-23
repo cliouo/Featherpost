@@ -103,6 +103,7 @@ import {
   getUiLocale,           // () => UiLocale：当前协商结果，默认 "zh-CN"
   subscribeLocale,       // (listener) => unsubscribe
   negotiateLocale,       // (effective) => UiLocale：纯函数
+  matchTag,              // (tag) => UiLocale | undefined：单个标签的匹配，协商的基本单元
   type UiLocale,         // "zh-CN" | "en"
 } from "@featherpost/i18n";
 import { useUiLocale } from "@featherpost/i18n/react"; // React：订阅并返回当前语言
@@ -116,7 +117,15 @@ import { m } from "@featherpost/i18n/messages";
 - `maild-ui/src/i18n.ts` 另外导出 `uiLocale()`（等于 `getUiLocale()`）与 `useUiLocale()`，用于 `Intl`
   格式化与 `localeCompare`；它取代了原来的 `UI_LOCALE` 常量。
 
-协商规则（ADR-0048 决策 8）：逐项看偏好列表，第一个能匹配的即为结果，全部不匹配回落 `zh-CN`。
+- `matchTag` 只判断一个 BCP 47 标签能映射到哪种界面语言，不能就返回 `undefined`；`negotiateLocale` 就是对
+  偏好列表逐项调用它。反方向也用它：包作者在 manifest `[l10n.<tag>]` 里写的标签各式各样（`zh-Hans`、`zh`、
+  `en-US`），默认前端渲染扩展名称与描述时，取所有 `matchTag(tag) === getUiLocale()` 的条目，逐字段用第一个
+  有值的，缺省回落顶层 `name` / `description`（`maild-ui/src/i18n.ts` 的 `packageText`，Studio 复用它）。两个方向共用一套规则，界面语言与包文案
+  才不会对不上。
+
+  negotiateLocale,       // (effective) => UiLocale：纯函数
+  matchTag,              // (tag) => UiLocale | undefined：单个标签的匹配，协商的基本单元
+：逐项看偏好列表，第一个能匹配的即为结果，全部不匹配回落 `zh-CN`。
 
 | 偏好标签 | 结果 |
 |---|---|
