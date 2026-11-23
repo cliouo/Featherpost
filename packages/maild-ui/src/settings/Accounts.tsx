@@ -1,6 +1,7 @@
 import { m } from "@featherpost/i18n/messages";
 import { Choice } from "./Choice";
-import { useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
+import { PopoverMenu } from "../app/PopoverMenu";
 import { useStore } from "../host/hooks";
 import type { AccountProfile, Endpoint, ProbeStage } from "./types";
 import { SettingsController, newDraft } from "./controller";
@@ -691,6 +692,54 @@ function Editor({ controller }: { controller: SettingsController }) {
     </form>
   );
 }
+export function AccountMore({
+  profile,
+  controller,
+}: {
+  profile: AccountProfile;
+  controller: SettingsController;
+}) {
+  useUiLocale();
+  const s = useStore(controller.store);
+  const [open, setOpen] = useState(false);
+  const openRef = useRef(open);
+  openRef.current = open;
+  const confirm = (remove: boolean) => {
+    if (!s.online || s.busy || s.closeLocked) return;
+    if (openRef.current) setOpen(false);
+    controller.confirmAccount(profile, remove);
+  };
+  return (
+    <PopoverMenu
+      className="account-more"
+      open={open}
+      onOpenChange={setOpen}
+      forceClosed={s.closeLocked}
+      triggerLabel={m.settings_account_more_label({
+        name: profile.display_name,
+      })}
+      trigger={m.settings_account_more()}
+    >
+      <button
+        type="button"
+        disabled={!s.online || s.busy}
+        onClick={() => confirm(false)}
+      >
+        {profile.enabled
+          ? m.settings_account_action_pause()
+          : m.settings_account_menu_enable()}
+      </button>
+      <button
+        type="button"
+        className="danger"
+        disabled={!s.online || s.busy}
+        onClick={() => confirm(true)}
+      >
+        {m.settings_account_action_remove()}
+      </button>
+    </PopoverMenu>
+  );
+}
 export function Accounts({ controller }: { controller: SettingsController }) {
   useUiLocale();
   const s = useStore(controller.store);
@@ -740,34 +789,7 @@ export function Accounts({ controller }: { controller: SettingsController }) {
                     : m.settings_account_repair()
                   : m.settings_account_manage()}
               </button>
-              <details className="account-more">
-                <summary
-                  aria-label={m.settings_account_more_label({
-                    name: p.display_name,
-                  })}
-                >
-                  {m.settings_account_more()}
-                </summary>
-                <div>
-                  <button
-                    type="button"
-                    disabled={!s.online || s.busy}
-                    onClick={() => controller.confirmAccount(p, false)}
-                  >
-                    {p.enabled
-                      ? m.settings_account_action_pause()
-                      : m.settings_account_menu_enable()}
-                  </button>
-                  <button
-                    type="button"
-                    className="danger"
-                    disabled={!s.online || s.busy}
-                    onClick={() => controller.confirmAccount(p, true)}
-                  >
-                    {m.settings_account_action_remove()}
-                  </button>
-                </div>
-              </details>
+              <AccountMore profile={p} controller={controller} />
             </div>
           )}
         </article>

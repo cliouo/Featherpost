@@ -384,8 +384,7 @@ kbd {
   list-style: none;
   padding: 0 8px 3px 1px;
 }
-.account-tree > summary::-webkit-details-marker,
-.reader-menu > summary::-webkit-details-marker {
+.account-tree > summary::-webkit-details-marker {
   display: none;
 }
 .chevron {
@@ -919,10 +918,6 @@ kbd {
 .reader-menu {
   position: relative;
 }
-.reader-menu summary {
-  list-style: none;
-  cursor: pointer;
-}
 .reader-menu-panel {
   position: absolute;
   top: 32px;
@@ -934,6 +929,10 @@ kbd {
   border-radius: 8px;
   box-shadow: 0 8px 24px #0001;
   background: var(--studio-surface);
+}
+.reader-menu-panel[data-side="top"] {
+  top: auto;
+  bottom: 32px;
 }
 .reader-menu-panel button {
   display: block;

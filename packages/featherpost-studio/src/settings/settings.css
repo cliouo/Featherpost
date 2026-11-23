@@ -183,11 +183,12 @@ body[data-studio-settings] .studio > .studio-workspace {
 .studio-account-manage .icon { transform: rotate(180deg); width: 12px; height: 12px; }
 .studio-account-manage[aria-expanded=true] .icon { transform: rotate(90deg); }
 .studio-settings .account-more { position: relative; }
-.studio-settings .account-more summary { font-size: 11px; color: var(--studio-muted); display: flex; align-items: center; gap: 6px; cursor: pointer; padding: 4px 0; list-style: none; }
+.studio-settings .account-more > button { font-size: 11px; color: var(--studio-muted); display: flex; align-items: center; gap: 6px; cursor: pointer; padding: 4px 0; border-radius: 4px; }
 .studio-settings summary::-webkit-details-marker { display: none; }
-.studio-settings .account-more summary .icon { width: 13px; height: 13px; }
-.studio-settings .account-row .account-more summary { font-size: 0; }
+.studio-settings .account-more > button .icon { width: 13px; height: 13px; }
+.studio-settings .account-row .account-more > button { font-size: 0; gap: 0; padding: 4px; }
 .studio-settings .account-more > div { position: absolute; right: 0; top: calc(100% + 5px); z-index: 4; min-width: 150px; padding: 6px; border: 1px solid var(--studio-border); border-radius: 6px; background: var(--studio-surface); box-shadow: 0 6px 24px #00000012; }
+.studio-settings .account-more > div[data-side="top"] { top: auto; bottom: calc(100% + 5px); }
 .studio-settings .account-more > div button { width: 100%; padding: 9px; text-align: left; font-size: 12px; border-radius: 3px; }
 .studio-settings .account-more > div button:hover { background: var(--studio-tint); }
 .studio-settings .account-more small { display: block; font-size: 10px; padding: 5px 9px; }

@@ -129,23 +129,31 @@
 .account-more {
   position: relative;
 }
-.account-more summary,
+.account-more > button,
 .managed-package summary {
   cursor: pointer;
   color: var(--muted);
   font-size: 12px;
   padding: 6px 0;
 }
+.account-more > button {
+  min-height: 0;
+  padding: 6px 8px;
+}
 .account-more > div {
   position: absolute;
   right: 0;
-  top: 100%;
+  top: calc(100% + 4px);
   z-index: 2;
   padding: 8px;
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--r-md);
   min-width: 140px;
+}
+.account-more > div[data-side="top"] {
+  top: auto;
+  bottom: calc(100% + 4px);
 }
 .account-more > div button {
   display: flex;

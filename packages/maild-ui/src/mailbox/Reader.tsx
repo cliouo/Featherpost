@@ -4,7 +4,8 @@ import { folderLabel, useUiLocale } from "../i18n";
 import { Thread } from "./Thread";
 import { Editor } from "../compose/Editor";
 import { sourceKey, type ComposeController } from "../compose/controller";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
+import { PopoverMenu } from "../app/PopoverMenu";
 import { useDarkShell } from "../app/theme";
 import { detectOtpCode } from "./otp";
 
@@ -52,53 +53,32 @@ function OverflowMenu({
 }) {
   useUiLocale();
   const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    const close = (event: MouseEvent | KeyboardEvent) => {
-      if (event instanceof KeyboardEvent && event.key !== "Escape") return;
-      if (
-        event instanceof MouseEvent &&
-        ref.current?.contains(event.target as Node)
-      )
-        return;
-      setOpen(false);
-    };
-    // 捕获阶段：工具栏是拖动区，Tauri drag.js 会在冒泡阶段 stopImmediatePropagation。
-    document.addEventListener("mousedown", close, true);
-    document.addEventListener("keydown", close);
-    return () => {
-      document.removeEventListener("mousedown", close, true);
-      document.removeEventListener("keydown", close);
-    };
-  }, [open]);
+  const openRef = useRef(open);
+  openRef.current = open;
   if (commands.length === 0) return null;
   return (
-    <div className="overflow" ref={ref}>
-      <button
-        type="button"
-        className="icon-button"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        aria-label={m.mailbox_reader_more_actions()}
-        onClick={() => setOpen((v) => !v)}
-      >
-        <Icon name="more" />
-      </button>
-      {open && (
-        <div className="menu" role="menu" data-tauri-drag-region="false">
-          {commands.map((command) => (
-            <div
-              key={command.id}
-              role="menuitem"
-              onClick={() => setOpen(false)}
-            >
-              <CommandButton host={host} command={command} iconOnly={false} />
-            </div>
-          ))}
+    <PopoverMenu
+      className="overflow"
+      triggerClassName="icon-button"
+      panelClassName="menu"
+      panelRole="menu"
+      open={open}
+      onOpenChange={setOpen}
+      triggerLabel={m.mailbox_reader_more_actions()}
+      trigger={<Icon name="more" />}
+    >
+      {commands.map((command) => (
+        <div
+          key={command.id}
+          role="menuitem"
+          onClick={() => {
+            if (openRef.current) setOpen(false);
+          }}
+        >
+          <CommandButton host={host} command={command} iconOnly={false} />
         </div>
-      )}
-    </div>
+      ))}
+    </PopoverMenu>
   );
 }
 
