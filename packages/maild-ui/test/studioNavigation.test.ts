@@ -201,8 +201,8 @@ it("distinguishes localized sibling folder names without hiding either server fo
   try {
     const labels = folderNavigationLabels(drafts);
     expect(drafts.map((f) => labels.get(f))).toEqual([
-      "草稿 · Draft",
-      "草稿 · Drafts",
+      "草稿箱 · Draft",
+      "草稿箱 · Drafts",
     ]);
     for (const f of drafts) {
       const scope = { kind: "folder" as const, account: f.account, folder: f.name };
@@ -243,13 +243,13 @@ it("finds complete displayed folder labels, including collision qualifiers and n
     folder("Projects/Draft", "drafts"),
     folder("Projects/Drafts", "drafts"),
   ];
-  expect([...matchingFolderNames(folders, "草稿 · Draft")]).toEqual([
+  expect([...matchingFolderNames(folders, "草稿箱 · Draft")]).toEqual([
     "Draft", "Drafts",
   ]);
-  expect([...matchingFolderNames(folders, "草稿 · Drafts")]).toEqual([
+  expect([...matchingFolderNames(folders, "草稿箱 · Drafts")]).toEqual([
     "Drafts",
   ]);
-  expect([...matchingFolderNames(folders, "草稿 · Projects/Drafts")]).toEqual([
+  expect([...matchingFolderNames(folders, "草稿箱 · Projects/Drafts")]).toEqual([
     "Projects/Drafts",
   ]);
   expect([...matchingFolderNames(folders, "projects/draft")]).toEqual([
@@ -261,7 +261,7 @@ it("ranks an exact displayed folder label before longer matches regardless of se
   const folders = [folder("Drafts", "drafts"), folder("Draft", "drafts")];
   applyEffectiveLocales(["zh-CN"]);
   try {
-    expect([...matchingFolderNames(folders, "草稿 · Draft")]).toEqual([
+    expect([...matchingFolderNames(folders, "草稿箱 · Draft")]).toEqual([
       "Draft", "Drafts",
     ]);
     expect([...matchingFolderNames(folders, "draft")]).toEqual([
@@ -271,6 +271,21 @@ it("ranks an exact displayed folder label before longer matches regardless of se
       { ...folder("Projects"), present: false },
       folder("Projects/Reviews"),
     ], "Projects")]).toEqual(["Projects/Reviews"]);
+  } finally {
+    applyEffectiveLocales([]);
+  }
+});
+
+it("calls the system Drafts 草稿箱 while preserving a custom 草稿 folder and both identities", () => {
+  const folders = [folder("Drafts", "drafts"), folder("草稿")];
+  applyEffectiveLocales(["zh-CN"]);
+  try {
+    expect([...folderNavigationLabels(folders).values()]).toEqual(["草稿箱", "草稿"]);
+    expect(folders.map((f) => f.name)).toEqual(["Drafts", "草稿"]);
+    for (const f of folders) {
+      const scope = { kind: "folder" as const, account: f.account, folder: f.name };
+      expect(folders.filter((other) => selectedFolder(scope, other.account, other.name))).toEqual([f]);
+    }
   } finally {
     applyEffectiveLocales([]);
   }
