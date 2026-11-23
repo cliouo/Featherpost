@@ -309,6 +309,31 @@ description = "..."
 >   已有的 Featherpost，早于 L4 的 daemon 会整包拒绝 schema 3；目前没有外部安装，按项目决定不为此保留 schema 2。
 >   将来若对外分发 Studio，安装脚本应先检查 daemon 版本，给出明确提示。
 
+> 实现记录（M1，系统画的文字）：
+>
+> - 问题：WKWebView 右键菜单（拷贝/粘贴）、打开/保存面板、标准提示按钮、拼写建议不是我们成文，AppKit 在
+>   **进程启动时**按 bundle 声明的本地化与本进程的语言列表选定。此前 Studio 只声明 `zh-Hans`、默认 UI 只有
+>   `CFBundleDevelopmentRegion = en`，所以 Studio 英文模式下这些仍是中文、默认 UI 中文模式下仍是英文。
+> - bundle：两个前端（`packaging/macos/templates/UI.Info.plist.in`、`packaging/macos/studio/Info.plist`）都声明
+>   `CFBundleLocalizations = [en, zh-Hans]`，`CFBundleDevelopmentRegion = zh-Hans`（协商不出结果回落简体中文，
+>   与前端、内核一致）。`verify-bundle.sh` 对两份 plist 核对这两个键，`test_bundle.sh` 覆盖漂移。
+> - 壳（`crates/maild-ui/src/macos_app_languages.rs`，两种形态，仅 macOS）：把偏好镜像到**本 app 自己偏好域**的
+>   `AppleLanguages`（系统设置「按 app 设置语言」写的同一个键）：`explicit` 写显式列表，`system` 删键；绝不把
+>   系统列表写进去，否则「跟随系统」会被冻结。推送只带 `effective`，所以状态泵在 `effective` 变化时（含启动后
+>   首次取到）经桥再取一次 `getLocalePreference` 拿到模式，与域里现值不同才写。因此不论偏好由哪个客户端改
+>   （本前端选择器、`featherpostctl`、另一个前端），只要本 app 在运行就会同步；老 daemon（`effective` 为空）不碰。
+>   `cargo run` 写的是以可执行文件名命名的域，无害；测试经 `AppLanguageStore` 注入内存实现。
+> - 核验（一次性 Swift 最小 `.app`）：只声明 `zh-Hans` 时按 app 设 `en` 仍选 `zh-Hans`；声明 `[en, zh-Hans]` 后
+>   按 app `en` → `en`、`zh-Hans` → `zh-Hans`、`ja` → 开发区域 `zh-Hans`、`[zh-Hant-TW, en]` → `en`，AppKit 自带
+>   文案（「Cut」「Cancel」）随之切换；键不存在时跟随全局语言。
+> - 生效时机：我们自己画的界面（webview、原生菜单）照旧**即时**切换；系统画的文字**下次启动**生效。偏好若在
+>   本 app 未运行时被改，本次启动才同步该键，再下一次启动系统文字才跟上。显式列表与系统列表恰好相同时，
+>   切换模式不改变 `effective`、不触发推送，键在下次启动的首次同步时补写。
+> - 不监听系统语言变化（不轮询、不订阅通知）：「跟随系统」模式下改了系统语言，重启 app 生效，这是有意的。
+> - 已知、已接受的副作用：`system` 模式会删除这个键，所以用户在系统设置里给本 app 单独设的语言会被清掉
+>   （在我们的选择器里选「跟随系统」时，以及之后每次以 `system` 模式启动时）；`explicit` 模式则覆盖它。
+>   单独指定语言请用我们的选择器——偏好只在一处表达（目标 1）。
+
 ## 交付切片
 
 | 切片 | 内容 | 可独立验收 |
