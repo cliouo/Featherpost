@@ -61,7 +61,117 @@ pub struct Ctl {
     pub restore_failed: fn(detail: &str) -> String,
     /// `paths` 子命令找不到平台目录；参数是已净化的报错详情。
     pub paths_discovery_failed: fn(detail: &str) -> String,
+
+    // —— 账户状态原因（ADR-0048 L6） ——
+    /// `accounts` / `account list` 的离线原因按 daemon 给的 `detail_code` 成文。
+    pub account_detail: AccountDetailTexts,
 }
+
+/// 账户状态原因的文案，字段与 daemon 的 `AccountDetailCode` 一一对应（`maild` 的测试核对没有遗漏）。
+/// 服务器原文由调用方接在后面，不翻译。
+#[derive(Clone, Copy, Debug)]
+pub struct AccountDetailTexts {
+    pub credential_unavailable: &'static str,
+    pub credential_invalid: &'static str,
+    pub connect_failed: &'static str,
+    pub connect_timeout: &'static str,
+    pub tls_failed: &'static str,
+    pub tls_timeout: &'static str,
+    pub starttls_unsupported: &'static str,
+    pub greeting_invalid: &'static str,
+    pub login_failed: &'static str,
+    pub login_timeout: &'static str,
+    pub idle_failed: &'static str,
+    pub idle_timeout: &'static str,
+    pub sync_failed: &'static str,
+    pub poll_failed: &'static str,
+    pub provider_unavailable: &'static str,
+    pub provider_timeout: &'static str,
+    pub provider_failed: &'static str,
+    pub provider_response_invalid: &'static str,
+    pub internal: &'static str,
+    /// 新 daemon 给了本 CLI 认不出的 code。
+    pub unknown: &'static str,
+}
+
+impl AccountDetailTexts {
+    /// 认得的 code 的文案；认不出时为 `None`。
+    pub fn known(&self, code: &str) -> Option<&'static str> {
+        Some(match code {
+            "credential_unavailable" => self.credential_unavailable,
+            "credential_invalid" => self.credential_invalid,
+            "connect_failed" => self.connect_failed,
+            "connect_timeout" => self.connect_timeout,
+            "tls_failed" => self.tls_failed,
+            "tls_timeout" => self.tls_timeout,
+            "starttls_unsupported" => self.starttls_unsupported,
+            "greeting_invalid" => self.greeting_invalid,
+            "login_failed" => self.login_failed,
+            "login_timeout" => self.login_timeout,
+            "idle_failed" => self.idle_failed,
+            "idle_timeout" => self.idle_timeout,
+            "sync_failed" => self.sync_failed,
+            "poll_failed" => self.poll_failed,
+            "provider_unavailable" => self.provider_unavailable,
+            "provider_timeout" => self.provider_timeout,
+            "provider_failed" => self.provider_failed,
+            "provider_response_invalid" => self.provider_response_invalid,
+            "internal" => self.internal,
+            _ => return None,
+        })
+    }
+
+    /// 按 code 成文，认不出的 code 用通用说明。
+    pub fn text(&self, code: &str) -> &'static str {
+        self.known(code).unwrap_or(self.unknown)
+    }
+}
+
+const ZH_ACCOUNT_DETAIL: AccountDetailTexts = AccountDetailTexts {
+    credential_unavailable: "无法读取已保存的密码",
+    credential_invalid: "已保存的密码无法使用",
+    connect_failed: "无法连接服务器",
+    connect_timeout: "连接服务器超时",
+    tls_failed: "无法建立安全连接（TLS）",
+    tls_timeout: "建立安全连接超时",
+    starttls_unsupported: "服务器不支持 STARTTLS",
+    greeting_invalid: "服务器没有给出有效的 IMAP 问候",
+    login_failed: "服务器拒绝了登录",
+    login_timeout: "登录超时",
+    idle_failed: "实时推送（IDLE）中断",
+    idle_timeout: "实时推送（IDLE）无响应",
+    sync_failed: "同步邮件失败",
+    poll_failed: "定时收信失败",
+    provider_unavailable: "收信插件不可用",
+    provider_timeout: "收信插件响应超时",
+    provider_failed: "收信插件报告了错误",
+    provider_response_invalid: "收信插件返回了无效数据",
+    internal: "内部错误",
+    unknown: "连接出现问题",
+};
+
+const EN_ACCOUNT_DETAIL: AccountDetailTexts = AccountDetailTexts {
+    credential_unavailable: "Couldn't read the saved password",
+    credential_invalid: "The saved password can't be used",
+    connect_failed: "Couldn't connect to the server",
+    connect_timeout: "Connecting to the server timed out",
+    tls_failed: "Couldn't set up a secure (TLS) connection",
+    tls_timeout: "Setting up a secure connection timed out",
+    starttls_unsupported: "The server doesn't support STARTTLS",
+    greeting_invalid: "The server didn't send a valid IMAP greeting",
+    login_failed: "The server rejected the sign-in",
+    login_timeout: "Signing in timed out",
+    idle_failed: "Live updates (IDLE) stopped",
+    idle_timeout: "Live updates (IDLE) stopped responding",
+    sync_failed: "Syncing mail failed",
+    poll_failed: "Scheduled mail check failed",
+    provider_unavailable: "The mail plugin isn't available",
+    provider_timeout: "The mail plugin didn't respond in time",
+    provider_failed: "The mail plugin reported an error",
+    provider_response_invalid: "The mail plugin returned invalid data",
+    internal: "Internal error",
+    unknown: "Connection problem",
+};
 
 /// 简体中文。与迁移前 `maildctl.rs` / `maild.rs` 中的字面量逐字节一致。
 pub(crate) const ZH_HANS: Ctl = Ctl {
@@ -93,6 +203,8 @@ pub(crate) const ZH_HANS: Ctl = Ctl {
     restore_done: zh::restore_done,
     restore_failed: zh::restore_failed,
     paths_discovery_failed: zh::paths_discovery_failed,
+
+    account_detail: ZH_ACCOUNT_DETAIL,
 };
 
 /// 英文。
@@ -128,6 +240,8 @@ pub(crate) const EN: Ctl = Ctl {
     restore_done: en::restore_done,
     restore_failed: en::restore_failed,
     paths_discovery_failed: en::paths_discovery_failed,
+
+    account_detail: EN_ACCOUNT_DETAIL,
 };
 
 mod zh {
@@ -322,5 +436,19 @@ mod tests {
         }
         assert_eq!(ZH_HANS.ctl.plugin_enabled, "已启用");
         assert_eq!(ZH_HANS.ctl.draft_no_subject, "（无主题）");
+    }
+
+    /// 账户状态原因：认得的 code 各有文案，认不出的回落通用说明（全量核对在 `maild` 的测试里，
+    /// 那里才有 daemon 的 code 清单）。
+    #[test]
+    fn account_detail_falls_back_for_unknown_codes() {
+        for ctl in [ZH_HANS.ctl, EN.ctl] {
+            let texts = ctl.account_detail;
+            assert_eq!(texts.known("future_code"), None);
+            assert_eq!(texts.text("future_code"), texts.unknown);
+            assert_eq!(texts.text("login_failed"), texts.login_failed);
+        }
+        assert_eq!(EN.ctl.account_detail.login_failed, "The server rejected the sign-in");
+        assert!(EN.ctl.account_detail.unknown.is_ascii());
     }
 }

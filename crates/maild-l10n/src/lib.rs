@@ -36,7 +36,7 @@ mod ctl;
 mod en;
 mod zh_hans;
 
-pub use ctl::Ctl;
+pub use ctl::{AccountDetailTexts, Ctl};
 pub use en::EN;
 pub use zh_hans::ZH_HANS;
 

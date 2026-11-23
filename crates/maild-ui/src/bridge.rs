@@ -248,6 +248,11 @@ pub struct UiAccount {
     pub account: String,
     pub state: String,
     pub detail: String,
+    /// 离线原因的稳定 code（ADR-0048 L6）；webview 按它用界面语言成文，`detail` 的中文只作兜底。
+    /// 老 daemon 没有。
+    pub detail_code: Option<String>,
+    /// 服务器或系统原文（不含 daemon 的前缀），可空；webview 作为次要信息原样显示。
+    pub server_detail: String,
 }
 
 /// 连接快照。故意没有 `last_error` 字段：那串文本可能带 socket 路径，UI 只需要知道
@@ -305,6 +310,8 @@ pub fn project(state: &ViewState, frontend_id: &str, compat: UiCompat) -> UiSnap
                 account: account.account.clone(),
                 state: account.state.clone(),
                 detail: account.detail.clone(),
+                detail_code: account.detail_code.clone(),
+                server_detail: account.server_detail.clone(),
             })
             .collect(),
         principal: state.principal.clone(),
@@ -1152,8 +1159,10 @@ mod tests {
             version: Some("0.1.0".into()),
             accounts: vec![AccountState {
                 account: "personal".into(),
-                state: "error".into(),
-                detail: "认证失败".into(),
+                state: "offline".into(),
+                detail: "IMAP 登录失败: no response: 认证失败".into(),
+                detail_code: Some("login_failed".into()),
+                server_detail: "no response: 认证失败".into(),
             }],
             messages: Vec::new(),
             total_messages: 0,
@@ -1182,7 +1191,10 @@ mod tests {
         assert_eq!(snapshot.retry_in_ms, Some(1500));
         assert_eq!(snapshot.revision, 9);
         assert!(snapshot.partial);
-        assert_eq!(snapshot.accounts[0].detail, "认证失败");
+        assert_eq!(snapshot.accounts[0].detail, "IMAP 登录失败: no response: 认证失败");
+        // ADR-0048 L6：离线原因的 code 与服务器原文原样过桥。
+        assert_eq!(snapshot.accounts[0].detail_code.as_deref(), Some("login_failed"));
+        assert_eq!(snapshot.accounts[0].server_detail, "no response: 认证失败");
         assert!(snapshot
             .identity_failure
             .as_deref()

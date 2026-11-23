@@ -812,7 +812,7 @@ fn print_text(method: &str, result: &Value, m: &Ctl) {
                 "messages: {}",
                 result["message_count"].as_i64().unwrap_or(0)
             );
-            print_accounts(&result["accounts"]);
+            print_accounts(&result["accounts"], m);
             print_runtime(&result["runtime"]);
         }
         "syncMessages" => {
@@ -830,7 +830,7 @@ fn print_text(method: &str, result: &Value, m: &Ctl) {
             println!("triggered: {triggered}");
             println!("online: {}", result["online_count"].as_u64().unwrap_or(0));
         }
-        "listAccounts" => print_accounts(&result["accounts"]),
+        "listAccounts" => print_accounts(&result["accounts"], m),
         "listMessages" => {
             println!("total: {}", result["total"].as_i64().unwrap_or(0));
             if let Some(messages) = result["messages"].as_array() {
@@ -1148,28 +1148,52 @@ fn print_message(result: &Value) {
     }
 }
 
-fn print_accounts(accounts: &Value) {
-    let Some(accounts) = accounts.as_array() else {
-        println!("accounts: 0");
-        return;
-    };
-    println!("accounts: {}", accounts.len());
-    for account in accounts {
-        let detail = terminal_text(account["detail"].as_str().unwrap_or(""));
-        if detail.is_empty() {
-            println!(
-                "  {} {}",
-                terminal_text(account["account"].as_str().unwrap_or("?")),
-                terminal_text(account["state"].as_str().unwrap_or("?"))
-            );
-        } else {
-            println!(
-                "  {} {} ({detail})",
-                terminal_text(account["account"].as_str().unwrap_or("?")),
-                terminal_text(account["state"].as_str().unwrap_or("?"))
-            );
+/// 账户状态原因（ADR-0048 L6）：有 `detail_code` 时按 code 用 CLI 语言成文，服务器原文原样接在
+/// 后面；老 daemon 没有 code 时照旧显示 `detail`。没有原因时为空串。
+fn account_reason(detail: &str, code: Option<&str>, server_detail: &str, m: &Ctl) -> String {
+    match code {
+        Some(code) => {
+            let text = m.account_detail.text(code);
+            let server = terminal_text(server_detail);
+            if server.trim().is_empty() {
+                text.to_string()
+            } else {
+                format!("{text}: {server}")
+            }
         }
+        None => terminal_text(detail),
     }
+}
+
+fn print_accounts(accounts: &Value, m: &Ctl) {
+    for line in account_lines(accounts, m) {
+        println!("{line}");
+    }
+}
+
+fn account_lines(accounts: &Value, m: &Ctl) -> Vec<String> {
+    let mut lines = Vec::new();
+    let Some(accounts) = accounts.as_array() else {
+        lines.push("accounts: 0".to_string());
+        return lines;
+    };
+    lines.push(format!("accounts: {}", accounts.len()));
+    for account in accounts {
+        let detail = account_reason(
+            account["detail"].as_str().unwrap_or(""),
+            account["detail_code"].as_str(),
+            account["server_detail"].as_str().unwrap_or(""),
+            m,
+        );
+        let name = terminal_text(account["account"].as_str().unwrap_or("?"));
+        let state = terminal_text(account["state"].as_str().unwrap_or("?"));
+        lines.push(if detail.is_empty() {
+            format!("  {name} {state}")
+        } else {
+            format!("  {name} {state} ({detail})")
+        });
+    }
+    lines
 }
 
 fn terminal_text(value: &str) -> String {
@@ -1835,7 +1859,7 @@ async fn run_account(
                         .map_err(|e| AppError::rpc(format!("JSON 输出失败: {e}")))?
                 );
             } else {
-                print_profiles(&result.profiles);
+                print_profiles(&result.profiles, m);
             }
         }
         AccountCommand::Test { spec } => {
@@ -2193,7 +2217,7 @@ fn read_secret_no_echo(prompt: &str) -> Result<String, AppError> {
     Ok(line)
 }
 
-fn print_profiles(profiles: &[maild_client::AccountProfileView]) {
+fn print_profiles(profiles: &[maild_client::AccountProfileView], m: &Ctl) {
     println!("profiles: {}", profiles.len());
     for profile in profiles {
         println!(
@@ -2207,16 +2231,22 @@ fn print_profiles(profiles: &[maild_client::AccountProfileView]) {
             terminal_text(&profile.credentials.incoming),
             terminal_text(profile.credentials.outgoing.as_deref().unwrap_or("-")),
         );
+        let reason = account_reason(
+            &profile.runtime.detail,
+            profile.runtime.detail_code.as_deref(),
+            &profile.runtime.server_detail,
+            m,
+        );
         println!(
             "    imap {}:{} ({}) state={} {}",
             terminal_text(&profile.incoming.server),
             profile.incoming.port,
             terminal_text(&profile.incoming.security),
             terminal_text(&profile.runtime.state),
-            if profile.runtime.detail.is_empty() {
+            if reason.is_empty() {
                 String::new()
             } else {
-                format!("({})", terminal_text(&profile.runtime.detail))
+                format!("({reason})")
             },
         );
     }
@@ -2234,6 +2264,45 @@ fn print_probe(side: &str, outcome: &maild_client::ProbeOutcomeView) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ADR-0048 L6：daemon 的每个 code 在 CLI 两种语言里都有文案，英文里没有中文。
+    #[test]
+    fn every_account_detail_code_has_cli_text_in_both_languages() {
+        for code in maild::events::AccountDetailCode::ALL {
+            let zh = maild_l10n::ZH_HANS.ctl.account_detail.known(code.as_str());
+            let en = maild_l10n::EN.ctl.account_detail.known(code.as_str());
+            assert!(zh.is_some_and(|text| !text.trim().is_empty()), "zh {}", code.as_str());
+            assert!(en.is_some_and(|text| text.is_ascii() && !text.trim().is_empty()), "en {}", code.as_str());
+        }
+    }
+
+    /// `accounts` 的人读输出：有 code 按 CLI 语言成文并接上服务器原文；老 daemon 照旧显示 `detail`。
+    #[test]
+    fn account_lines_translate_the_detail_code() {
+        let accounts = json!([
+            {"account": "work", "state": "offline", "detail": "IMAP 登录失败: no response: bad",
+             "detail_code": "login_failed", "server_detail": "no response: bad"},
+            {"account": "home", "state": "offline", "detail": "IMAP 登录超时",
+             "detail_code": "login_timeout"},
+            {"account": "old", "state": "offline", "detail": "连接 a:993 失败: refused"},
+            {"account": "next", "state": "offline", "detail": "未来的原因", "detail_code": "future_code",
+             "server_detail": "raw"},
+            {"account": "up", "state": "online", "detail": ""}
+        ]);
+        assert_eq!(
+            account_lines(&accounts, &maild_l10n::EN.ctl),
+            [
+                "accounts: 5",
+                "  work offline (The server rejected the sign-in: no response: bad)",
+                "  home offline (Signing in timed out)",
+                "  old offline (连接 a:993 失败: refused)",
+                "  next offline (Connection problem: raw)",
+                "  up online",
+            ]
+        );
+        let zh = account_lines(&accounts, &maild_l10n::ZH_HANS.ctl);
+        assert_eq!(zh[1], "  work offline (服务器拒绝了登录: no response: bad)");
+    }
 
     #[test]
     fn token_is_32_random_bytes_as_hex() {
