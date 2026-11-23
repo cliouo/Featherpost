@@ -148,6 +148,8 @@ grep -Fqx "path = \"$BRAND_UI_BUNDLE\"" "$payload/frontend.toml" || fail 'bundle
     fail 'top-level display name is not the brand product name'
 host_ui="$bundle/Contents/MacOS/$ui_name"
 app_icon="$bundle/Contents/Resources/$BRAND_ICON_NAME.icns"
+agent_plist="$bundle/$agent_rel/Contents/Info.plist"
+agent_icon="$bundle/$agent_rel/Contents/Resources/$BRAND_ICON_NAME.icns"
 cmp -s "$work/bin/$ui_name" "$host_ui" ||
     fail 'single-host UI executable was not copied byte-for-byte'
 [ "$(stat -f '%Lp' "$host_ui")" = 755 ] || fail 'single-host UI executable is not 0755'
@@ -156,6 +158,10 @@ cmp -s "$packaging_dir/assets/AppIcon.icns" "$app_icon" ||
 [ "$(stat -f '%Lp' "$app_icon")" = 644 ] || fail 'application icon is not 0644'
 [ "$(plutil -extract CFBundleIconFile raw "$bundle/Contents/Info.plist")" = "$BRAND_ICON_NAME" ] ||
     fail "top-level CFBundleIconFile is not $BRAND_ICON_NAME"
+cmp -s "$app_icon" "$agent_icon" || fail 'Agent icon differs from the application icon'
+[ "$(stat -f '%Lp' "$agent_icon")" = 644 ] || fail 'Agent icon is not 0644'
+[ "$(plutil -extract CFBundleIconFile raw "$agent_plist")" = "$BRAND_ICON_NAME" ] ||
+    fail "Agent CFBundleIconFile is not $BRAND_ICON_NAME"
 
 [ -z "$(find "$work/home" -mindepth 1 -print -quit)" ] ||
     fail 'bundle scripts wrote under HOME'
@@ -400,6 +406,18 @@ fi
 plutil -replace CFBundleIconFile -string "$BRAND_ICON_NAME" "$bundle/Contents/Info.plist"
 "$packaging_dir/verify-bundle.sh" "$bundle" >/dev/null
 
+mv -- "$agent_icon" "$work/agent-icon-original.icns"
+if "$packaging_dir/verify-bundle.sh" "$bundle" >/dev/null 2>&1; then
+    fail "verifier accepted a bundle without the Agent icon"
+fi
+mv -- "$work/agent-icon-original.icns" "$agent_icon"
+plutil -replace CFBundleIconFile -string "$BRAND_ICON_NAME-drift" "$agent_plist"
+if "$packaging_dir/verify-bundle.sh" "$bundle" >/dev/null 2>&1; then
+    fail 'verifier accepted a drifted Agent CFBundleIconFile'
+fi
+plutil -replace CFBundleIconFile -string "$BRAND_ICON_NAME" "$agent_plist"
+"$packaging_dir/verify-bundle.sh" "$bundle" >/dev/null
+
 touch "$bundle/Contents/unexpected"
 if "$packaging_dir/verify-bundle.sh" "$bundle" >/dev/null 2>&1; then
     fail 'verifier accepted an unexpected bundle entry'
@@ -407,7 +425,6 @@ fi
 rm -- "$bundle/Contents/unexpected"
 "$packaging_dir/verify-bundle.sh" "$bundle" >/dev/null
 
-agent_plist="$bundle/$agent_rel/Contents/Info.plist"
 plutil -replace LSMinimumSystemVersion -string 12.0 "$agent_plist"
 if "$packaging_dir/verify-bundle.sh" "$bundle" >/dev/null 2>&1; then
     fail 'verifier accepted a mismatched minimum system version'
@@ -516,6 +533,7 @@ for path in \
     "Contents/MacOS/quill-ui" \
     "Contents/Resources/Quill Ink.icns" \
     "Contents/Library/LoginItems/Quill & Ink Agent.app/Contents/MacOS/quill-agent" \
+    "Contents/Library/LoginItems/Quill & Ink Agent.app/Contents/Resources/Quill Ink.icns" \
     "Contents/Library/Helpers/Quill & Ink Menu.app/Contents/MacOS/quill-menu" \
     "Contents/Resources/frontends/org.example.quill.ui/Quill & Ink UI.app/Contents/MacOS/quill-ui"; do
     [ -f "$rebrand_bundle/$path" ] || fail "alternate brand bundle is missing $path"

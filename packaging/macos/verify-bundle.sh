@@ -252,6 +252,7 @@ menu_plist="$menu_bundle/Contents/Info.plist"
 launcher_executable="$bundle/Contents/MacOS/$BRAND_LAUNCHER_BIN"
 host_ui_executable="$bundle/Contents/MacOS/$BRAND_UI_BIN"
 app_icon="$bundle/Contents/Resources/$BRAND_ICON_NAME.icns"
+agent_icon="$agent_bundle/Contents/Resources/$BRAND_ICON_NAME.icns"
 agent_executable="$agent_bundle/Contents/MacOS/$BRAND_AGENT_BIN"
 menu_executable="$menu_bundle/Contents/MacOS/$BRAND_MENU_BIN"
 ui_payload="$bundle/Contents/Resources/frontends/$BRAND_UI_BUNDLE_ID"
@@ -269,6 +270,7 @@ require_directory "$bundle/Contents/Library/LoginItems"
 require_directory "$agent_bundle"
 require_directory "$agent_bundle/Contents"
 require_directory "$agent_bundle/Contents/MacOS"
+require_directory "$agent_bundle/Contents/Resources"
 require_directory "$menu_bundle"
 require_directory "$menu_bundle/Contents"
 require_directory "$menu_bundle/Contents/MacOS"
@@ -288,6 +290,8 @@ require_file "$menu_plist"
 require_file "$launcher_executable"
 require_file "$host_ui_executable"
 require_file "$app_icon"
+require_file "$agent_icon"
+cmp -s "$app_icon" "$agent_icon" || die 'Agent icon differs from the application icon'
 require_file "$agent_executable"
 require_file "$menu_executable"
 [ -x "$launcher_executable" ] || die "launcher executable bit is missing: $launcher_executable"
@@ -328,6 +332,8 @@ $agent_rel/Contents
 $agent_rel/Contents/Info.plist
 $agent_rel/Contents/MacOS
 $agent_rel/Contents/MacOS/$BRAND_AGENT_BIN
+$agent_rel/Contents/Resources
+$agent_rel/Contents/Resources/$BRAND_ICON_NAME.icns
 ./Contents/MacOS
 ./Contents/MacOS/$BRAND_LAUNCHER_BIN
 ./Contents/MacOS/$BRAND_UI_BIN
@@ -450,6 +456,7 @@ expect_plist_string "$main_plist" LSMinimumSystemVersion 13.0
 
 expect_plist_string "$agent_plist" CFBundleDisplayName "$BRAND_PRODUCT_NAME Agent"
 expect_plist_string "$agent_plist" CFBundleExecutable "$BRAND_AGENT_BIN"
+expect_plist_string "$agent_plist" CFBundleIconFile "$BRAND_ICON_NAME"
 expect_plist_string "$agent_plist" CFBundleIdentifier "$agent_bundle_id"
 expect_plist_string "$agent_plist" CFBundlePackageType APPL
 expect_plist_string "$agent_plist" CFBundleShortVersionString "$short_version"

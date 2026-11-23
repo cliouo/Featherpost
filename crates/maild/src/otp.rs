@@ -96,13 +96,14 @@ impl OtpConfig {
         &self,
         messages: &maild_l10n::Messages,
         hit: &OtpHit,
+        account_label: Option<&str>,
     ) -> (String, String) {
         let notifications = &messages.notifications;
         let title = self
             .custom_title()
             .unwrap_or(notifications.otp_title)
             .to_string();
-        let body = (notifications.otp_body)(&hit.code, &hit.account, &hit.from);
+        let body = (notifications.otp_body)(&hit.code, account_label, &hit.from);
         (title, body)
     }
 
@@ -231,8 +232,12 @@ impl Plugin for OtpPlugin {
             }
             if let Some(n) = ctx2.get::<Notifier>() {
                 // 成文时读偏好：切换语言后下一条验证码通知即跟随（ADR-0048 决策 6）。
-                let (title, body) =
-                    cfg.notification_text(crate::notify::kernel_messages(&ctx2), &hit);
+                let label = crate::accounts::notification_label(&ctx2, &hit.account);
+                let (title, body) = cfg.notification_text(
+                    crate::notify::kernel_messages(&ctx2),
+                    &hit,
+                    label.as_deref(),
+                );
                 n.notify_with_target(
                     &title,
                     &body,
@@ -600,14 +605,14 @@ mod tests {
         ] {
             assert_eq!(cfg.custom_title(), None, "{:?}", cfg.title);
             assert_eq!(
-                cfg.notification_text(&maild_l10n::ZH_HANS, &hit()),
+                cfg.notification_text(&maild_l10n::ZH_HANS, &hit(), Some("personal")),
                 (
                     "验证码".to_string(),
                     "246810（personal · 来自 noreply@example.com）".to_string()
                 )
             );
             assert_eq!(
-                cfg.notification_text(&maild_l10n::EN, &hit()),
+                cfg.notification_text(&maild_l10n::EN, &hit(), Some("personal")),
                 (
                     maild_l10n::EN.notifications.otp_title.to_string(),
                     "246810 (personal · from noreply@example.com)".to_string()
@@ -621,7 +626,10 @@ mod tests {
         let cfg = config("title = \"Login code\"\n");
         assert_eq!(cfg.custom_title(), Some("Login code"));
         for messages in [&maild_l10n::ZH_HANS, &maild_l10n::EN] {
-            assert_eq!(cfg.notification_text(messages, &hit()).0, "Login code");
+            assert_eq!(
+                cfg.notification_text(messages, &hit(), None).0,
+                "Login code"
+            );
         }
         // 只有逐字节等于旧出厂值才算未自定义。
         assert_eq!(

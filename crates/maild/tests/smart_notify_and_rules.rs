@@ -610,7 +610,7 @@ fn masked_preview_hides_subject_and_snippet() {
     let sent = sent(&ctx);
     assert_eq!(sent.len(), 1, "非敏感新邮件通知不被 show_sensitive 静默");
     assert_eq!(sent[0].title, "新邮件");
-    assert_eq!(sent[0].body, "账户 personal 收到一封新邮件");
+    assert_eq!(sent[0].body, "收到一封新邮件");
     for leaked in ["周报", "机密摘要", "张三", "zhang@example.com"] {
         assert!(!sent[0].title.contains(leaked) && !sent[0].body.contains(leaked));
     }
@@ -680,7 +680,7 @@ fn notifications_follow_locale_preference_at_compose_time() {
     assert_eq!(english[1].title, "Verification Code");
     assert_eq!(
         english[1].body,
-        "246810 (personal · from \"张三\" <zhang@example.com>)"
+        "246810 (from \"张三\" <zhang@example.com>)"
     );
 
     // 显式切到简体中文：不重启、不重装插件，下一条通知即为中文。
@@ -697,10 +697,7 @@ fn notifications_follow_locale_preference_at_compose_time() {
     assert_eq!(all[2].title, "张三");
     assert!(all[2].body.starts_with("（无主题） "), "{:?}", all[2].body);
     assert_eq!(all[3].title, "验证码");
-    assert_eq!(
-        all[3].body,
-        "246810（personal · 来自 \"张三\" <zhang@example.com>）"
-    );
+    assert_eq!(all[3].body, "246810（来自 \"张三\" <zhang@example.com>）");
 }
 
 #[test]
@@ -727,7 +724,7 @@ fn custom_otp_title_survives_locale_switch() {
     let sent = sent(&ctx);
     assert_eq!(sent.len(), 1, "{sent:?}");
     assert_eq!(sent[0].title, "登录码", "用户写的标题原样保留");
-    assert!(sent[0].body.starts_with("135790 (personal · from "));
+    assert!(sent[0].body.starts_with("135790 (from "));
 }
 
 #[test]
@@ -749,7 +746,7 @@ fn burst_of_ten_mails_is_merged() {
             "{sent:#?}"
         );
     }
-    assert_eq!(sent[3].body, "账户 personal 收到多封新邮件");
+    assert_eq!(sent[3].body, "收到多封新邮件");
     assert_eq!(
         sent[3].target,
         Some(OpenIntent::Inbox {
