@@ -12,6 +12,8 @@ pub mod documents;
 pub mod html;
 pub mod instance_lock;
 #[cfg(target_os = "macos")]
+mod macos_app_languages;
+#[cfg(target_os = "macos")]
 mod macos_locale;
 #[cfg(target_os = "macos")]
 mod macos_window;
@@ -505,6 +507,10 @@ fn spawn_state_pump(app: tauri::AppHandle, bridge: Arc<Bridge>) {
                     if negotiated != menu_locale {
                         menu_locale = negotiated;
                         macos_locale::apply(&app, negotiated);
+                    }
+                    // 系统画的文字（右键菜单、文件面板）下次启动跟随：按模式镜像到本 app 的 AppleLanguages。
+                    if seen_locale.is_some() {
+                        macos_app_languages::spawn_sync(bridge.clone());
                     }
                 }
             }

@@ -52,6 +52,8 @@ libc = "0.2"
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { version = "0.6.4", default-features = false, features = ["std"] }
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "libc", "NSApplication", "NSResponder", "NSRunningApplication"] }
+# ADR-0048 决策 8：把显式语言镜像到本 app 偏好域的 `AppleLanguages`（CFPreferences）。
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFArray", "CFPreferences", "CFString"] }
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
