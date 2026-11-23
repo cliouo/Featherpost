@@ -1,9 +1,11 @@
 import { afterEach, expect, it } from "vitest";
+import { applyEffectiveLocales } from "@featherpost/i18n";
 import { MailboxController } from "../src/mailbox/controller";
 import {
   filterUnread,
   searchMail,
   folderTree,
+  folderNavigationLabels,
   selectedFolder,
 } from "../../featherpost-studio/src/navigation";
 import { FakeBridge, online, folder, summary, flush } from "./fakeBridge";
@@ -189,4 +191,45 @@ it("keeps real nested and non-selectable folders without inventing or mixing acc
       "Projects/Featherpost",
     ),
   ).toBe(false);
+});
+
+it("distinguishes localized sibling folder names without hiding either server folder", () => {
+  const drafts = [folder("Draft", "drafts"), folder("Drafts", "drafts")];
+  const before = structuredClone(drafts);
+  applyEffectiveLocales(["zh-CN"]);
+  try {
+    const labels = folderNavigationLabels(drafts);
+    expect(drafts.map((f) => labels.get(f))).toEqual([
+      "草稿 · Draft",
+      "草稿 · Drafts",
+    ]);
+    for (const f of drafts) {
+      const scope = { kind: "folder" as const, account: f.account, folder: f.name };
+      expect(drafts.filter((other) => selectedFolder(scope, other.account, other.name))).toEqual([f]);
+    }
+    expect(drafts).toEqual(before);
+    applyEffectiveLocales(["en"]);
+    expect([...folderNavigationLabels(drafts).values()]).toEqual([
+      "Drafts · Draft",
+      "Drafts · Drafts",
+    ]);
+  } finally {
+    applyEffectiveLocales([]);
+  }
+});
+
+it("uses real paths for equal provider labels and leaves unique nested labels compact", () => {
+  const sameNames = [
+    { ...folder("Drafts"), display_name: "草稿" },
+    { ...folder("&g0l6Pw-"), display_name: "草稿" },
+  ];
+  expect([...folderNavigationLabels(sameNames).values()]).toEqual([
+    "草稿 · Drafts",
+    "草稿 · &g0l6Pw-",
+  ]);
+  const child = folder("Projects/Reviews");
+  expect(folderNavigationLabels([child], true).get(child)).toBe("Reviews");
+  expect(folderNavigationLabels([child]).get(child)).toBe("Projects/Reviews");
+  const custom = { ...folder("Projects/Archive", "archive"), display_name: "Private archive" };
+  expect(folderNavigationLabels([custom], true).get(custom)).toBe("Private archive");
 });

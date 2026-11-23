@@ -23,6 +23,7 @@ import {
 import {
   folderTree,
   folderIcon,
+  folderNavigationLabels,
   selectedFolder,
   scopeContext,
   searchMail,
@@ -417,22 +418,17 @@ function FolderBranches({
       .toLocaleLowerCase(uiLocale())
       .includes(filter) ||
     n.children.some(matches);
+  const labels = folderNavigationLabels(nodes.map((n) => n.folder), depth > 0);
   return (
-    <div className="folder-branches">
+    <div className={`folder-branches ${depth === 0 ? "folder-directory" : ""}`}>
       {nodes.filter(matches).map(({ folder, children }) => {
         const expanded = !!filter || !collapsed.has(folder.name);
-        const rawLabel =
-          depth &&
-          folder.display_name === folder.name &&
-          /[/.]/.test(folder.name)
-            ? folder.name.split(/[/.]/).pop()
-            : folder.display_name || folder.name;
-        const label = folderLabel({ ...folder, display_name: rawLabel ?? folder.name });
+        const label = labels.get(folder)!;
         const count = folder.role === "drafts" ? folder.total : folder.unseen;
         return (
           <div key={folder.name}>
             <div
-              className={`folder-row ${active && current(folder.account, folder.name) ? "is-active" : ""}`}
+              className={`folder-row ${depth === 0 ? "folder-root-row" : ""} ${active && current(folder.account, folder.name) ? "is-active" : ""}`}
               style={{ "--depth": depth } as CSSProperties}
               onContextMenu={(e) =>
                 menu.offer(e, () =>

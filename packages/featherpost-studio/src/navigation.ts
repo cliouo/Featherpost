@@ -10,6 +10,30 @@ export interface FolderNode {
   folder: UiFolder;
   children: FolderNode[];
 }
+
+/** Keep colliding translated sibling labels distinct without merging server identities. */
+export function folderNavigationLabels(folders: UiFolder[], nested = false) {
+  const labels = folders.map((folder) => {
+    const displayName =
+      nested && folder.display_name === folder.name && /[/.]/.test(folder.name)
+        ? folder.name.split(/[/.]/).pop()!
+        : folder.display_name || folder.name;
+    return folderLabel({ ...folder, display_name: displayName });
+  });
+  const counts = new Map<string, number>();
+  for (const label of labels) counts.set(label, (counts.get(label) ?? 0) + 1);
+  return new Map(
+    folders.map((folder, index) => {
+      const label = labels[index]!;
+      const original =
+        folder.display_name && folder.display_name !== label
+          ? folder.display_name
+          : folder.name;
+      return [folder, counts.get(label)! > 1 ? `${label} · ${original}` : label];
+    }),
+  );
+}
+
 const order: Record<string, number> = {
   inbox: 0,
   sent: 1,
