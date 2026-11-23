@@ -606,6 +606,7 @@
   align-self: stretch;
   border-radius: 2px;
   background: var(--line);
+  transition: background-color 120ms cubic-bezier(0.2, 0, 0, 1);
 }
 .remote-row.selected .remote-mark {
   background: var(--accent);
