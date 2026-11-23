@@ -228,6 +228,13 @@ async fn tauri_frontend_syncs_discovers_and_pulls_server_history_into_an_isolate
         bridge.get_message("legacy", "INBOX", "5").await.is_ok()
     })
     .await;
+    server.add_mailbox("Archive", "\\Archive");
+    server.deliver_to("Archive", "", plain_mail("新文件夹邮件", "body-archive"));
+    bridge
+        .sync_mailbox_scope("legacy".into(), Some("Archive".into()))
+        .await
+        .unwrap();
+    assert!(bridge.get_message("legacy", "Archive", "1").await.is_ok());
 
     // ADR-0048 决策 7：回复引用块跟随桥传来的界面语言；不传时按 daemon 偏好（跟随系统语言）。
     let english = bridge

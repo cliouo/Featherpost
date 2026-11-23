@@ -289,7 +289,7 @@ export function MailboxNavigation({
             {open &&
               visible.map((id) => {
                 const opened = !unified && expanded === id;
-                const syncing = mail.syncingScope?.account === id;
+                const syncing = mail.syncingScopes.has(id);
                 return (
                   <div
                     className={`account-tree grouped-account ${opened ? "account-expanded" : ""} ${active && selectedAccount === id ? "account-selected" : ""}`}
@@ -312,7 +312,7 @@ export function MailboxNavigation({
                               .foldersOf(id)
                               .some((f) => f.present),
                             sync: () => void mailbox.syncNow({ account: id }),
-                            canSync: mail.snapshot.phase === "online" && !mail.syncing,
+                            canSync: mail.snapshot.phase === "online" && !mailbox.isSyncing(id),
                             groups: grouping.groups,
                             group: grouping.assignments[id] ?? OTHER_GROUP,
                             assign: (group) =>

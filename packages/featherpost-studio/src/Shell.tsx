@@ -145,10 +145,10 @@ export function Studio({
         searchInput.current?.select();
       }),
     sync: (folder) => void mailbox.syncNow({ account: folder.account, folder: folder.name }),
-    canSync: online && !mail.syncing,
-    syncing: (folder) => mail.syncingScope?.account === folder.account &&
-      mail.syncingScope.folder === folder.name,
+    canSync: (folder) => online && !mailbox.isSyncing(folder.account),
+    syncing: (folder) => mail.syncingScopes.get(folder.account)?.folder === folder.name,
   };
+  const syncing = mailbox.isSyncing();
   const unread = state.snapshot.accounts.reduce(
     (n, a) =>
       n +
@@ -262,14 +262,14 @@ export function Studio({
             </button>
           </div>
           <button
-            className={`sync-status ${mail.syncing ? "spinning" : ""}`}
-            disabled={!online || mail.syncing}
+            className={`sync-status ${syncing ? "spinning" : ""}`}
+            disabled={!online || syncing}
             title={m.studio_sync_now()}
             onClick={() => void mailbox.syncNow()}
           >
             <Icon name="refresh" />
             <span>
-              {mail.syncing
+              {syncing
                 ? m.studio_sync_status_syncing()
                 : online
                   ? m.studio_sync_status_online()
@@ -376,7 +376,7 @@ interface FolderActions {
   openUnread(folder: Folder): void;
   searchIn(folder: Folder): void;
   sync(folder: Folder): void;
-  canSync: boolean;
+  canSync(folder: Folder): boolean;
   syncing(folder: Folder): boolean;
 }
 
@@ -447,7 +447,7 @@ function FolderBranches({
                     openUnread: () => actions.openUnread(folder),
                     searchIn: () => actions.searchIn(folder),
                     sync: () => actions.sync(folder),
-                    canSync: actions.canSync,
+                    canSync: actions.canSync(folder),
                     copy,
                     expansion:
                       children.length && !filter

@@ -93,8 +93,7 @@ export interface MailboxState {
   threadOffset: number;
   threadLoading: boolean;
   threadError: string | null;
-  syncing: boolean;
-  syncingScope: { account: string; folder?: string } | null;
+  syncingScopes: ReadonlyMap<string | undefined, { folder?: string }>;
   syncError: string | null;
   remote: RemoteSearch;
 }
@@ -287,8 +286,7 @@ export class MailboxController {
       threadOffset: 0,
       threadLoading: false,
       threadError: null,
-      syncing: false,
-      syncingScope: null,
+      syncingScopes: new Map(),
       syncError: null,
       remote: idleRemote(),
     });
@@ -874,13 +872,20 @@ export class MailboxController {
         });
     }
   }
+  isSyncing = (account = queryOf(this.state.scope).account) => {
+    const scopes = this.state.syncingScopes;
+    return scopes.has(undefined) || (account === undefined ? scopes.size > 0 : scopes.has(account));
+  };
   /**
    * 「立即同步」：先敲醒后台检查新邮件（后台不支持时静默降级），再刷新当前列表。
    */
   syncNow = async (scope?: { account: string; folder?: string }) => {
-    if (this.state.snapshot.phase !== "online" || this.stopped || this.state.syncing) return;
     const account = scope?.account ?? queryOf(this.state.scope).account;
-    this.patch({ syncing: true, syncingScope: scope ?? null, syncError: null });
+    if (this.state.snapshot.phase !== "online" || this.stopped || this.isSyncing(account)) return;
+    this.patch({
+      syncingScopes: new Map(this.state.syncingScopes).set(account, { folder: scope?.folder }),
+      syncError: null,
+    });
     let syncError: string | null = null;
     try {
       if (scope && this.bridge.mailbox.syncScope) {
@@ -895,7 +900,11 @@ export class MailboxController {
       if (scope) await this.folderLoads.get(scope.account);
       await this.refresh();
     } finally {
-      if (!this.stopped) this.patch({ syncing: false, syncingScope: null, syncError });
+      if (!this.stopped) {
+        const syncingScopes = new Map(this.state.syncingScopes);
+        syncingScopes.delete(account);
+        this.patch({ syncingScopes, ...(syncError === null ? {} : { syncError }) });
+      }
     }
   };
   get serverSearchSupported() {

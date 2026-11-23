@@ -138,23 +138,49 @@ describe("立即同步", () => {
     };
     const scope = { account: "demo", folder: name };
     const run = c.syncNow(scope);
-    await c.syncNow({ account: "other" });
-    expect(c.state.syncingScope).toEqual(scope);
+    await c.syncNow({ account: "demo", folder: "INBOX" });
+    expect(c.state.syncingScopes.get("demo")).toEqual({ folder: name });
     expect(asked).toEqual([["demo", name]]);
     expect(bridge.folderRequests).toHaveLength(1);
     if (name) sync.reject(offlineError());
     else sync.resolve();
     await flush();
-    expect(c.state.syncingScope).toEqual(scope);
+    expect(c.state.syncingScopes.get("demo")).toEqual({ folder: name });
     bridge.folderRequests.at(-1)!.d.resolve([folder("INBOX", "inbox"), folder("Renamed")]);
     bridge.mailbox.queries.at(-1)!.d.resolve({ messages: [], total: 0 });
     await run;
-    expect(c.state.syncingScope).toBeNull();
-    expect(c.state.syncing).toBe(false);
+    expect(c.state.syncingScopes.has("demo")).toBe(false);
+    expect(c.isSyncing()).toBe(false);
     expect(c.state.scope).toEqual(originalScope);
     expect(c.foldersOf("demo").map((folder) => folder.name)).toEqual(["INBOX", "Renamed"]);
     if (name) expect(c.state.syncError).toContain("后台连接不可用");
     else expect(c.state.syncError).toBeNull();
+  });
+
+  it("lets another account finish while a scoped sync is stalled", async () => {
+    const { bridge, c } = await ready();
+    const stalled = deferred<void>();
+    const independent = deferred<void>();
+    bridge.mailbox.syncScope = (account) => account === "demo" ? stalled.promise : independent.promise;
+    const first = c.syncNow({ account: "demo", folder: "Archive" });
+    const second = c.syncNow({ account: "other" });
+    expect(c.isSyncing("demo")).toBe(true);
+    expect(c.isSyncing("other")).toBe(true);
+
+    independent.resolve();
+    await flush();
+    bridge.folderRequests.at(-1)!.d.resolve([folder("INBOX", "inbox")]);
+    bridge.mailbox.queries.at(-1)!.d.resolve({ messages: [], total: 0 });
+    await second;
+    expect(c.isSyncing("other")).toBe(false);
+    expect(c.isSyncing("demo")).toBe(true);
+
+    stalled.reject(offlineError());
+    await flush();
+    bridge.folderRequests.at(-1)!.d.resolve([folder("INBOX", "inbox")]);
+    bridge.mailbox.queries.at(-1)!.d.resolve({ messages: [], total: 0 });
+    await first;
+    expect(c.isSyncing()).toBe(false);
   });
 
   it("先敲醒后台（带当前账户），再刷新列表，期间显示同步中", async () => {
@@ -170,7 +196,7 @@ describe("立即同步", () => {
     };
     const pages = bridge.pageRequests.length;
     const run = c.syncNow();
-    expect(c.state.syncing).toBe(true);
+    expect(c.isSyncing()).toBe(true);
     expect(asked).toEqual(["demo"]);
     expect(bridge.pageRequests).toHaveLength(pages);
     sync.resolve();
@@ -179,7 +205,7 @@ describe("立即同步", () => {
     for (const r of bridge.folderRequests.slice(1)) r.d.resolve([folder("INBOX", "inbox")]);
     bridge.pageRequests.at(-1)!.d.resolve({ messages: [summary("INBOX", "9")], total: 1 });
     await run;
-    expect(c.state.syncing).toBe(false);
+    expect(c.isSyncing()).toBe(false);
     expect(c.state.syncError).toBeNull();
     expect(c.state.rows.map((r) => r.uid)).toEqual(["9"]);
   });

@@ -290,24 +290,30 @@ impl Bridge {
         struct Status {
             done: bool,
         }
-        let Started { sync_id } = self
-            .compose_call(
-                "syncMessages",
-                json!({ "account": account, "folder": folder, "track": true }),
-            )
-            .await?;
-        loop {
-            let status: Status = self
+        tokio::time::timeout(maild_client::REQUEST_TIMEOUT, async {
+            let Started { sync_id } = self
                 .compose_call(
                     "syncMessages",
-                    json!({ "account": account, "sync_id": sync_id }),
+                    json!({ "account": account, "folder": folder, "track": true }),
                 )
                 .await?;
-            if status.done {
-                return Ok(());
+            loop {
+                let status: Status = self
+                    .compose_call(
+                        "syncMessages",
+                        json!({ "account": account, "sync_id": sync_id }),
+                    )
+                    .await?;
+                if status.done {
+                    return Ok(());
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(250)).await;
             }
-            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-        }
+        })
+        .await
+        .map_err(|error| {
+            UiError::failed("syncMessages", error, "failed", "同步超时，请稍后重试。")
+        })?
     }
 
     /// 在服务器上检索本地缓存窗口之外的历史（`searchMessages` 的 `scope: "server"` 分支）。
