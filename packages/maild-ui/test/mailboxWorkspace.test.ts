@@ -195,6 +195,69 @@ describe("08-B mailbox workspace", () => {
     expect(c.canLoadMore).toBe(false);
   });
 
+  it("opens the next older unread message after newer arrivals move the pinned message down", async () => {
+    const rows = ["1", "2", "3", "4"].map((uid, i) => ({
+      ...summary("INBOX", uid), seen: false, sort_at: 40 - i * 10,
+    }));
+    const { bridge, c } = await ready(rows);
+    c.setUnreadFilter(true);
+    bridge.mailbox.queries.at(-1)!.d.resolve({ messages: rows, total: rows.length });
+    await flush();
+    vi.useFakeTimers();
+    c.selectMessage(c.state.rows[2]);
+    bridge.detailRequests[0].d.resolve(message("INBOX", "3", { seen: false, sort_at: 20 }));
+    await vi.advanceTimersByTimeAsync(1500);
+    const afterRead = bridge.mailbox.queries.at(-1)!;
+    afterRead.d.resolve({ messages: [rows[0], rows[1], rows[3]], total: 3 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(c.state.rows.map((row) => row.uid)).toEqual(["1", "2", "3", "4"]);
+
+    c.acceptSnapshot({ ...c.state.snapshot, revision: c.state.snapshot.revision + 1 });
+    await vi.advanceTimersByTimeAsync(250);
+    const refreshed = [
+      { ...summary("INBOX", "newer"), seen: false, sort_at: 60 },
+      { ...summary("INBOX", "new"), seen: false, sort_at: 50 },
+      rows[0], rows[1], rows[3],
+    ];
+    const afterArrival = bridge.mailbox.queries.at(-1)!;
+    expect(afterArrival).not.toBe(afterRead);
+    afterArrival.d.resolve({ messages: refreshed, total: refreshed.length });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(c.state.rows.map((row) => row.uid)).toEqual(["newer", "new", "1", "2", "3", "4"]);
+    expect(c.step(1)?.uid).toBe("4");
+    expect(c.state.rows).toEqual(refreshed);
+  });
+
+  it("drops the read pin from Starred → Unread after the message is unstarred", async () => {
+    const rows = ["1", "2"].map((uid) => ({ ...summary("INBOX", uid), seen: false, flagged: true }));
+    const { bridge, c } = await ready();
+    c.selectSmart("starred");
+    c.setUnreadFilter(true);
+    const initial = bridge.mailbox.queries.at(-1)!;
+    expect(initial.query).toEqual({ flagged: true, seen: false });
+    initial.d.resolve({ messages: rows, total: rows.length });
+    await flush();
+    vi.useFakeTimers();
+    c.selectMessage(c.state.rows[0]);
+    bridge.detailRequests[0].d.resolve(message("INBOX", "1", { seen: false, flagged: true }));
+    await vi.advanceTimersByTimeAsync(1500);
+    const afterRead = bridge.mailbox.queries.at(-1)!;
+    afterRead.d.resolve({ messages: [rows[1]], total: 1 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(c.state.rows.map((row) => row.uid)).toEqual(["1", "2"]);
+
+    await c.toggleSelected("flagged");
+    const afterUnstar = bridge.mailbox.queries.at(-1)!;
+    expect(afterUnstar.query).toEqual(initial.query);
+    afterUnstar.d.resolve({ messages: [rows[1]], total: 1 });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(c.state.rows).toEqual([rows[1]]);
+    expect(c.state.total).toBe(1);
+    expect(c.state.selectedRow).toMatchObject({ uid: "1", seen: true, flagged: false });
+  });
+
   it("starts with one daemon-paged inbox query and preserves equal UIDs across accounts", async () => {
     const { bridge, c } = await ready([
       summary("INBOX", "1"),

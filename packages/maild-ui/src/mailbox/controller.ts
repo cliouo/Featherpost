@@ -163,6 +163,42 @@ export function queryOf(scope: Scope): MailboxQuery {
         : {};
   return { ...filters, ...(scope.group ? { accounts: scope.group.accounts } : {}) };
 }
+function matchesMailbox(row: UiSummary, query: MailboxQuery): boolean {
+  return (
+    (!query.account || row.account === query.account) &&
+    (!query.accounts || query.accounts.includes(row.account)) &&
+    (!query.folder || row.folder === query.folder)
+  );
+}
+
+function unreadPinIndex(
+  row: UiSummary,
+  rows: readonly UiSummary[],
+  previous: readonly UiSummary[],
+  grouped: boolean,
+): number {
+  const key = messageKey(row);
+  const previousIndex = previous.findIndex((r) => messageKey(r) === key);
+  if (previousIndex < 0) return -1;
+  const compare = (other: UiSummary) =>
+    row.sort_at - other.sort_at ||
+    (grouped && row.account !== other.account ? (row.account < other.account ? 1 : -1) : 0);
+  const knownOrder = new Map(previous.map((r, i) => [messageKey(r), i]));
+  let afterKnownPredecessor: number | null = null;
+  let firstTie: number | null = null;
+  for (let i = 0; i < rows.length; i++) {
+    const order = compare(rows[i]);
+    if (order < 0) continue;
+    if (order > 0) return afterKnownPredecessor ?? firstTie ?? i;
+    // The daemon's same-timestamp row IDs are not on the bridge; keep known ties in their list order.
+    firstTie ??= i;
+    const prior = knownOrder.get(messageKey(rows[i]));
+    if (prior !== undefined && prior > previousIndex) return i;
+    if (prior !== undefined && prior < previousIndex) afterKnownPredecessor = i + 1;
+  }
+  return afterKnownPredecessor ?? firstTie ?? rows.length;
+}
+
 export function scopeTitle(scope: Scope) {
   if (scope.kind === "unread") return scopeTitle(scope.base);
   if (scope.kind === "smart" && scope.group) return m.mailbox_scope_group_inbox({ group: scope.group.name });
@@ -789,14 +825,7 @@ export class MailboxController {
         }
       }
       if (!current() || this.stopped) return;
-      if (
-        page.messages.some(
-          (r) =>
-            (q.account && r.account !== q.account) ||
-            (q.accounts && !q.accounts.includes(r.account)) ||
-            (q.folder && r.folder !== q.folder),
-        )
-      )
+      if (page.messages.some((r) => !matchesMailbox(r, q)))
         throw new Error("scope mismatch");
       const rows = [
         ...new Map(
@@ -810,14 +839,22 @@ export class MailboxController {
       const selected = this.state.selectedRow;
       const selectedKey = selected && messageKey(selected);
       const inPage = selectedKey && rows.find((r) => messageKey(r) === selectedKey);
-      const oldIndex =
-        q.seen === false && selected?.seen && !inPage
-          ? this.state.rows.findIndex((r) => messageKey(r) === selectedKey)
+      const pinIndex =
+        q.seen === false &&
+        !q.search &&
+        selected?.seen &&
+        !inPage &&
+        matchesMailbox(selected, q) &&
+        (q.flagged === undefined || selected.flagged === q.flagged) &&
+        (!q.role || this.foldersOf(selected.account).some(
+          (folder) => folder.name === selected.folder && folder.role === q.role,
+        ))
+          ? unreadPinIndex(selected, rows, this.state.rows, q.accounts !== undefined)
           : -1;
-      const visibleRows = oldIndex < 0 ? rows : [...rows];
+      const visibleRows = pinIndex < 0 ? rows : [...rows];
       // The open read message keeps its place without taking up a daemon page slot.
-      this.unreadPin = oldIndex >= 0 ? selectedKey : null;
-      if (selected && oldIndex >= 0) visibleRows.splice(oldIndex, 0, selected);
+      this.unreadPin = pinIndex >= 0 ? selectedKey : null;
+      if (selected && pinIndex >= 0) visibleRows.splice(pinIndex, 0, selected);
       this.patch({
         rows: visibleRows,
         total: page.total + this.unreadPinCount,
