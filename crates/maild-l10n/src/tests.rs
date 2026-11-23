@@ -67,30 +67,33 @@ fn notifications_snapshot() {
     let (code, account, from) = ("123456", "work", "Alice <a@example.test>");
     // 迁移前：otp.rs 的 `format!("{}（{} · 来自 {}）", hit.code, hit.account, hit.from)`。
     assert_eq!(
-        (zh.otp_body)(code, account, from),
+        (zh.otp_body)(code, Some(account), from),
         format!("{}（{} · 来自 {}）", code, account, from)
     );
     assert_eq!(
-        (zh.otp_body)(code, account, from),
+        (zh.otp_body)(code, Some(account), from),
         "123456（work · 来自 Alice <a@example.test>）"
     );
-    assert_eq!((zh.new_mail_burst_body)("work"), "账户 work 收到多封新邮件");
     assert_eq!(
-        (zh.new_mail_masked_body)("work"),
+        (zh.new_mail_burst_body)(Some("work")),
+        "账户 work 收到多封新邮件"
+    );
+    assert_eq!(
+        (zh.new_mail_masked_body)(Some("work")),
         "账户 work 收到一封新邮件"
     );
 
     let en = &EN.notifications;
     assert_eq!(
-        (en.otp_body)(code, account, from),
+        (en.otp_body)(code, Some(account), from),
         "123456 (work · from Alice <a@example.test>)"
     );
     assert_eq!(
-        (en.new_mail_burst_body)("work"),
+        (en.new_mail_burst_body)(Some("work")),
         "Several new messages arrived in work"
     );
     assert_eq!(
-        (en.new_mail_masked_body)("work"),
+        (en.new_mail_masked_body)(Some("work")),
         "A new message arrived in work"
     );
 }

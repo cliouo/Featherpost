@@ -142,13 +142,13 @@ pub struct Notifications {
     /// 验证码通知标题（`OtpConfig::title` 的出厂默认值）。
     pub otp_title: &'static str,
     /// 验证码通知正文。
-    pub otp_body: fn(code: &str, account: &str, from: &str) -> String,
+    pub otp_body: fn(code: &str, account: Option<&str>, from: &str) -> String,
     /// 新邮件通知的脱敏标题；合并提示也用它。
     pub new_mail_title: &'static str,
     /// 同一账户短时间内多封新邮件的合并提示正文。
-    pub new_mail_burst_body: fn(account: &str) -> String,
+    pub new_mail_burst_body: fn(account: Option<&str>) -> String,
     /// 不显示敏感内容时，单封新邮件的正文。
-    pub new_mail_masked_body: fn(account: &str) -> String,
+    pub new_mail_masked_body: fn(account: Option<&str>) -> String,
     /// 显示敏感内容但邮件没有主题时的占位。
     pub no_subject: &'static str,
 }

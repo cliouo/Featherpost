@@ -92,6 +92,34 @@ impl Service for Accounts {
     }
 }
 
+pub(crate) fn notification_label(ctx: &Context, account: &str) -> Option<String> {
+    if let Some(manager) = ctx.get::<AccountManager>() {
+        let state = manager.state.lock().unwrap();
+        if let Some(profile) = state.catalog.profile(account) {
+            return Some(if profile.display_name.trim().is_empty() {
+                profile.address.clone()
+            } else {
+                profile.display_name.clone()
+            });
+        }
+        return state
+            .legacy
+            .iter()
+            .any(|(name, _, _, _)| name == account)
+            .then(|| account.to_owned());
+    }
+    // With no manager, all mounted accounts use their configured legacy name as their key.
+    ctx.get::<Accounts>().and_then(|accounts| {
+        accounts
+            .entries
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(name, _, _)| name == account)
+            .then(|| account.to_owned())
+    })
+}
+
 // —— 全局插件注册表与装配入口 ——
 
 /// 全局插件注册表（filters / rules / store / frontend / notify / otp / transport / api / scheduler）。
@@ -2685,5 +2713,125 @@ fn legacy_view(
             },
             Some(&state),
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::events::{MailFiltered, MailMessage};
+    use crate::frontend::OpenIntent;
+    use crate::notify::{Notification, Notifier};
+    use crate::store::Store;
+
+    fn notify_ctx(catalog: AccountCatalog, show_sensitive: bool) -> Context {
+        let ctx = Context::new();
+        ctx.provide(Arc::new(AccountManager {
+            ctx: ctx.clone(),
+            store: Arc::new(crate::credential::MemoryCredentialStore::default()),
+            catalog_path: PathBuf::new(),
+            mutation_lock: Default::default(),
+            permits: Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_ACCOUNT_OPS)),
+            state: Mutex::new(ManagerState {
+                catalog,
+                runtimes: Vec::new(),
+                legacy: Vec::new(),
+            }),
+            accounts: Arc::new(Accounts::with_entries(Vec::new())),
+            shutting_down: AtomicBool::new(false),
+        }));
+        ctx.provide(Arc::new(Store::open("").unwrap()));
+        ctx.provide(Arc::new(Notifier::new("dev-log").unwrap()));
+        ctx.provide(Arc::new(OtpConfig::default()));
+        ctx.plugin(Arc::new(OtpPlugin));
+        let rules = RulesConfig {
+            notify_new_mail: true,
+            show_sensitive,
+            ..RulesConfig::default()
+        };
+        ctx.provide(Arc::new(rules.clone()));
+        ctx.plugin(Arc::new(RulesPlugin::new(&rules)));
+        ctx
+    }
+
+    fn sent(ctx: &Context) -> Vec<Notification> {
+        let mut sent = ctx.get::<Notifier>().unwrap().sent();
+        sent.sort_by_key(|notification| notification.id);
+        sent
+    }
+
+    #[tokio::test]
+    async fn notifications_use_managed_mailbox_name_or_address_without_changing_targets() {
+        for (name, label) in [
+            ("Work Mailbox", "Work Mailbox"),
+            ("  ", "work@example.test"),
+        ] {
+            let id = account_catalog::generate_account_id();
+            let mut catalog = AccountCatalog::empty();
+            catalog.profiles.push(AccountProfile {
+                id: id.clone(),
+                revision: 1,
+                display_name: name.into(),
+                address: "work@example.test".into(),
+                enabled: false,
+                archived_at: None,
+                incoming_credential_revision: None,
+                outgoing_credential_revision: None,
+                incoming: IncomingSettings::Plugin {
+                    provider: "test.provider".into(),
+                    poll_secs: 60,
+                },
+                outgoing: None,
+            });
+            let mail = |uid: &str| MailMessage {
+                account: id.clone(),
+                folder: "INBOX".into(),
+                uid: uid.into(),
+                subject: "Weekly report".into(),
+                ..Default::default()
+            };
+
+            let ctx = notify_ctx(catalog.clone(), false);
+            for uid in ["1", "2", "3", "4"] {
+                ctx.emit::<MailFiltered>(mail(uid));
+            }
+            let masked = sent(&ctx);
+            assert_eq!(masked.len(), 4);
+            assert_eq!(masked[0].body, format!("账户 {label} 收到一封新邮件"));
+            assert_eq!(masked[3].body, format!("账户 {label} 收到多封新邮件"));
+            assert_eq!(
+                masked[3].target,
+                Some(OpenIntent::Inbox {
+                    account: Some(id.clone()),
+                })
+            );
+            ctx.dispose().await;
+
+            let ctx = notify_ctx(catalog, true);
+            ctx.emit::<MailFiltered>(mail("1"));
+            ctx.emit::<MailFiltered>(MailMessage {
+                body: "Your verification code is 135790".into(),
+                sender: "sender@example.test".into(),
+                ..mail("2")
+            });
+            let visible = sent(&ctx);
+            assert_eq!(visible.len(), 2);
+            assert_eq!(visible[0].title, label);
+            assert_eq!(
+                visible[1].body,
+                format!("135790（{label} · 来自 sender@example.test）")
+            );
+            for (notification, uid) in visible.iter().zip(["1", "2"]) {
+                assert_eq!(
+                    notification.target,
+                    Some(OpenIntent::Message {
+                        account: id.clone(),
+                        folder: Some("INBOX".into()),
+                        uid: uid.into(),
+                    })
+                );
+            }
+            ctx.dispose().await;
+        }
     }
 }

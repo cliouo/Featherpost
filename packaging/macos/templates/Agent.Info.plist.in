@@ -8,6 +8,8 @@
 	<string>__BRAND_PRODUCT_NAME__ Agent</string>
 	<key>CFBundleExecutable</key>
 	<string>__BRAND_AGENT_BIN__</string>
+	<key>CFBundleIconFile</key>
+	<string>__BRAND_ICON_NAME__</string>
 	<key>CFBundleIdentifier</key>
 	<string>__BRAND_AGENT_BUNDLE_ID__</string>
 	<key>CFBundleInfoDictionaryVersion</key>
