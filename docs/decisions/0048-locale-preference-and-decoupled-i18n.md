@@ -338,6 +338,28 @@ description = "..."
 > - 已知、已接受的副作用：只在用户（经任一客户端）选了**显式**语言时出现——它覆盖系统设置里给本 app 单独设的
 >   语言。跟随系统模式不会清掉用户在系统设置里设的按 app 语言，以后要做「按 app 语言」功能也不受阻。
 
+> 实现记录（M2，跟随系统时尊重按 app 语言）：
+>
+> - 问题：M1 之后两个前端出现在系统设置「语言与地区 → 应用」里。系统是中文、偏好是跟随系统、用户把本 app
+>   单独设成英文时，系统画的文字已是英文，我们自己画的 webview 与原生菜单仍是中文——它们跟的是 daemon 的
+>   `effective`，即 Agent 进程读到的全局列表。
+> - 只改前端壳（`crates/maild-ui/src/shell_locale.rs`，两种形态）。纯函数 `resolve(模式, daemon effective, 本进程语言)`：
+>   `system` 用本进程的首选语言（为空回落 daemon 的 `effective`）；`explicit` 照旧用 daemon 的；模式未知（老 daemon、
+>   还没取到）保持原行为。同一份结果驱动壳里所有消费者：`ui_locale` 的启动值（存在 `AppState`，不再直接读 actor）、
+>   `maild://locale` 事件、原生菜单协商；`ui_locale_preference` 与 `ui_set_locale_preference` 应答里的 `effective`
+>   也换成它（设置页写入成功后按应答立即切换，不能切到 daemon 的全局列表）。设置页不加新界面。
+> - 模式从哪来：推送只带 `effective`，状态泵在它变化时经桥取一次 `getLocalePreference`（M1 本来就要取）；
+>   本壳写入时用应答。取偏好失败时：`locale_unsupported` 视为模式未知，其他失败（超时、断线）沿用上次的模式，
+>   避免在两种列表之间来回跳。`maild-app` 不变。
+> - 顺序：一律**先镜像、后读本进程语言**，与镜像共用一把串行锁——`system` 模式下镜像可能先删掉我们以前写的过期值
+>   （偏好在本 app 未运行时被别的客户端改回跟随系统），过期值不会被当成用户的按 app 选择。跟随系统仍不写按 app 键。
+> - 读的是 `CFLocaleCopyPreferredLanguages`（与 `+[NSLocale preferredLanguages]` 同源，复用已有的 objc2-core-foundation
+>   依赖，只加 `CFLocale` feature，`Cargo.lock` 不变），截到 8 项。一次性探针核验：本域有 `AppleLanguages` 时两者都只返回
+>   它，否则是全局列表；同一进程里 `CFPreferencesSetValue` 写入或删除后立即可见。其他平台没有按 app 语言，壳的列表
+>   恒等于 daemon 的，也不多取一次偏好。
+> - 范围：按 app 语言只影响该前端 app，这是 macOS 自身的语义；daemon、通知、菜单栏与启动器仍跟随全局列表。
+>   不监听系统语言或按 app 语言的变化（不轮询、不订阅），改了重启 app 生效。
+
 ## 交付切片
 
 | 切片 | 内容 | 可独立验收 |
