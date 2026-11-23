@@ -95,6 +95,7 @@ export interface MailboxState {
   threadError: string | null;
   syncingScopes: ReadonlyMap<string | undefined, { folder?: string }>;
   syncError: string | null;
+  syncNotice: string | null;
   remote: RemoteSearch;
 }
 interface Cached {
@@ -288,6 +289,7 @@ export class MailboxController {
       threadError: null,
       syncingScopes: new Map(),
       syncError: null,
+      syncNotice: null,
       remote: idleRemote(),
     });
   }
@@ -885,26 +887,31 @@ export class MailboxController {
     this.patch({
       syncingScopes: new Map(this.state.syncingScopes).set(account, { folder: scope?.folder }),
       syncError: null,
+      syncNotice: null,
     });
+    const finish = (result: { syncError?: string; syncNotice?: string }) => {
+      if (this.stopped) return;
+      const syncingScopes = new Map(this.state.syncingScopes);
+      syncingScopes.delete(account);
+      this.patch({ syncingScopes, ...result });
+    };
     let syncError: string | null = null;
+    let background = false;
     try {
       if (scope && this.bridge.mailbox.syncScope) {
-        await this.bridge.mailbox.syncScope(scope.account, scope.folder);
+        background = (await this.bridge.mailbox.syncScope(scope.account, scope.folder)) === "background";
       } else {
         await this.bridge.mailbox.syncNow?.(account);
       }
     } catch (e) {
       syncError = describe(e, m.mailbox_error_sync());
     }
+    if (background) finish({ syncNotice: m.mailbox_sync_background() });
     try {
       if (scope) await this.folderLoads.get(scope.account);
       await this.refresh();
     } finally {
-      if (!this.stopped) {
-        const syncingScopes = new Map(this.state.syncingScopes);
-        syncingScopes.delete(account);
-        this.patch({ syncingScopes, ...(syncError === null ? {} : { syncError }) });
-      }
+      if (!background) finish(syncError === null ? {} : { syncError });
     }
   };
   get serverSearchSupported() {

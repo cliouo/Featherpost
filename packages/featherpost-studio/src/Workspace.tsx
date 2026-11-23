@@ -97,6 +97,11 @@ export function Workspace({
       : m.studio_list_total_other({ count });
   return (
     <section className="mail-view">
+      {s.syncNotice && (
+        <div className="notice" role="status">
+          {s.syncNotice}
+        </div>
+      )}
       {s.syncError && (
         <div className="notice error" role="alert">
           {s.syncError}

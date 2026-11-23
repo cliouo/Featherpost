@@ -4,6 +4,8 @@ use crate::{Bridge, UiError};
 use maild_client::{MessageResult, MessageSummariesResult, ProfilesResult};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::future::Future;
+use tokio::time::Instant;
 
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -281,7 +283,7 @@ impl Bridge {
         &self,
         account: String,
         folder: Option<String>,
-    ) -> Result<(), UiError> {
+    ) -> Result<UiMailboxSyncOutcome, UiError> {
         #[derive(serde::Deserialize)]
         struct Started {
             sync_id: u64,
@@ -290,30 +292,23 @@ impl Bridge {
         struct Status {
             done: bool,
         }
-        tokio::time::timeout(maild_client::REQUEST_TIMEOUT, async {
-            let Started { sync_id } = self
+        let deadline = Instant::now() + maild_client::REQUEST_TIMEOUT;
+        let Started { sync_id } = self
+            .compose_call(
+                "syncMessages",
+                json!({ "account": account, "folder": folder, "track": true }),
+            )
+            .await?;
+        wait_for_mailbox_sync(deadline, || async {
+            let status: Status = self
                 .compose_call(
                     "syncMessages",
-                    json!({ "account": account, "folder": folder, "track": true }),
+                    json!({ "account": account, "sync_id": sync_id }),
                 )
                 .await?;
-            loop {
-                let status: Status = self
-                    .compose_call(
-                        "syncMessages",
-                        json!({ "account": account, "sync_id": sync_id }),
-                    )
-                    .await?;
-                if status.done {
-                    return Ok(());
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-            }
+            Ok(status.done)
         })
         .await
-        .map_err(|error| {
-            UiError::failed("syncMessages", error, "failed", "同步超时，请稍后重试。")
-        })?
     }
 
     /// 在服务器上检索本地缓存窗口之外的历史（`searchMessages` 的 `scope: "server"` 分支）。
@@ -387,5 +382,64 @@ impl Bridge {
             Err(error) if error.code == crate::UiErrorCode::NotFound => Ok(None),
             Err(error) => Err(error),
         }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UiMailboxSyncOutcome {
+    Complete,
+    Background,
+}
+
+async fn wait_for_mailbox_sync<F>(
+    deadline: Instant,
+    mut status: impl FnMut() -> F,
+) -> Result<UiMailboxSyncOutcome, UiError>
+where
+    F: Future<Output = Result<bool, UiError>>,
+{
+    match tokio::time::timeout_at(deadline, async {
+        loop {
+            if status().await? {
+                return Ok(UiMailboxSyncOutcome::Complete);
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        }
+    })
+    .await
+    {
+        Ok(result) => result,
+        Err(_) => Ok(UiMailboxSyncOutcome::Background),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn expired_sync_wait_returns_background() {
+        let outcome = wait_for_mailbox_sync(Instant::now(), || async { Ok(false) })
+            .await
+            .unwrap();
+        assert_eq!(outcome, UiMailboxSyncOutcome::Background);
+        assert_eq!(serde_json::to_value(outcome).unwrap(), json!("background"));
+    }
+
+    #[tokio::test]
+    async fn sync_wait_preserves_poll_errors() {
+        let error = wait_for_mailbox_sync(Instant::now() + Duration::from_secs(1), || async {
+            Err(UiError::failed(
+                "syncMessages",
+                "LIST rejected",
+                "failed",
+                "同步失败",
+            ))
+        })
+        .await
+        .unwrap_err();
+        assert_eq!(error.message, "同步失败");
     }
 }

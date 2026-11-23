@@ -11,6 +11,7 @@ use crate::bridge::{
     UiMessage, UiPage, UiReadingPolicy, UiReadingPolicyPatch, UiSnapshot,
 };
 use crate::html::LinkKind;
+use crate::mailbox::UiMailboxSyncOutcome;
 use crate::{system, AppState};
 
 #[tauri::command]
@@ -483,7 +484,7 @@ pub(crate) async fn ui_sync_mailbox_scope(
     state: State<'_, AppState>,
     account: String,
     folder: Option<String>,
-) -> Result<(), UiError> {
+) -> Result<UiMailboxSyncOutcome, UiError> {
     state.bridge.sync_mailbox_scope(account, folder).await
 }
 

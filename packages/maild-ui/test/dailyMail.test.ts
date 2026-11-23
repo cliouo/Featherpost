@@ -130,7 +130,7 @@ describe("立即同步", () => {
   it.each([undefined, "Archive"])("tracks an explicit sidebar sync (%s) through completion and suppresses duplicates", async (name) => {
     const { bridge, c } = await ready();
     const originalScope = c.state.scope;
-    const sync = deferred<void>();
+    const sync = deferred<"complete" | "background">();
     const asked: Array<[string, string | undefined]> = [];
     bridge.mailbox.syncScope = (account, folder) => {
       asked.push([account, folder]);
@@ -143,7 +143,7 @@ describe("立即同步", () => {
     expect(asked).toEqual([["demo", name]]);
     expect(bridge.folderRequests).toHaveLength(1);
     if (name) sync.reject(offlineError());
-    else sync.resolve();
+    else sync.resolve("complete");
     await flush();
     expect(c.state.syncingScopes.get("demo")).toEqual({ folder: name });
     bridge.folderRequests.at(-1)!.d.resolve([folder("INBOX", "inbox"), folder("Renamed")]);
@@ -155,19 +155,39 @@ describe("立即同步", () => {
     expect(c.foldersOf("demo").map((folder) => folder.name)).toEqual(["INBOX", "Renamed"]);
     if (name) expect(c.state.syncError).toContain("后台连接不可用");
     else expect(c.state.syncError).toBeNull();
+    expect(c.state.syncNotice).toBeNull();
+  });
+
+  it("shows a non-error background sync notice and clears the spinner before refreshing", async () => {
+    const { bridge, c } = await ready();
+    const sync = deferred<"complete" | "background">();
+    bridge.mailbox.syncScope = () => sync.promise;
+    const run = c.syncNow({ account: "demo" });
+    expect(c.isSyncing("demo")).toBe(true);
+
+    sync.resolve("background");
+    await flush();
+    expect(c.isSyncing("demo")).toBe(false);
+    expect(c.state.syncNotice).toBe("同步已启动，仍在后台进行。");
+    expect(c.state.syncError).toBeNull();
+
+    bridge.folderRequests.at(-1)!.d.resolve([folder("INBOX", "inbox")]);
+    bridge.mailbox.queries.at(-1)!.d.resolve({ messages: [], total: 0 });
+    await run;
+    expect(c.state.syncNotice).toBe("同步已启动，仍在后台进行。");
   });
 
   it("lets another account finish while a scoped sync is stalled", async () => {
     const { bridge, c } = await ready();
-    const stalled = deferred<void>();
-    const independent = deferred<void>();
+    const stalled = deferred<"complete" | "background">();
+    const independent = deferred<"complete" | "background">();
     bridge.mailbox.syncScope = (account) => account === "demo" ? stalled.promise : independent.promise;
     const first = c.syncNow({ account: "demo", folder: "Archive" });
     const second = c.syncNow({ account: "other" });
     expect(c.isSyncing("demo")).toBe(true);
     expect(c.isSyncing("other")).toBe(true);
 
-    independent.resolve();
+    independent.resolve("complete");
     await flush();
     bridge.folderRequests.at(-1)!.d.resolve([folder("INBOX", "inbox")]);
     bridge.mailbox.queries.at(-1)!.d.resolve({ messages: [], total: 0 });
