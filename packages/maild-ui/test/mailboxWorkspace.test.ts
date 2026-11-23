@@ -159,6 +159,42 @@ describe("08-B mailbox workspace", () => {
     });
   });
 
+  it.each([
+    ["dwell", 1, "4"],
+    ["dwell", -1, "2"],
+    ["manual mark", 1, "4"],
+  ] as const)("keeps navigation in Unread after a %s (direction %s)", async (mark, direction, neighbor) => {
+    const rows = ["1", "2", "3", "4"].map((uid) => ({ ...summary("INBOX", uid), seen: false }));
+    const { bridge, c } = await ready(rows);
+    c.setUnreadFilter(true);
+    const initial = bridge.mailbox.queries.at(-1)!;
+    expect(initial.query).toEqual({ role: "inbox", seen: false });
+    initial.d.resolve({ messages: rows, total: rows.length });
+    await flush();
+    vi.useFakeTimers();
+    c.selectMessage(c.state.rows[2]);
+    bridge.detailRequests[0].d.resolve(message("INBOX", "3", { seen: false }));
+    await vi.advanceTimersByTimeAsync(0);
+    if (mark === "dwell") await vi.advanceTimersByTimeAsync(1500);
+    else await c.toggleSelected("seen");
+    const refresh = bridge.mailbox.queries.at(-1)!;
+    expect(refresh).not.toBe(initial);
+    refresh.d.resolve({ messages: [rows[0], rows[1], rows[3]], total: 3 });
+    await vi.advanceTimersByTimeAsync(0);
+
+    const pinned = c.state;
+    expect(pinned.rows.map((row) => row.uid)).toEqual(["1", "2", "3", "4"]);
+    expect(pinned.rows[2].seen).toBe(true);
+    expect(pinned.total).toBe(4);
+    expect(pinned.nextOffset).toBe(3);
+    expect(c.canLoadMore).toBe(false);
+    expect(c.step(direction)?.uid).toBe(neighbor);
+    expect(c.state.rows.map((row) => row.uid)).toEqual(["1", "2", "4"]);
+    expect(c.state.total).toBe(3);
+    expect(c.state.nextOffset).toBe(3);
+    expect(c.canLoadMore).toBe(false);
+  });
+
   it("starts with one daemon-paged inbox query and preserves equal UIDs across accounts", async () => {
     const { bridge, c } = await ready([
       summary("INBOX", "1"),

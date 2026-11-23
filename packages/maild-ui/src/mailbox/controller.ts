@@ -188,6 +188,7 @@ export class MailboxController {
   private remoteRequests = new RequestGeneration();
   private folders = new Map<string, UiFolder[]>();
   private rows = new Map<string, Cached>();
+  private unreadPin: string | null = null;
   private details = new Map<string, UiMessage>();
   private openingReads = new Map<string, Promise<void>>();
   private manualSeen = new Set<string>();
@@ -263,18 +264,21 @@ export class MailboxController {
   get state() {
     return this.store.getSnapshot();
   }
+  private get unreadPinCount() {
+    return this.unreadPin === null ? 0 : 1;
+  }
   get canLoadMore() {
     return (
-      this.state.nextOffset < this.state.total &&
-      this.state.rows.length < MAX_ROWS &&
+      this.state.nextOffset < this.state.total - this.unreadPinCount &&
+      this.state.rows.length - this.unreadPinCount < MAX_ROWS &&
       !this.state.loadingRows &&
       this.state.snapshot.phase === "online"
     );
   }
   get capped() {
     return (
-      this.state.rows.length >= MAX_ROWS &&
-      this.state.nextOffset < this.state.total
+      this.state.rows.length - this.unreadPinCount >= MAX_ROWS &&
+      this.state.nextOffset < this.state.total - this.unreadPinCount
     );
   }
   label(account: string) {
@@ -684,7 +688,17 @@ export class MailboxController {
     const identity = row
       ? { account: row.account, folder: row.folder, uid: row.uid }
       : null;
-    this.patch({ selected: identity, selectedRow: row });
+    const pin = this.unreadPin;
+    if (pin !== null && (!identity || messageKey(identity) !== pin)) {
+      this.unreadPin = null;
+      this.patch({
+        selected: identity,
+        selectedRow: row,
+        rows: this.state.rows.filter((r) => messageKey(r) !== pin),
+        checked: this.state.checked.filter((r) => messageKey(r) !== pin),
+        total: this.state.total - 1,
+      });
+    } else this.patch({ selected: identity, selectedRow: row });
     this.onSelection?.(
       row ? { identity: identity!, subject: row.subject } : null,
     );
@@ -738,7 +752,9 @@ export class MailboxController {
     if (this.state.snapshot.phase !== "online" || this.stopped) return;
     const scope = this.state.scope;
     const key = scopeKey(scope);
-    const previous = append ? this.state.rows : [];
+    const previous = append
+      ? this.state.rows.filter((r) => messageKey(r) !== this.unreadPin)
+      : [];
     const offset = append ? this.state.nextOffset : 0;
     const current = this.rowRequests.begin();
     this.patch({ loadingRows: true, rowsError: null });
@@ -764,7 +780,7 @@ export class MailboxController {
           : this.bridge.mailbox.query(q, at);
       const page = await read(offset);
       if (!append) {
-        const goal = Math.max(PAGE_SIZE, this.state.rows.length);
+        const goal = Math.max(PAGE_SIZE, this.state.rows.length - this.unreadPinCount);
         while (current() && page.messages.length < Math.min(goal, page.total)) {
           const next = await read(page.messages.length);
           if (!next.messages.length) throw new Error("empty incomplete page");
@@ -791,21 +807,27 @@ export class MailboxController {
       if (page.messages.length === 0 && nextOffset < page.total)
         throw new Error("empty incomplete page");
       boundedSet(this.rows, key, { rows, total: page.total, nextOffset }, 32);
+      const selected = this.state.selectedRow;
+      const selectedKey = selected && messageKey(selected);
+      const inPage = selectedKey && rows.find((r) => messageKey(r) === selectedKey);
+      const oldIndex =
+        q.seen === false && selected?.seen && !inPage
+          ? this.state.rows.findIndex((r) => messageKey(r) === selectedKey)
+          : -1;
+      const visibleRows = oldIndex < 0 ? rows : [...rows];
+      // The open read message keeps its place without taking up a daemon page slot.
+      this.unreadPin = oldIndex >= 0 ? selectedKey : null;
+      if (selected && oldIndex >= 0) visibleRows.splice(oldIndex, 0, selected);
       this.patch({
-        rows,
-        total: page.total,
+        rows: visibleRows,
+        total: page.total + this.unreadPinCount,
         nextOffset,
         loadingRows: false,
         checked: this.state.checked.filter((i) =>
-          rows.some((r) => messageKey(i) === messageKey(r)),
+          visibleRows.some((r) => messageKey(i) === messageKey(r)),
         ),
+        ...(inPage ? { selectedRow: inPage } : {}),
       });
-      // Reading a cross-folder thread or notification does not depend on presence in this page.
-      const selected = this.state.selected;
-      if (selected) {
-        const row = rows.find((r) => messageKey(r) === messageKey(selected));
-        if (row) this.patch({ selectedRow: row });
-      }
     } catch (e) {
       if (current() && !this.stopped)
         this.patch({
