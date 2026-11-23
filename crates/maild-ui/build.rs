@@ -61,6 +61,7 @@ fn main() {
             "ui_locale_preference",
             "ui_set_locale_preference",
             "ui_sync_mailbox",
+            "ui_sync_mailbox_scope",
             "ui_server_search",
             "ui_fetch_server_message",
             "ui_settings_discover_provider",
