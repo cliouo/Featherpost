@@ -67,6 +67,10 @@ export function Studio({
   const [search, setSearch] = useState("");
   const [allMail, setAllMail] = useState(false);
   const [searchScope, setSearchScope] = useState(mail.scope);
+  const [toastText, setToastText] = useState<string | null>(null);
+  useEffect(() => {
+    if (state.toast) setToastText(state.toast);
+  }, [state.toast]);
   const searchInput = useRef<HTMLInputElement>(null),
     navigation = useRef<NavigationHandle>(null);
   const searchContext = scopeContext(mailbox, searchScope);
@@ -236,6 +240,7 @@ export function Studio({
           {searchText ? (
             <button
               type="button"
+              title={m.studio_search_clear()}
               aria-label={m.studio_search_clear()}
               onClick={() => {
                 setSearch("");
@@ -331,7 +336,7 @@ export function Studio({
             {m.studio_account_add()}
           </button>
           <button
-            className="icon-button"
+            className={`icon-button${state.activeViewId === ACTIVITY ? " active" : ""}`}
             title={m.studio_view_activity()}
             aria-label={m.studio_view_activity()}
             onClick={() => host.openView(ACTIVITY)}
@@ -362,11 +367,14 @@ export function Studio({
         )}
         {View && <View active />}
       </main>
-      {state.toast && (
-        <div className="toast" role="status">
-          {state.toast}
-        </div>
-      )}
+      <div
+        className={`toast${state.toast ? " show" : ""}`}
+        role="status"
+        aria-live="polite"
+        aria-hidden={!state.toast || undefined}
+      >
+        {state.toast ?? toastText}
+      </div>
     </div>
     </ContextMenuHost>
     </StudioActionsContext.Provider>
@@ -458,6 +466,11 @@ function FolderBranches({
               {children.length > 0 ? (
                 <button
                   className="folder-disclosure"
+                  title={
+                    expanded
+                      ? m.studio_folder_collapse({ folder: label })
+                      : m.studio_folder_expand({ folder: label })
+                  }
                   aria-label={
                     expanded
                       ? m.studio_folder_collapse({ folder: label })

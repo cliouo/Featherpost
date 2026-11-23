@@ -719,6 +719,9 @@ export function AccountMore({
       triggerLabel={m.settings_account_more_label({
         name: accountLabel(profile),
       })}
+      triggerTitle={m.settings_account_more_label({
+        name: accountLabel(profile),
+      })}
       trigger={m.settings_account_more()}
     >
       <button

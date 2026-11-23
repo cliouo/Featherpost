@@ -304,6 +304,7 @@ export function SearchBar({ controller }: { controller: MailboxController }) {
                 type="button"
                 className="filter-chip"
                 key={key}
+                title={m.mailbox_search_chip_remove({ field: own(FILTER_FIELD, key) ?? key })}
                 aria-label={m.mailbox_search_chip_remove({ field: own(FILTER_FIELD, key) ?? key })}
                 onClick={() => remove(key as keyof MailboxQuery)}
               >

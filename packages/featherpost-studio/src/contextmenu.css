@@ -1,10 +1,4 @@
 /* Studio context menus share the picker popover's surface, border, radius and shadow (select.css). */
-:root {
-  --studio-danger-tint: #f6e9e7;
-}
-:root[data-studio-theme="dark"] {
-  --studio-danger-tint: #3c2a2b;
-}
 
 .studio-menu {
   z-index: 1000;
@@ -12,6 +6,7 @@
   max-width: 320px;
   max-height: var(--radix-context-menu-content-available-height);
   overflow-y: auto;
+  overflow-x: hidden;
   overscroll-behavior: contain;
   padding: 4px;
   border: 1px solid var(--studio-border);
@@ -43,8 +38,11 @@
   padding: 6px 10px 6px 8px;
   border-radius: 5px;
   white-space: nowrap;
-  cursor: default;
+  cursor: pointer;
   outline: none;
+  transition:
+    background-color var(--motion-instant) var(--ease-standard),
+    color var(--motion-instant) var(--ease-standard);
 }
 .studio-menu-item[data-highlighted],
 .studio-menu-item[data-state="open"] {
@@ -52,12 +50,14 @@
 }
 .studio-menu-item[data-disabled] {
   opacity: 0.42;
+  cursor: default;
 }
 .studio-menu-item[data-tone="danger"] {
   color: var(--studio-danger);
 }
 .studio-menu-item[data-tone="danger"][data-highlighted] {
-  background: var(--studio-danger-tint);
+  background: var(--hover-danger-bg);
+  color: var(--hover-danger-ink);
 }
 
 .studio-menu-icon {
@@ -113,16 +113,11 @@
   background: var(--studio-border);
 }
 
-@media (prefers-reduced-motion: no-preference) {
-  .studio-menu[data-state="open"] {
-    animation: studio-menu-in 120ms cubic-bezier(0.2, 0, 0, 1);
-  }
-  @keyframes studio-menu-in {
-    from {
-      opacity: 0;
-      transform: scale(0.97);
-    }
-  }
+.studio-menu[data-state="open"] {
+  animation: fp-pop-in var(--motion-fast) var(--ease-standard);
+}
+.studio-menu[data-state="closed"] {
+  animation: fp-pop-out var(--motion-instant) var(--ease-exit);
 }
 
 /* The object a menu was opened on stays outlined, like Finder and Mail. */

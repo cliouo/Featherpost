@@ -43,6 +43,7 @@
   flex-wrap: wrap;
   gap: 12px;
   padding: 0 24px 16px;
+  animation: fp-reveal-down var(--motion-fast) var(--ease-standard);
 }
 .mail-search-filters > label {
   font-size: 11px;
@@ -71,6 +72,7 @@
   align-items: center;
   min-height: 34px;
   flex: 0 0 auto;
+  cursor: pointer;
 }
 .search-coverage {
   display: flex;
@@ -90,6 +92,14 @@
   max-width: 100%;
   overflow-wrap: anywhere;
 }
+@media (hover: hover) {
+  .filter-chip:hover:not(:disabled) {
+    background: var(--hover-selected);
+  }
+  .mail-search-filters .mail-checkbox:hover {
+    color: var(--ink);
+  }
+}
 .smart-folders {
   padding: 8px 0;
   border-top: 1px solid var(--line);
@@ -98,7 +108,7 @@
 }
 .account-toggle {
   width: 100%;
-  border-radius: 0;
+  border-radius: var(--r-sm);
   justify-content: flex-start;
   text-align: left;
 }
@@ -107,6 +117,12 @@
 }
 .account-toggle[aria-expanded="false"] .account-name::after {
   content: " ▸";
+}
+@media (hover: hover) {
+  .account-toggle:hover:not(:disabled) {
+    background: var(--hover-bg);
+    color: var(--ink);
+  }
 }
 .list-selection {
   display: flex;
@@ -124,6 +140,13 @@
   display: flex;
   align-items: center;
   gap: 6px;
+  cursor: pointer;
+  transition: color var(--motion-fast) var(--ease-standard);
+}
+@media (hover: hover) {
+  .list-selection label:hover {
+    color: var(--ink);
+  }
 }
 .list-selection input,
 .message-checkbox,
@@ -168,6 +191,13 @@
   color: var(--warning);
   opacity: 1;
 }
+@media (hover: hover) {
+  .message-row .message-star:hover:not(:disabled) {
+    background: var(--hover-bg-strong);
+    color: var(--warning);
+    opacity: 1;
+  }
+}
 .message-source {
   font-size: 10px;
   color: var(--muted);
@@ -187,6 +217,7 @@
   border-bottom: 1px solid var(--line);
   background: var(--selected);
   font-size: 12px;
+  animation: fp-reveal-down var(--motion-fast) var(--ease-standard);
 }
 .batch-toolbar .text-button,
 .batch-report .text-button {
@@ -211,16 +242,24 @@
 .mail-dialog {
   width: min(560px, calc(100vw - 40px));
   max-height: 85vh;
-  overflow: auto;
+  overflow-y: scroll;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
   border: 1px solid var(--line);
   border-radius: var(--r-lg);
-  padding: 24px;
+  padding: 24px calc(24px - var(--scrollbar-size, 10px)) 24px 24px;
   background: var(--surface);
   color: var(--ink);
   box-shadow: 0 16px 64px #0003;
 }
+.mail-dialog[open] {
+  animation: fp-dialog-in var(--motion-base) var(--ease-standard);
+}
 .mail-dialog::backdrop {
   background: #0006;
+}
+.mail-dialog[open]::backdrop {
+  animation: fp-fade-in var(--motion-base) var(--ease-standard);
 }
 .mail-dialog > header {
   display: flex;
@@ -249,7 +288,9 @@
   padding: 0;
   margin: 0 0 20px;
   max-height: 180px;
-  overflow: auto;
+  overflow-y: scroll;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
   border-block: 1px solid var(--line);
 }
 .action-message-list li {
@@ -291,7 +332,10 @@
 }
 .thread-list {
   max-height: 160px;
-  overflow: auto;
+  overflow-y: scroll;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  animation: fp-reveal-down var(--motion-fast) var(--ease-standard);
 }
 .thread-item {
   width: 100%;
@@ -324,6 +368,14 @@
 }
 .thread-item.active {
   background: var(--selected);
+}
+@media (hover: hover) {
+  .thread-item:not(.active):hover:not(:disabled) {
+    background: var(--hover-bg);
+  }
+  .thread-item.active:hover:not(:disabled) {
+    background: var(--hover-selected);
+  }
 }
 .activity-page {
   background: var(--surface);
@@ -407,7 +459,9 @@
   color: var(--muted);
   white-space: pre-wrap;
   max-height: 100px;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
 }
 .operation-actions {
   display: flex;
@@ -471,11 +525,13 @@
 .welcome {
   flex: 1;
   min-height: 0;
-  overflow-y: auto;
+  overflow-y: scroll;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 40px 24px;
+  padding: 40px calc(24px - var(--scrollbar-size, 10px)) 40px 24px;
 }
 .welcome-card {
   width: min(560px, 100%);
@@ -527,6 +583,21 @@
 }
 @media (hover: hover) {
   .welcome-provider:hover:not(:disabled) {
+    background: var(--hover-surface);
+    box-shadow: inset 0 0 0 1px var(--accent);
+  }
+  .otp-copy:hover:not(:disabled) {
+    background: var(--hover-surface);
+    box-shadow: inset 0 0 0 1px var(--hover-border);
+  }
+  .appearance-toggle:hover:not(:disabled) {
+    background: var(--hover-bg);
+    color: var(--ink);
+    box-shadow: inset 0 0 0 1px var(--hover-border);
+  }
+  .appearance-toggle[aria-pressed="true"]:hover:not(:disabled) {
+    background: var(--hover-selected);
+    color: var(--accent);
     box-shadow: inset 0 0 0 1px var(--accent);
   }
 }
@@ -606,7 +677,7 @@
   align-self: stretch;
   border-radius: 2px;
   background: var(--line);
-  transition: background-color 120ms cubic-bezier(0.2, 0, 0, 1);
+  transition: background-color var(--motion-fast) var(--ease-standard);
 }
 .remote-row.selected .remote-mark {
   background: var(--accent);

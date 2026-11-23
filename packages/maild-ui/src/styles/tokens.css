@@ -13,6 +13,26 @@
   --danger: oklch(47% 0.15 28);
   --wash: oklch(96% 0.027 85);
   --on-accent: #fff;
+  /* Shared hover & interactive state tokens (#27) */
+  --hover-bg: oklch(92% 0.011 155 / 0.55);
+  --hover-bg-strong: oklch(88% 0.016 155 / 0.65);
+  --hover-surface: oklch(96.5% 0.006 155);
+  --hover-row: oklch(95% 0.007 155);
+  --hover-selected: oklch(89% 0.042 165);
+  --hover-checked: oklch(88.5% 0.04 165);
+  --hover-border: oklch(76% 0.014 155);
+  --hover-accent: oklch(37% 0.092 165);
+  --hover-danger-bg: oklch(95% 0.028 28);
+  --hover-danger-border: oklch(78% 0.08 28);
+  --hover-danger-ink: oklch(40% 0.16 28);
+  --active-bg: oklch(87% 0.018 155 / 0.72);
+  /* Shared motion tokens (#25): short, interruptible, compositor-friendly */
+  --motion-instant: 90ms;
+  --motion-fast: 120ms;
+  --motion-base: 160ms;
+  --motion-slow: 200ms;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-exit: cubic-bezier(0.4, 0, 1, 1);
   --r-sm: 6px;
   --r-md: 8px;
   --r-lg: 12px;
@@ -20,6 +40,14 @@
   --list-width: 344px;
   --row-height: 90px;
   --bar-height: 64px;
+  --scrollbar-size: 10px;
+  --scrollbar-thumb-inset: 3px;
+  --scrollbar-thumb-inset-hover: 2px;
+  --scrollbar-track: transparent;
+  --scrollbar-thumb: oklch(26% 0.018 155 / 0.16);
+  --scrollbar-thumb-container-hover: oklch(26% 0.018 155 / 0.24);
+  --scrollbar-thumb-hover: oklch(26% 0.018 155 / 0.38);
+  --scrollbar-thumb-active: oklch(26% 0.018 155 / 0.52);
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
   font-size: 13px;
   line-height: 1.55;
@@ -46,6 +74,22 @@
     --danger: oklch(78% 0.1 28);
     --wash: oklch(26% 0.025 75);
     --on-accent: #14281e;
+    --hover-bg: oklch(92% 0.008 155 / 0.07);
+    --hover-bg-strong: oklch(92% 0.008 155 / 0.12);
+    --hover-surface: oklch(26% 0.009 155);
+    --hover-row: oklch(20.5% 0.009 155);
+    --hover-selected: oklch(33% 0.045 165);
+    --hover-checked: oklch(34% 0.042 165);
+    --hover-border: oklch(46% 0.015 155);
+    --hover-accent: oklch(82% 0.085 165);
+    --hover-danger-bg: oklch(31% 0.055 28);
+    --hover-danger-border: oklch(52% 0.095 28);
+    --hover-danger-ink: oklch(84% 0.11 28);
+    --active-bg: oklch(92% 0.008 155 / 0.14);
+    --scrollbar-thumb: oklch(92% 0.008 155 / 0.18);
+    --scrollbar-thumb-container-hover: oklch(92% 0.008 155 / 0.26);
+    --scrollbar-thumb-hover: oklch(92% 0.008 155 / 0.40);
+    --scrollbar-thumb-active: oklch(92% 0.008 155 / 0.54);
   }
 }
 :root[data-theme="dark"] {
@@ -62,7 +106,91 @@
   --danger: oklch(78% 0.1 28);
   --wash: oklch(26% 0.025 75);
   --on-accent: #14281e;
+  --hover-bg: oklch(92% 0.008 155 / 0.07);
+  --hover-bg-strong: oklch(92% 0.008 155 / 0.12);
+  --hover-surface: oklch(26% 0.009 155);
+  --hover-row: oklch(20.5% 0.009 155);
+  --hover-selected: oklch(33% 0.045 165);
+  --hover-checked: oklch(34% 0.042 165);
+  --hover-border: oklch(46% 0.015 155);
+  --hover-accent: oklch(82% 0.085 165);
+  --hover-danger-bg: oklch(31% 0.055 28);
+  --hover-danger-border: oklch(52% 0.095 28);
+  --hover-danger-ink: oklch(84% 0.11 28);
+  --active-bg: oklch(92% 0.008 155 / 0.14);
+  --scrollbar-thumb: oklch(92% 0.008 155 / 0.18);
+  --scrollbar-thumb-container-hover: oklch(92% 0.008 155 / 0.26);
+  --scrollbar-thumb-hover: oklch(92% 0.008 155 / 0.40);
+  --scrollbar-thumb-active: oklch(92% 0.008 155 / 0.54);
 }
 :root[data-density="compact"] {
   --row-height: 68px;
+}
+
+/* Shared compositor-only motion keyframes (#25) */
+@keyframes fp-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes fp-reveal-down {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes fp-pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+@keyframes fp-pop-out {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+}
+@keyframes fp-dialog-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+@keyframes fp-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+/* Global reduced motion: 0.01ms preserves animationend/transitionend hooks while staying visually instant. */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-instant: 0.01ms;
+    --motion-fast: 0.01ms;
+    --motion-base: 0.01ms;
+    --motion-slow: 0.01ms;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

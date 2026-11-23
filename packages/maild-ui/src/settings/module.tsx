@@ -202,7 +202,7 @@ export function settingsModule(
         <Row title={m.settings_connection_recovery()} description={snapshot.phase === "online"
           ? m.settings_connection_recovery_hint()
           : m.settings_connection_recovery_offline({ app: BRAND.appBundleName })}>
-          <button type="button" disabled={opening || snapshot.phase !== "online"} onClick={() => void openRecovery()}>
+          <button type="button" className="secondary" disabled={opening || snapshot.phase !== "online"} onClick={() => void openRecovery()}>
             {opening
               ? m.settings_connection_recovery_opening()
               : m.settings_connection_recovery_open()}
@@ -405,7 +405,7 @@ export function settingsModule(
                     : m.settings_page_loading()}
                 </p>
               )}
-              <fieldset disabled={state.closeLocked}>
+              <fieldset key={active?.id} disabled={state.closeLocked}>
                 {Section && <Section active />}
               </fieldset>
             </div>

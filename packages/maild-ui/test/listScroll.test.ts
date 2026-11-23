@@ -28,6 +28,7 @@ const readAsset = (rel: string) =>
     ),
   ) ?? "";
 const studioCss = readAsset("../../featherpost-studio/src/studio.css");
+const tokensCss = readAsset("../src/styles/tokens.css");
 const appCss = readAsset("../src/styles/app.css");
 const mailboxCss = readAsset("../src/mailbox/mailbox.css");
 
@@ -524,17 +525,24 @@ describe("createListScroller (issue #24)", () => {
 
 describe("selection transition CSS & SSR rendering (issues #23 & #24)", () => {
   it("defines 100-150ms selection transitions and disables them under prefers-reduced-motion", () => {
+    // Shared motion token resolves to 100-150ms (120ms) and reduces motion globally.
+    const fastMs = Number(/--motion-fast:\s*(\d+)ms/.exec(tokensCss)?.[1]);
+    expect(fastMs).toBeGreaterThanOrEqual(100);
+    expect(fastMs).toBeLessThanOrEqual(150);
+    expect(tokensCss).toMatch(
+      /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{[\s\S]*transition-duration:\s*0\.01ms\s*!important;/,
+    );
+
     // Studio: background and ::before left accent bar transitions + reduced-motion disable
-    expect(studioCss).toMatch(/\.message-row\s*\{[^}]*transition:\s*background-color\s+120ms/s);
-    expect(studioCss).toMatch(/\.message-row::before\s*\{[^}]*transition:[^}]*opacity\s+120ms[^}]*transform\s+120ms/s);
+    expect(studioCss).toMatch(/\.message-row\s*\{[^}]*transition:\s*background-color\s+var\(--motion-fast\)/s);
+    expect(studioCss).toMatch(/\.message-row::before\s*\{[^}]*transition:[^}]*opacity\s+var\(--motion-fast\)[^}]*transform\s+var\(--motion-fast\)/s);
     expect(studioCss).toMatch(
       /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{[^}]*\.message-row,\s*\.message-row::before[^}]*transition:\s*none;/s,
     );
 
-    // maild-ui: background/border transition + global reduced-motion rule
-    expect(appCss).toMatch(/\.message-row\s*\{[^}]*transition:\s*background-color\s+120ms/s);
-    expect(appCss).toMatch(/@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{\s*\*\s*\{\s*transition:\s*none\s*!important;\s*\}\s*\}/);
-    expect(mailboxCss).toMatch(/\.remote-mark\s*\{[^}]*transition:\s*background-color\s+120ms/s);
+    // maild-ui: background/border transition + remote selection indicator
+    expect(appCss).toMatch(/\.message-row\s*\{[^}]*transition:\s*background-color\s+var\(--motion-fast\)/s);
+    expect(mailboxCss).toMatch(/\.remote-mark\s*\{[^}]*transition:\s*background-color\s+var\(--motion-fast\)/s);
   });
 
   it("renders Studio Workspace and legacy MessageList cleanly across tabs and folders", async () => {

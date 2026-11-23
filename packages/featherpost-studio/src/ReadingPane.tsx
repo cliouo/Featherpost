@@ -139,6 +139,7 @@ export function ReadingPane({
       <div className="reader-actions">
         <button
           className="icon-button back-button"
+          title={m.studio_reader_back()}
           aria-label={m.studio_reader_back()}
           onClick={() => controller.clearSelection()}
         >
@@ -155,7 +156,7 @@ export function ReadingPane({
           <span>{m.studio_reader_archive()}</span>
         </button>
         <button
-          className="icon-button"
+          className="icon-button danger-action"
           title={m.studio_reader_delete()}
           aria-label={m.studio_reader_delete()}
           disabled={!row || !writable}
@@ -265,6 +266,7 @@ export function ReadingPane({
               menu.offer(e, () => messageMenu(row, menuDeps, true), null);
             }}
           >
+            <div className="letter-view" key={messageKey(row)}>
             <header className="letter-heading">
               <h2>{row.subject || m.studio_message_no_subject()}</h2>
               <div className="letter-sender">
@@ -352,6 +354,7 @@ export function ReadingPane({
               />
             )}
             {s.threadOpen && <Thread controller={controller} />}
+            </div>
             <section className="reply-section" aria-label={m.studio_reader_reply_label()}>
               <p className="reply-identity">
                 {m.studio_reader_reply_identity({
