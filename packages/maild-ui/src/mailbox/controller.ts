@@ -323,7 +323,7 @@ export class MailboxController {
   }
   label(account: string) {
     const p = this.state.profiles.find((p) => p.id === account);
-    return p?.display_name || p?.address || account;
+    return p?.display_name.trim() || p?.address.trim() || account;
   }
   private patch(p: Partial<MailboxState>) {
     this.store.patch(p);
