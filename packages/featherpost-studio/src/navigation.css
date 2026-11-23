@@ -66,7 +66,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  min-height: 36px;
+  min-height: 48px;
   width: 100%;
   text-align: left;
   padding: 7px 4px;
@@ -87,16 +87,18 @@
   font-weight: 450;
 }
 .grouped-account .account-identity small {
-  display: none;
+  /* Reserve the address line so expansion cannot recenter the icon or count. */
+  display: block;
+  visibility: hidden;
+  font-size: 9px;
+  margin-top: 3px;
 }
 .grouped-account.account-expanded .account-identity strong {
   font-weight: 600;
 }
 .grouped-account.account-expanded .account-identity small,
 .directory-body .grouped-account .account-identity small {
-  display: block;
-  font-size: 9px;
-  margin-top: 3px;
+  visibility: visible;
 }
 .grouped-account.account-selected .account-mark {
   background: var(--studio-primary);
