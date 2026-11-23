@@ -989,7 +989,8 @@ export class MailboxController {
   serverTargets(): FolderIdentity[] {
     const scope = this.state.scope;
     if (scope.kind !== "search") return [];
-    const inbox = (account: string) => this.preferredInbox(account)?.name ?? "INBOX";
+    const inbox = (account: string) =>
+      this.foldersOf(account).find((f) => f.role === "inbox" && f.present)?.name ?? "INBOX";
     if (scope.query.account)
       return [{ account: scope.query.account, folder: scope.query.folder ?? inbox(scope.query.account) }];
     return this.state.snapshot.accounts

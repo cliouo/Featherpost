@@ -323,6 +323,30 @@ describe("服务器历史搜索与按需拉取", () => {
     expect(c.canSearchServer).toBe(false);
   });
 
+  it.each(["INBOX", "Posteingang"])("searches %s rather than the configured Archive primary", async (inbox) => {
+    const { bridge, c } = await ready();
+    const loading = c.ensureFolders("demo", true);
+    bridge.folderRequests.at(-1)!.d.resolve([
+      { ...folder("Archive", "archive"), is_primary: true },
+      { ...folder(inbox, "inbox"), is_primary: false },
+    ]);
+    await loading;
+    expect(c.preferredInbox("demo")?.name).toBe("Archive");
+
+    const searched: string[] = [];
+    bridge.mailbox.serverSearch = async (_account, name) => {
+      searched.push(name);
+      return [];
+    };
+    c.search({ query: "invoice" });
+    await c.searchServer();
+    c.search({ account: "demo", query: "invoice" });
+    await c.searchServer();
+    c.search({ account: "demo", folder: "Archive", query: "invoice" });
+    await c.searchServer();
+    expect(searched).toEqual([inbox, inbox, "Archive"]);
+  });
+
   it("搜索 → 远端结果（去掉本地已有）→ 点开拉回本地并原位渲染", async () => {
     const { bridge, c } = await ready();
     const searches: Array<[string, string, string]> = [];
