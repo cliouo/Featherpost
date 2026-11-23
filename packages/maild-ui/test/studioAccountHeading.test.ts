@@ -9,6 +9,7 @@ it.each([
   { name: "demo@example.test", subtitle: false },
   { name: " demo@example.test ", subtitle: false },
   { name: "", subtitle: false },
+  { name: "   ", subtitle: false },
   { name: "工作邮箱", subtitle: true },
 ])("shows the account address only when distinct from '$name'", async ({ name, subtitle }) => {
   const bridge = new FakeBridge();
@@ -39,10 +40,10 @@ it.each([
       );
       const identity = html.match(/<span class="account-identity">(.*?)<\/span>/)?.[1];
       expect(identity).toBe(
-        `<strong>${name || "demo@example.test"}</strong>${subtitle ? "<small>demo@example.test</small>" : ""}`,
+        `<strong>${name.trim() || "demo@example.test"}</strong>${subtitle ? "<small>demo@example.test</small>" : ""}`,
       );
       expect(html).toContain(
-        `title="${subtitle ? `${name}\ndemo@example.test` : name || "demo@example.test"}"`,
+        `title="${subtitle ? `${name}\ndemo@example.test` : name.trim() || "demo@example.test"}"`,
       );
     }
   } finally {
