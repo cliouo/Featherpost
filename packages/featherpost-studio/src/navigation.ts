@@ -34,21 +34,25 @@ export function folderNavigationLabels(folders: UiFolder[], nested = false) {
   );
 }
 
-/** Search the same labels the sidebar displays, as well as original server names. */
+/** Search displayed and server names; rank exact matches first for account navigation. */
 export function matchingFolderNames(folders: UiFolder[], filter: string) {
-  const needle = filter.toLocaleLowerCase(uiLocale());
+  const needle = filter.trim().toLocaleLowerCase(uiLocale());
+  const exact = new Set<string>();
   const matches = new Set<string>();
   const visit = (nodes: FolderNode[], nested = false) => {
     const labels = folderNavigationLabels(nodes.map((n) => n.folder), nested);
     for (const { folder, children } of nodes) {
-      if (`${folder.name} ${folder.display_name} ${folderLabel(folder)} ${labels.get(folder)}`
-        .toLocaleLowerCase(uiLocale()).includes(needle))
-        matches.add(folder.name);
+      if (folder.present) {
+        const names = [folder.name, folder.display_name, folderLabel(folder), labels.get(folder)!]
+          .map((name) => name.toLocaleLowerCase(uiLocale()));
+        if (names.includes(needle)) exact.add(folder.name);
+        else if (names.some((name) => name.includes(needle))) matches.add(folder.name);
+      }
       visit(children, true);
     }
   };
   visit(folderTree(folders));
-  return matches;
+  return new Set([...exact, ...matches]);
 }
 
 const order: Record<string, number> = {

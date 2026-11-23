@@ -256,3 +256,22 @@ it("finds complete displayed folder labels, including collision qualifiers and n
     "Projects/Draft", "Projects/Drafts",
   ]);
 });
+
+it("ranks an exact displayed folder label before longer matches regardless of server order", () => {
+  const folders = [folder("Drafts", "drafts"), folder("Draft", "drafts")];
+  applyEffectiveLocales(["zh-CN"]);
+  try {
+    expect([...matchingFolderNames(folders, "草稿 · Draft")]).toEqual([
+      "Draft", "Drafts",
+    ]);
+    expect([...matchingFolderNames(folders, "draft")]).toEqual([
+      "Draft", "Drafts",
+    ]);
+    expect([...matchingFolderNames([
+      { ...folder("Projects"), present: false },
+      folder("Projects/Reviews"),
+    ], "Projects")]).toEqual(["Projects/Reviews"]);
+  } finally {
+    applyEffectiveLocales([]);
+  }
+});

@@ -172,8 +172,9 @@ export function MailboxNavigation({
     const matches = !accountMatches(id)
       ? matchingFolderNames(mailbox.foldersOf(id), needle)
       : undefined;
+    const firstMatch = matches?.values().next().value;
     const target =
-      available.find((f) => matches?.has(f.name)) ??
+      available.find((f) => f.name === firstMatch) ??
       available.find((f) => f.role === "inbox") ??
       available[0];
     if (!target) {
