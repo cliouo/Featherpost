@@ -378,7 +378,7 @@ mod tests {
         assert_eq!(store.value(APPLE_LANGUAGES), None);
 
         // 写入失败（拒绝、老 daemon）不动存储。
-        let failed = Err(UiError::invalid("locale_invalid", "x"));
+        let failed = Err(UiError::invalid("locale_unsupported", "x"));
         assert_eq!(mirror_set_result(&store, &failed), None);
         assert_eq!(store.writes(), 4);
     }
