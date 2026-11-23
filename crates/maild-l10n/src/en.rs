@@ -115,16 +115,25 @@ const MONTHS: [&str; 12] = [
     "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
 
-fn otp_body(code: &str, account: &str, from: &str) -> String {
-    format!("{code} ({account} · from {from})")
+fn otp_body(code: &str, account: Option<&str>, from: &str) -> String {
+    match account {
+        Some(account) => format!("{code} ({account} · from {from})"),
+        None => format!("{code} (from {from})"),
+    }
 }
 
-fn new_mail_burst_body(account: &str) -> String {
-    format!("Several new messages arrived in {account}")
+fn new_mail_burst_body(account: Option<&str>) -> String {
+    match account {
+        Some(account) => format!("Several new messages arrived in {account}"),
+        None => "Several new messages arrived".into(),
+    }
 }
 
-fn new_mail_masked_body(account: &str) -> String {
-    format!("A new message arrived in {account}")
+fn new_mail_masked_body(account: Option<&str>) -> String {
+    match account {
+        Some(account) => format!("A new message arrived in {account}"),
+        None => "A new message arrived".into(),
+    }
 }
 
 fn reply_attribution(date: &str, sender: &str) -> String {

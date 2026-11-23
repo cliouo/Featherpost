@@ -12,13 +12,14 @@ die() {
 
 usage() {
     cat <<EOF
-Usage: packaging/macos/verify-release.sh --app PATH --version X.Y.Z [--stapled]
+Usage: packaging/macos/verify-release.sh --app PATH --version X.Y.Z [--stapled] [--allow-missing-agent-icon]
 
 Validates a Developer ID-signed universal2 $BRAND_APP_BUNDLE, including the separately
 signed single-host Contents/MacOS/$BRAND_UI_BIN. Names come from brand.env. The verifier requires
 the hardened runtime, secure timestamps, a single expected Team ID, no
 entitlements, and non-provisional bundle identifiers. --stapled additionally
 requires a valid stapled ticket and a successful Gatekeeper assessment.
+Use --allow-missing-agent-icon only for existing bundles from before the Agent had an icon.
 EOF
 }
 
@@ -102,6 +103,7 @@ script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
 app=
 version=
 require_stapled=false
+allow_missing_agent_icon=false
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --app)
@@ -116,6 +118,10 @@ while [ "$#" -gt 0 ]; do
             ;;
         --stapled)
             require_stapled=true
+            shift
+            ;;
+        --allow-missing-agent-icon)
+            allow_missing_agent_icon=true
             shift
             ;;
         -h|--help)
@@ -137,9 +143,12 @@ for tool in /usr/bin/codesign /usr/sbin/spctl /usr/bin/lipo /usr/bin/plutil /usr
     command -v "$tool" >/dev/null 2>&1 || die "$tool is required"
 done
 
+if [ "$allow_missing_agent_icon" = true ]; then
+    set -- --allow-missing-agent-icon
+fi
 env "${BRAND_ENV_PREFIX}_BUNDLE_SHORT_VERSION=$version" \
     "${BRAND_ENV_PREFIX}_BUNDLE_BUILD_VERSION=$version" \
-    "$script_dir/verify-bundle.sh" "$app" >/dev/null
+    "$script_dir/verify-bundle.sh" "$@" "$app" >/dev/null
 
 main_plist="$app/Contents/Info.plist"
 agent="$app/Contents/Library/LoginItems/$BRAND_AGENT_BUNDLE"

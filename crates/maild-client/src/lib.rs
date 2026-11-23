@@ -455,6 +455,10 @@ pub struct MailFolder {
     /// inbox/sent/drafts/trash/archive/spam，无角色为空串。未知值原样保留。
     #[serde(default)]
     pub role: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_primary: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_search_inbox: Option<bool>,
     /// 是否出现在服务器最近一次 `LIST` 里。false = 不再同步，但消息保留。
     #[serde(default)]
     pub present: bool,

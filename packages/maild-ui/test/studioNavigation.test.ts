@@ -25,7 +25,7 @@ it("identifies a unified message's real folder without changing its search/list 
   expect(scope).toEqual({ kind: "search", query: { query: "Account 17" } });
 });
 afterEach(() => controllers.splice(0).forEach((c) => c.stop()));
-async function ready() {
+async function ready(folders = [folder("INBOX", "inbox", 12), folder("Archive", "archive")]) {
   const bridge = new FakeBridge();
   const query = bridge.mailbox.query.bind(bridge.mailbox);
   bridge.mailbox.query = (q, offset) => {
@@ -42,7 +42,7 @@ async function ready() {
   controllers.push(controller);
   controller.acceptSnapshot(online);
   bridge.folderRequests.forEach((r) =>
-    r.d.resolve([folder("INBOX", "inbox", 12), folder("Archive", "archive")]),
+    r.d.resolve(folders),
   );
   bridge.mailbox.queries[0]!.d.resolve({
     messages: [summary("INBOX", "read")],
@@ -51,6 +51,32 @@ async function ready() {
   await flush();
   return { bridge, controller };
 }
+
+it.each([
+  {
+    folders: [
+      { ...folder("Nested/INBOX", "inbox"), is_primary: false },
+      { ...folder("Posteingang", "inbox"), is_primary: true },
+    ],
+    expected: "Posteingang",
+  },
+  {
+    folders: [
+      { ...folder("INBOX", "inbox"), is_primary: false },
+      { ...folder("Custom"), is_primary: true },
+    ],
+    expected: "Custom",
+  },
+  {
+    folders: [folder("Nested/INBOX", "inbox"), folder("INBOX", "inbox")],
+    expected: "INBOX",
+  },
+])("opens the preferred inbox: $expected", async ({ folders, expected }) => {
+  const { bridge, controller } = await ready(folders);
+  expect(controller.preferredInbox("demo")?.name).toBe(expected);
+  controller.selectAccount("demo");
+  expect(bridge.pageRequests.at(-1)?.folder.folder).toBe(expected);
+});
 
 it("asks the daemon for unread mail in the selected folder instead of filtering the loaded page", async () => {
   const { bridge, controller: c } = await ready();

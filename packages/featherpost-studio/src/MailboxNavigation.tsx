@@ -29,6 +29,7 @@ import {
 } from "./layout";
 import { useContextMenu } from "./ContextMenu";
 import { accountMenu, groupMenu } from "./menus";
+import { SyncCount } from "./SyncCount";
 import { useStudioActions } from "./studioActions";
 import { matchingFolderNames } from "./navigation";
 
@@ -167,15 +168,15 @@ export function MailboxNavigation({
       );
   }, [activeGroup, grouping, ids, mail.scope.kind, mailbox]);
 
-  function selectAccount(id: string, unread = false) {
+  function selectAccount(id: string, { unread = false, matchFilter = true } = {}) {
     const available = mailbox.foldersOf(id).filter((f) => f.present);
-    const matches = !accountMatches(id)
+    const matches = matchFilter && !accountMatches(id)
       ? matchingFolderNames(mailbox.foldersOf(id), needle)
       : undefined;
     const firstMatch = matches?.values().next().value;
     const target =
       available.find((f) => f.name === firstMatch) ??
-      available.find((f) => f.role === "inbox") ??
+      mailbox.preferredInbox(id) ??
       available[0];
     if (!target) {
       setExpanded(id);
@@ -288,6 +289,7 @@ export function MailboxNavigation({
                 const name = label(id);
                 const email = address(id);
                 const hasAddress = name.trim() !== email.trim();
+                const syncing = mail.syncingScopes.has(id);
                 return (
                   <div
                     className={`account-tree grouped-account ${hasAddress ? "account-has-address" : ""} ${opened ? "account-expanded" : ""} ${active && selectedAccount === id ? "account-selected" : ""}`}
@@ -295,6 +297,7 @@ export function MailboxNavigation({
                   >
                     <button
                       className="account-heading"
+                      aria-busy={syncing || undefined}
                       aria-expanded={unified ? undefined : opened}
                       title={hasAddress ? `${name}\n${email}` : name}
                       onClick={() =>
@@ -303,11 +306,13 @@ export function MailboxNavigation({
                       onContextMenu={(e) =>
                         menu.offer(e, () =>
                           accountMenu(address(id), {
-                            open: () => selectAccount(id),
-                            openUnread: () => selectAccount(id, true),
+                            open: () => selectAccount(id, { matchFilter: false }),
+                            openUnread: () => selectAccount(id, { matchFilter: false, unread: true }),
                             canOpen: mailbox
                               .foldersOf(id)
                               .some((f) => f.present),
+                            sync: () => void mailbox.syncNow({ account: id }),
+                            canSync: mail.snapshot.phase === "online" && !mailbox.isSyncPending(id),
                             groups: grouping.groups,
                             group: grouping.assignments[id] ?? OTHER_GROUP,
                             assign: (group) =>
@@ -345,7 +350,7 @@ export function MailboxNavigation({
                         <strong>{name}</strong>
                         {hasAddress && <small>{email}</small>}
                       </span>
-                      <span className="account-count">{count(id) || ""}</span>
+                      <SyncCount className="account-count" count={count(id)} busy={syncing} />
                     </button>
                     {!unified && (
                       <div

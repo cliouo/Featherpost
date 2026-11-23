@@ -192,9 +192,13 @@ fn handle(ctx: &Context, cfg: &RulesConfig, state: &Mutex<NotifyState>, msg: &Ma
         }
         state.limiter.admit(&msg.account, Instant::now())
     };
+    if admission == Admission::Suppressed {
+        return;
+    }
     // 成文时读偏好：切换语言后下一条通知即跟随（ADR-0048 决策 6）。
     let messages = crate::notify::kernel_messages(ctx);
-    let Some(notification) = compose(messages, cfg, msg, admission) else {
+    let label = crate::accounts::notification_label(ctx, &msg.account);
+    let Some(notification) = compose(messages, cfg, msg, admission, label.as_deref()) else {
         return;
     };
     if let Some(notifier) = ctx.get::<Notifier>() {
@@ -236,13 +240,14 @@ pub fn compose(
     cfg: &RulesConfig,
     msg: &MailMessage,
     admission: Admission,
+    account_label: Option<&str>,
 ) -> Option<MailNotification> {
     let text = &messages.notifications;
     match admission {
         Admission::Suppressed => None,
         Admission::Summary => Some(MailNotification {
             title: text.new_mail_title.into(),
-            body: (text.new_mail_burst_body)(&msg.account),
+            body: (text.new_mail_burst_body)(account_label),
             target: OpenIntent::Inbox {
                 account: Some(msg.account.clone()),
             },
@@ -256,7 +261,7 @@ pub fn compose(
             if !cfg.show_sensitive {
                 return Some(MailNotification {
                     title: text.new_mail_title.into(),
-                    body: (text.new_mail_masked_body)(&msg.account),
+                    body: (text.new_mail_masked_body)(account_label),
                     target,
                 });
             }
@@ -273,7 +278,7 @@ pub fn compose(
                 format!("{subject}\n{preview}")
             };
             Some(MailNotification {
-                title: sender_label(&msg.sender, &msg.account),
+                title: sender_label(&msg.sender, account_label.unwrap_or(text.new_mail_title)),
                 body,
                 target,
             })
@@ -345,7 +350,8 @@ mod tests {
         msg: &MailMessage,
     ) -> [(String, String); 2] {
         [Admission::Summary, Admission::Single].map(|admission| {
-            let notification = compose(messages, cfg, msg, admission).expect("应成文");
+            let notification =
+                compose(messages, cfg, msg, admission, Some("personal")).expect("应成文");
             (notification.title, notification.body)
         })
     }
@@ -380,7 +386,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            compose(&maild_l10n::EN, &cfg, &msg, Admission::Suppressed),
+            compose(&maild_l10n::EN, &cfg, &msg, Admission::Suppressed, None),
             None
         );
     }
@@ -393,19 +399,25 @@ mod tests {
             ..RulesConfig::default()
         };
         for messages in [&maild_l10n::ZH_HANS, &maild_l10n::EN] {
-            let single = compose(messages, &cfg, &sample("周报"), Admission::Single).unwrap();
+            let single = compose(messages, &cfg, &sample("周报"), Admission::Single, None).unwrap();
             assert_eq!(single.title, "张三");
             assert_eq!(single.body, "周报\n摘要");
         }
         let untitled = sample("  ");
         assert_eq!(
-            compose(&maild_l10n::ZH_HANS, &cfg, &untitled, Admission::Single)
-                .unwrap()
-                .body,
+            compose(
+                &maild_l10n::ZH_HANS,
+                &cfg,
+                &untitled,
+                Admission::Single,
+                None
+            )
+            .unwrap()
+            .body,
             "（无主题）\n摘要"
         );
         assert_eq!(
-            compose(&maild_l10n::EN, &cfg, &untitled, Admission::Single)
+            compose(&maild_l10n::EN, &cfg, &untitled, Admission::Single, None)
                 .unwrap()
                 .body,
             "(No Subject)\n摘要"

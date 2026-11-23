@@ -112,16 +112,25 @@ pub const ZH_HANS: Messages = Messages {
 
 const WEEKDAYS: [&str; 7] = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
 
-fn otp_body(code: &str, account: &str, from: &str) -> String {
-    format!("{code}（{account} · 来自 {from}）")
+fn otp_body(code: &str, account: Option<&str>, from: &str) -> String {
+    match account {
+        Some(account) => format!("{code}（{account} · 来自 {from}）"),
+        None => format!("{code}（来自 {from}）"),
+    }
 }
 
-fn new_mail_burst_body(account: &str) -> String {
-    format!("账户 {account} 收到多封新邮件")
+fn new_mail_burst_body(account: Option<&str>) -> String {
+    match account {
+        Some(account) => format!("账户 {account} 收到多封新邮件"),
+        None => "收到多封新邮件".into(),
+    }
 }
 
-fn new_mail_masked_body(account: &str) -> String {
-    format!("账户 {account} 收到一封新邮件")
+fn new_mail_masked_body(account: Option<&str>) -> String {
+    match account {
+        Some(account) => format!("账户 {account} 收到一封新邮件"),
+        None => "收到一封新邮件".into(),
+    }
 }
 
 fn reply_attribution(date: &str, sender: &str) -> String {

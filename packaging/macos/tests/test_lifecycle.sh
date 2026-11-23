@@ -32,6 +32,7 @@ agent_rel="Contents/Library/LoginItems/$BRAND_AGENT_BUNDLE/Contents/MacOS/$BRAND
 launcher_rel="Contents/MacOS/$BRAND_LAUNCHER_BIN"
 host_ui_rel="Contents/MacOS/$BRAND_UI_BIN"
 icon_rel="Contents/Resources/$BRAND_ICON_NAME.icns"
+agent_bundle_rel="Contents/Library/LoginItems/$BRAND_AGENT_BUNDLE"
 lock_fd_env="${BRAND_ENV_PREFIX}_MAINTENANCE_LOCK_FD"
 validator_env="${BRAND_ENV_PREFIX}_MAINTENANCE_VALIDATOR"
 mkdir -p -- "$work/bin" "$work/sources" "$work/home/.Trash"
@@ -140,6 +141,13 @@ v2="$work/sources/v2/$BRAND_APP_BUNDLE"
 build_fixture v1 1.0.0 "$v1"
 build_fixture v2 2.0.0 "$v2"
 
+remove_agent_icon() {
+    local bundle=$1
+    rm -- "$bundle/$agent_bundle_rel/$icon_rel"
+    rmdir -- "$bundle/$agent_bundle_rel/Contents/Resources"
+    plutil -remove CFBundleIconFile "$bundle/$agent_bundle_rel/Contents/Info.plist"
+}
+
 manage() {
     HOME="$work/home" "$packaging_dir/manage-app.sh" --development "$@"
 }
@@ -164,6 +172,7 @@ cmp -s "$v1/$host_ui_rel" "$target/$host_ui_rel" ||
     fail 'install did not publish the single-host UI executable'
 cmp -s "$v1/$icon_rel" "$target/$icon_rel" ||
     fail 'install did not publish the application icon'
+remove_agent_icon "$target"
 rollback="$work/home/Applications/.$app_stem.rollback.app"
 transaction="$work/home/Applications/.$app_stem.transaction"
 [ "$("$target/$launcher_rel")" = v1 ] || fail 'install published wrong bundle'
@@ -203,6 +212,15 @@ if manage upgrade --source "$v2" --confirm-unregistered >/dev/null 2>&1; then
     fail 'upgrade ignored a busy Agent probe'
 fi
 rm -- "$work/home/agent-busy"
+pre_icon_candidate="$work/sources/pre-icon-candidate/$BRAND_APP_BUNDLE"
+mkdir -p -- "$(dirname -- "$pre_icon_candidate")"
+cp -R -- "$v2" "$pre_icon_candidate"
+remove_agent_icon "$pre_icon_candidate"
+if manage upgrade --source "$pre_icon_candidate" --confirm-unregistered >/dev/null 2>&1; then
+    fail 'upgrade accepted a candidate without an Agent icon'
+fi
+[ "$("$target/$launcher_rel")" = v1 ] && [ ! -e "$transaction" ] ||
+    fail 'rejected upgrade changed the pre-icon install'
 HOME="$work/home" env "${BRAND_ENV_PREFIX}_MANAGE_TEST_PAUSE_AFTER_LEASE=1" \
     "$packaging_dir/manage-app.sh" --development upgrade --source "$v2" \
         --confirm-unregistered >/dev/null &
@@ -222,6 +240,8 @@ wait "$hostile_agent_pid"
 [ "$("$target/$launcher_rel")" = v2 ] || fail 'upgrade published wrong bundle'
 [ -x "$target/$host_ui_rel" ] && [ -f "$target/$icon_rel" ] ||
     fail 'upgrade lost the single-host UI or application icon'
+cmp -s "$target/$icon_rel" "$target/$agent_bundle_rel/$icon_rel" ||
+    fail 'upgrade did not publish the Agent icon'
 [ "$("$rollback/$launcher_rel")" = v1 ] || fail 'upgrade lost old bundle'
 "$target/$agent_rel" maintenance-probe || fail 'maintenance lock remained held after transaction exit'
 if manage upgrade --source "$v1" --confirm-unregistered >/dev/null 2>&1; then

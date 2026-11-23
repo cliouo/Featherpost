@@ -10,13 +10,14 @@ die() {
 
 usage() {
     cat <<EOF
-Usage: packaging/macos/verify-bundle.sh PATH/TO/$BRAND_APP_BUNDLE
+Usage: packaging/macos/verify-bundle.sh [--allow-missing-agent-icon] PATH/TO/$BRAND_APP_BUNDLE
 
 Validates the bundle layout (single-host Contents/MacOS/$BRAND_UI_BIN, $BRAND_ICON_NAME.icns and
 the $BRAND_UI_BUNDLE_ID recovery payload) and plist contract without changing it.
 Expected names and identifiers come from packaging/macos/brand.env (generated from
 brand.toml). Versions can be overridden with the same ${BRAND_ENV_PREFIX}_BUNDLE_* variables
 accepted by build-bundle.sh (legacy MAILD_BUNDLE_* is read as a fallback).
+Use --allow-missing-agent-icon only for existing bundles from before the Agent had an icon.
 EOF
 }
 
@@ -230,6 +231,11 @@ if [ "$#" -eq 1 ] && { [ "$1" = -h ] || [ "$1" = --help ]; }; then
     usage
     exit 0
 fi
+allow_missing_agent_icon=false
+if [ "${1:-}" = --allow-missing-agent-icon ]; then
+    allow_missing_agent_icon=true
+    shift
+fi
 [ "$#" -eq 1 ] || {
     usage >&2
     exit 2
@@ -252,6 +258,7 @@ menu_plist="$menu_bundle/Contents/Info.plist"
 launcher_executable="$bundle/Contents/MacOS/$BRAND_LAUNCHER_BIN"
 host_ui_executable="$bundle/Contents/MacOS/$BRAND_UI_BIN"
 app_icon="$bundle/Contents/Resources/$BRAND_ICON_NAME.icns"
+agent_icon="$agent_bundle/Contents/Resources/$BRAND_ICON_NAME.icns"
 agent_executable="$agent_bundle/Contents/MacOS/$BRAND_AGENT_BIN"
 menu_executable="$menu_bundle/Contents/MacOS/$BRAND_MENU_BIN"
 ui_payload="$bundle/Contents/Resources/frontends/$BRAND_UI_BUNDLE_ID"
@@ -288,6 +295,17 @@ require_file "$menu_plist"
 require_file "$launcher_executable"
 require_file "$host_ui_executable"
 require_file "$app_icon"
+has_agent_icon=true
+if [ "$allow_missing_agent_icon" = true ] &&
+    [ ! -e "$agent_bundle/Contents/Resources" ] && [ ! -L "$agent_bundle/Contents/Resources" ] &&
+    ! plutil -extract CFBundleIconFile xml1 -o /dev/null "$agent_plist" 2>/dev/null; then
+    has_agent_icon=false
+fi
+if [ "$has_agent_icon" = true ]; then
+    require_directory "$agent_bundle/Contents/Resources"
+    require_file "$agent_icon"
+    cmp -s "$app_icon" "$agent_icon" || die 'Agent icon differs from the application icon'
+fi
 require_file "$agent_executable"
 require_file "$menu_executable"
 [ -x "$launcher_executable" ] || die "launcher executable bit is missing: $launcher_executable"
@@ -344,6 +362,10 @@ $payload_rel/frontend.toml
 $payload_rel/recovery.sha256
 EOF
 )
+if [ "$has_agent_icon" = true ]; then
+    expected_layout=$(printf '%s\n%s\n%s' "$expected_layout" \
+        "$agent_rel/Contents/Resources" "$agent_rel/Contents/Resources/$BRAND_ICON_NAME.icns")
+fi
 
 main_signature="$bundle/Contents/_CodeSignature"
 agent_signature="$agent_bundle/Contents/_CodeSignature"
@@ -450,6 +472,9 @@ expect_plist_string "$main_plist" LSMinimumSystemVersion 13.0
 
 expect_plist_string "$agent_plist" CFBundleDisplayName "$BRAND_PRODUCT_NAME Agent"
 expect_plist_string "$agent_plist" CFBundleExecutable "$BRAND_AGENT_BIN"
+if [ "$has_agent_icon" = true ]; then
+    expect_plist_string "$agent_plist" CFBundleIconFile "$BRAND_ICON_NAME"
+fi
 expect_plist_string "$agent_plist" CFBundleIdentifier "$agent_bundle_id"
 expect_plist_string "$agent_plist" CFBundlePackageType APPL
 expect_plist_string "$agent_plist" CFBundleShortVersionString "$short_version"

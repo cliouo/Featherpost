@@ -186,6 +186,7 @@ function RemoteResults({ controller }: { controller: MailboxController }) {
 export function MessageList({ controller }: { controller: MailboxController }) {
   useUiLocale();
   const s = useStore(controller.store),
+    syncing = controller.isSyncing(),
     all =
       s.rows.length > 0 &&
       s.rows.every((r) =>
@@ -211,12 +212,12 @@ export function MessageList({ controller }: { controller: MailboxController }) {
         </label>
         <button
           className="text-button"
-          disabled={s.loadingRows || s.syncing || s.snapshot.phase !== "online"}
+          disabled={s.loadingRows || controller.isSyncPending() || s.snapshot.phase !== "online"}
           title={m.mailbox_list_sync_title()}
-          aria-busy={s.syncing}
+          aria-busy={syncing}
           onClick={() => void controller.syncNow()}
         >
-          {s.syncing ? m.mailbox_list_syncing() : m.mailbox_list_sync()}
+          {syncing ? m.mailbox_list_syncing() : m.mailbox_list_sync()}
         </button>
       </div>
       {s.syncError && (

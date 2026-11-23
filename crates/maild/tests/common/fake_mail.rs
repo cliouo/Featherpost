@@ -105,6 +105,7 @@ struct State {
     inbox_uid_validity: AtomicU64,
     /// INBOX 之外的 mailbox（M4.5-02 多文件夹）。
     extra: Mutex<BTreeMap<String, MailboxState>>,
+    list_reply: Mutex<ListReply>,
     /// 每条 `UID FETCH` 的 (mailbox, range, items)，用于区分正文抓取与标记对账。
     fetch_log: Mutex<Vec<(String, String, String)>>,
     /// 每条写命令的原文（`UID STORE` / `UID COPY` / `UID MOVE` / `UID EXPUNGE`）。
@@ -118,6 +119,16 @@ struct State {
     smtp_credentials: Option<(String, String)>,
     /// 每次 SMTP AUTH 的 (机制, 是否成功)，断言协商结果用。
     smtp_auth_log: Mutex<Vec<(String, bool)>>,
+}
+
+#[allow(dead_code)] // 仅文件夹刷新测试使用异常回复。
+#[derive(Clone, Copy)]
+pub enum ListReply {
+    Normal,
+    Rejected,
+    PartialRejected,
+    Empty,
+    WithoutInbox,
 }
 
 #[derive(Default)]
@@ -490,6 +501,7 @@ impl FakeMail {
             imap_password: Mutex::new(imap_password),
             inbox_uid_validity: AtomicU64::new(1),
             extra: Mutex::new(BTreeMap::new()),
+            list_reply: Mutex::new(ListReply::Normal),
             fetch_log: Mutex::new(Vec::new()),
             command_log: Mutex::new(Vec::new()),
             capabilities: Mutex::new("IMAP4rev1 IDLE".to_string()),
@@ -582,6 +594,14 @@ impl FakeMail {
                 messages: Vec::new(),
             },
         );
+    }
+
+    pub fn remove_mailbox(&self, name: &str) {
+        self.state.extra.lock().unwrap().remove(name).unwrap();
+    }
+
+    pub fn set_list_reply(&self, reply: ListReply) {
+        *self.state.list_reply.lock().unwrap() = reply;
     }
 
     /// 往指定 mailbox 投递一封信；`flags` 是 FETCH 回复里的 FLAGS 内容（可为空串）。
@@ -1120,14 +1140,27 @@ async fn imap_run<S: AsyncRead + AsyncWrite + Unpin>(stream: S, state: Arc<State
                         pending_exists = None;
                     }
                     "LIST" => {
+                        let reply = *state.list_reply.lock().unwrap();
                         for (name, attributes) in state.mailbox_listing() {
-                            out.extend_from_slice(
-                                format!("* LIST ({attributes}) \"/\" \"{name}\"\r\n").as_bytes(),
-                            );
+                            if match reply {
+                                ListReply::Normal => true,
+                                ListReply::PartialRejected => name == "INBOX",
+                                ListReply::WithoutInbox => name != "INBOX",
+                                ListReply::Rejected | ListReply::Empty => false,
+                            } {
+                                out.extend_from_slice(
+                                    format!("* LIST ({attributes}) \"/\" \"{name}\"\r\n")
+                                        .as_bytes(),
+                                );
+                            }
                         }
-                        out.extend_from_slice(
-                            format!("{tag} OK LIST completed\r\n").as_bytes(),
-                        );
+                        let result = match reply {
+                            ListReply::Rejected | ListReply::PartialRejected => {
+                                "NO Fixture LIST rejected"
+                            }
+                            _ => "OK LIST completed",
+                        };
+                        out.extend_from_slice(format!("{tag} {result}\r\n").as_bytes());
                     }
                     "IDLE" => {
                         out.extend_from_slice(b"+ idling\r\n");

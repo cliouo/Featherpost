@@ -419,9 +419,11 @@ chmod 0755 \
     "$menu_bundle/Contents/MacOS/$BRAND_MENU_BIN" \
     "$ui_bundle/Contents/MacOS/$BRAND_UI_BIN"
 
-mkdir -p -- "$bundle/Contents/Resources"
+mkdir -p -- "$bundle/Contents/Resources" "$agent_bundle/Contents/Resources"
 cp -X -- "$icon_source" "$bundle/Contents/Resources/$BRAND_ICON_NAME.icns"
-chmod 0644 "$bundle/Contents/Resources/$BRAND_ICON_NAME.icns"
+cp -X -- "$icon_source" "$agent_bundle/Contents/Resources/$BRAND_ICON_NAME.icns"
+chmod 0644 "$bundle/Contents/Resources/$BRAND_ICON_NAME.icns" \
+    "$agent_bundle/Contents/Resources/$BRAND_ICON_NAME.icns"
 render_template "$script_dir/templates/App.Info.plist.in" xml >"$bundle/Contents/Info.plist"
 render_template "$script_dir/templates/Agent.Info.plist.in" xml >"$agent_bundle/Contents/Info.plist"
 render_template "$script_dir/templates/Menu.Info.plist.in" xml >"$menu_bundle/Contents/Info.plist"
