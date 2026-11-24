@@ -1,10 +1,13 @@
+use std::collections::VecDeque;
 use std::future::Future;
-use std::time::Duration;
+use std::sync::Mutex;
+use std::time::{Duration, SystemTime};
 
 use maild_client::{
-    DiscoveryOptions, Endpoint, Incoming, JsonRpcError, TransportProbeRequest,
-    TransportReceiveRequest, TransportSendRequest,
+    DiscoveryOptions, Endpoint, Incoming, JsonRpcError, ProxyConfigResult, StreamReader,
+    StreamWriter, TransportProbeRequest, TransportReceiveRequest, TransportSendRequest,
 };
+use maild_proxy::{ProxyConfig, SystemProxySnapshot};
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 use tokio::time::Instant;
@@ -12,6 +15,10 @@ use zeroize::Zeroizing;
 
 use crate::api::ApiClient;
 use crate::error::{AppError, AppResult, ErrorCode};
+use crate::proxy::{
+    convert_client_proxy_result, convert_proxy_event, event_requires_secret_fetch,
+    PluginProxyStore, ProxySnapshot,
+};
 use crate::secret::{PlatformSecretStore, SecretStore as _};
 use crate::state::{canonicalize_address, MailboxBinding, StateStore};
 
@@ -22,22 +29,82 @@ const DELIVERY_UNKNOWN: i64 = -32051;
 const RATE_LIMITED: i64 = -32052;
 const RECEIVE_OPERATION_TIMEOUT: Duration = Duration::from_secs(40);
 const RECEIVE_RETURN_RESERVE: Duration = Duration::from_secs(8);
+const PROXY_IPC_FETCH_TIMEOUT: Duration = Duration::from_secs(2);
+const MAX_DEFERRED_FRAMES: usize = 16;
 
 pub struct ProviderRuntime {
     api: ApiClient,
     state: StateStore,
+    proxy_store: Option<PluginProxyStore>,
+    last_override_stamp: Mutex<Option<(SystemTime, u64)>>,
 }
 
 impl ProviderRuntime {
     pub fn production() -> AppResult<Self> {
         let secret = PlatformSecretStore.load()?;
+        let state = StateStore::discover()?;
+        let proxy_store = PluginProxyStore::discover().ok();
+        let last_stamp = proxy_store.as_ref().and_then(PluginProxyStore::file_stamp);
+        let plugin_override = proxy_store
+            .as_ref()
+            .and_then(|store| store.load().ok())
+            .map(|settings| settings.proxy_override)
+            .unwrap_or_default();
+        let proxy_snapshot = ProxySnapshot::default_system().with_override(plugin_override);
         Ok(Self {
-            api: ApiClient::production(secret)?,
-            state: StateStore::discover()?,
+            api: ApiClient::production_with_proxy(secret, proxy_snapshot)?,
+            state,
+            proxy_store,
+            last_override_stamp: Mutex::new(last_stamp),
         })
     }
 
+    #[cfg(any(test, debug_assertions))]
+    pub fn for_test(
+        api: ApiClient,
+        state: StateStore,
+        proxy_store: Option<PluginProxyStore>,
+    ) -> Self {
+        let last_stamp = proxy_store.as_ref().and_then(PluginProxyStore::file_stamp);
+        Self {
+            api,
+            state,
+            proxy_store,
+            last_override_stamp: Mutex::new(last_stamp),
+        }
+    }
+
+    /// Hot-reload inherited global proxy configuration while preserving any plugin-level override.
+    pub fn update_global_proxy(&self, config: ProxyConfig, system: SystemProxySnapshot) {
+        if let Err(error) = self.api.update_global_proxy(config, system) {
+            eprintln!("nodeseek-email-provider: 更新全局代理失败: {error}");
+        }
+    }
+
+    /// Check if `proxy_override.json` was updated externally (e.g. from UI or CLI) and reload it.
+    fn refresh_local_override(&self) {
+        let Some(store) = &self.proxy_store else {
+            return;
+        };
+        let stamp = store.file_stamp();
+        let mut last = self
+            .last_override_stamp
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if *last == stamp {
+            return;
+        }
+        *last = stamp;
+        drop(last);
+        if let Ok(settings) = store.load() {
+            if let Err(error) = self.api.update_plugin_override(settings.proxy_override) {
+                eprintln!("nodeseek-email-provider: 更新插件代理覆盖失败: {error}");
+            }
+        }
+    }
+
     pub async fn handle(&self, method: &str, params: Value) -> Result<Value, JsonRpcError> {
+        self.refresh_local_override();
         match method {
             "transport/probe" => self.probe(parse_params(params)?).await,
             "transport/receive" => self.receive(parse_params(params)?).await,
@@ -337,7 +404,7 @@ pub async fn run() -> AppResult<()> {
     outcome
 }
 
-async fn run_with_runtime(
+pub async fn run_with_runtime(
     runtime: ProviderRuntime,
     endpoint: Endpoint,
     token: &str,
@@ -359,25 +426,110 @@ async fn run_with_runtime(
         .call("providerRegister", json!({}), |_| {})
         .await
         .map_err(|_| AppError::new(ErrorCode::Upstream, "宿主 provider 注册失败"))?;
+
+    // Fetch initial global proxy configuration (including optional auth password) over local
+    // stream IPC. Older daemons without `getProxyConfig` fall back cleanly to system defaults.
+    if let Ok(value) = connection
+        .call_with_timeout(
+            "getProxyConfig",
+            json!({ "include_secret": true }),
+            PROXY_IPC_FETCH_TIMEOUT,
+            |_| {},
+        )
+        .await
+    {
+        if let Ok(result) = serde_json::from_value::<ProxyConfigResult>(value) {
+            let (cfg, sys) = convert_client_proxy_result(&result);
+            runtime.update_global_proxy(cfg, sys);
+        }
+    }
+
     let (mut reader, mut writer) = connection.into_split();
+    let mut deferred: VecDeque<Incoming> = VecDeque::new();
     loop {
-        match reader
-            .next_incoming()
-            .await
-            .map_err(|_| AppError::new(ErrorCode::Network, "宿主 provider IPC 已断开"))?
-        {
+        let next = match deferred.pop_front() {
+            Some(frame) => frame,
+            None => reader
+                .next_incoming()
+                .await
+                .map_err(|_| AppError::new(ErrorCode::Network, "宿主 provider IPC 已断开"))?,
+        };
+        match next {
             Incoming::Request { id, method, params } => {
                 let outcome = runtime.handle(&method, params).await;
                 writer.respond(&id, outcome).await.map_err(|_| {
                     AppError::new(ErrorCode::Network, "无法写入宿主 provider 应答")
                 })?;
             }
-            Incoming::Notification(_) => {}
+            Incoming::Notification(notification) => {
+                if let Some(Ok(event)) = notification.proxy_preference_changed() {
+                    if event_requires_secret_fetch(&event) {
+                        fetch_proxy_with_secret_on_stream(
+                            &mut reader,
+                            &mut writer,
+                            &mut deferred,
+                            &runtime,
+                        )
+                        .await?;
+                    } else {
+                        let (cfg, sys) = convert_proxy_event(&event);
+                        runtime.update_global_proxy(cfg, sys);
+                    }
+                }
+            }
             Incoming::Response { .. } => {
                 return Err(AppError::new(
                     ErrorCode::InvalidResponse,
                     "宿主 provider 收到未匹配的响应",
                 ));
+            }
+        }
+    }
+}
+
+async fn fetch_proxy_with_secret_on_stream(
+    reader: &mut StreamReader,
+    writer: &mut StreamWriter,
+    deferred: &mut VecDeque<Incoming>,
+    runtime: &ProviderRuntime,
+) -> AppResult<()> {
+    let expected_id = writer
+        .send_request("getProxyConfig", json!({ "include_secret": true }))
+        .await
+        .map_err(|_| AppError::new(ErrorCode::Network, "无法发送 getProxyConfig 请求"))?;
+    let deadline = Instant::now() + PROXY_IPC_FETCH_TIMEOUT;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Ok(());
+        }
+        let frame = match tokio::time::timeout(remaining, reader.next_incoming()).await {
+            Ok(Ok(frame)) => frame,
+            Ok(Err(_)) => {
+                return Err(AppError::new(ErrorCode::Network, "宿主 provider IPC 已断开"));
+            }
+            Err(_) => return Ok(()),
+        };
+        match frame {
+            Incoming::Response { id, result } if id == expected_id => {
+                if let Ok(value) = result {
+                    if let Ok(parsed) = serde_json::from_value::<ProxyConfigResult>(value) {
+                        let (cfg, sys) = convert_client_proxy_result(&parsed);
+                        runtime.update_global_proxy(cfg, sys);
+                    }
+                }
+                return Ok(());
+            }
+            Incoming::Response { .. } => {
+                return Err(AppError::new(
+                    ErrorCode::InvalidResponse,
+                    "宿主 provider 收到未匹配的响应",
+                ));
+            }
+            other => {
+                if deferred.len() < MAX_DEFERRED_FRAMES {
+                    deferred.push_back(other);
+                }
             }
         }
     }
@@ -707,10 +859,11 @@ mod tests {
         let (origin, server) = mailbox_server().await;
         let root = tempfile::tempdir().unwrap();
         let state = StateStore::at_root(root.path().join("state")).unwrap();
-        let runtime = ProviderRuntime {
-            api: ApiClient::for_test(fake_secret(), &origin).unwrap(),
-            state: state.clone(),
-        };
+        let runtime = ProviderRuntime::for_test(
+            ApiClient::for_test(fake_secret(), &origin).unwrap(),
+            state.clone(),
+            None,
+        );
         let binding = runtime
             .checked_binding("account-a", "box@seek.li")
             .await
@@ -728,10 +881,11 @@ mod tests {
         state
             .import_mailbox("account-old", "box@seek.li", 41)
             .unwrap();
-        let runtime = ProviderRuntime {
-            api: ApiClient::for_test(fake_secret(), &origin).unwrap(),
-            state: state.clone(),
-        };
+        let runtime = ProviderRuntime::for_test(
+            ApiClient::for_test(fake_secret(), &origin).unwrap(),
+            state.clone(),
+            None,
+        );
         let params = json!({
             "account":"",
             "address":"box@SEEK.LI",
@@ -757,7 +911,7 @@ mod tests {
         let (origin,server)=mailbox_server().await;
         let root=tempfile::tempdir().unwrap();
         let state=StateStore::at_root(root.path().join("state")).unwrap();
-        let runtime=ProviderRuntime{api:ApiClient::for_test(fake_secret(),&origin).unwrap(),state:state.clone()};
+        let runtime=ProviderRuntime::for_test(ApiClient::for_test(fake_secret(),&origin).unwrap(),state.clone(),None);
         let result=runtime.handle("transport/probe",json!({"account":"account-existing","address":"box@seek.li","direction":"incoming"})).await;
         assert_eq!(state.binding("account-existing").unwrap_err().code(),ErrorCode::NotFound,"probe must not import a binding before the user saves");
         assert_eq!(result.unwrap()["ok"],true);
@@ -783,10 +937,11 @@ mod tests {
         state
             .import_mailbox("account-a", "box@seek.li", 41)
             .unwrap();
-        let runtime = ProviderRuntime {
-            api: ApiClient::for_test(fake_secret(), &origin).unwrap(),
-            state: state.clone(),
-        };
+        let runtime = ProviderRuntime::for_test(
+            ApiClient::for_test(fake_secret(), &origin).unwrap(),
+            state.clone(),
+            None,
+        );
         let result = runtime
             .handle(
                 "transport/receive",
@@ -820,10 +975,11 @@ mod tests {
             .import_mailbox("account-a", "box@seek.li", 41)
             .unwrap();
         state.assign_remote_ids("account-a", &[10, 20]).unwrap();
-        let runtime = ProviderRuntime {
-            api: ApiClient::for_test(fake_secret(), &origin).unwrap(),
-            state: state.clone(),
-        };
+        let runtime = ProviderRuntime::for_test(
+            ApiClient::for_test(fake_secret(), &origin).unwrap(),
+            state.clone(),
+            None,
+        );
         let result = runtime
             .handle(
                 "transport/receive",
@@ -852,15 +1008,16 @@ mod tests {
             .import_mailbox("account-a", "box@seek.li", 41)
             .unwrap();
         state.assign_remote_ids("account-a", &[10, 20]).unwrap();
-        let runtime = ProviderRuntime {
-            api: ApiClient::for_test_with_read_timeout(
+        let runtime = ProviderRuntime::for_test(
+            ApiClient::for_test_with_read_timeout(
                 fake_secret(),
                 &origin,
                 Duration::from_secs(2),
             )
             .unwrap(),
             state,
-        };
+            None,
+        );
         let started = Instant::now();
         let result = runtime
             .receive_with_budget(
@@ -891,15 +1048,16 @@ mod tests {
             .import_mailbox("account-a", "box@seek.li", 41)
             .unwrap();
         state.assign_remote_ids("account-a", &[10]).unwrap();
-        let runtime = ProviderRuntime {
-            api: ApiClient::for_test_with_read_timeout(
+        let runtime = ProviderRuntime::for_test(
+            ApiClient::for_test_with_read_timeout(
                 fake_secret(),
                 &origin,
                 Duration::from_secs(2),
             )
             .unwrap(),
             state,
-        };
+            None,
+        );
         let started = Instant::now();
         let error = runtime
             .receive_with_budget(
@@ -937,10 +1095,11 @@ mod tests {
             .import_mailbox("account-a", "box@seek.li", 41)
             .unwrap();
         state.assign_remote_ids("account-a", &[10]).unwrap();
-        let runtime = ProviderRuntime {
-            api: ApiClient::for_test(fake_secret(), &origin).unwrap(),
+        let runtime = ProviderRuntime::for_test(
+            ApiClient::for_test(fake_secret(), &origin).unwrap(),
             state,
-        };
+            None,
+        );
 
         let socket = root.path().join(maild_brand::SOCKET_FILE_NAME);
         let listener = tokio::net::UnixListener::bind(&socket).unwrap();
@@ -963,6 +1122,24 @@ mod tests {
             write_json_line(
                 &mut write,
                 &json!({"jsonrpc":"2.0","id":register["id"],"result":{}}),
+            )
+            .await;
+
+            let get_proxy = read_json_line(&mut read).await;
+            assert_eq!(get_proxy["method"], "getProxyConfig");
+            assert_eq!(get_proxy["params"]["include_secret"], true);
+            write_json_line(
+                &mut write,
+                &json!({
+                    "jsonrpc":"2.0",
+                    "id":get_proxy["id"],
+                    "result":{
+                        "config":{"mode":"direct"},
+                        "has_password":false,
+                        "effective_system":{"bypass":[],"exclude_simple_hostnames":false,"source":"none"},
+                        "persisted":true
+                    }
+                }),
             )
             .await;
 

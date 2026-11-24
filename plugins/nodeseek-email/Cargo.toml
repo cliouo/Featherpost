@@ -41,7 +41,8 @@ httpdate = "1.0.3"
 libc = "0.2.183"
 maild-client = { path = "../../crates/maild-client" }
 maild-paths = { path = "../../crates/maild-paths" }
-reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls", "stream"] }
+maild-proxy = { path = "../../crates/maild-proxy", features = ["reqwest"] }
+reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls", "socks", "stream"] }
 rusqlite = { version = "0.37.0", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

@@ -1,8 +1,9 @@
 use std::collections::{BTreeSet, HashMap};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use maild_proxy::{ProxyConfig, ProxyOverride, SystemProxySnapshot};
 use reqwest::header::{HeaderMap, CONTENT_LENGTH, RETRY_AFTER};
 use reqwest::{Method, StatusCode, Url};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -11,6 +12,7 @@ use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
 use crate::error::{AppError, AppResult, ErrorCode};
+use crate::proxy::ProxySnapshot;
 use crate::secret::SecretBuffer;
 use crate::state::canonicalize_address;
 use crate::PRODUCTION_ORIGIN;
@@ -114,7 +116,8 @@ impl RateGate {
 }
 
 pub struct ApiClient {
-    http: reqwest::Client,
+    http: Arc<RwLock<reqwest::Client>>,
+    proxy: Arc<RwLock<ProxySnapshot>>,
     origin: String,
     secret: Arc<SecretBuffer>,
     gate: Arc<RateGate>,
@@ -124,33 +127,117 @@ pub struct ApiClient {
 
 impl ApiClient {
     pub fn production(secret: SecretBuffer) -> AppResult<Self> {
-        Self::build(secret, PRODUCTION_ORIGIN, false)
+        Self::production_with_proxy(secret, ProxySnapshot::default_system())
+    }
+
+    pub fn production_with_proxy(secret: SecretBuffer, proxy: ProxySnapshot) -> AppResult<Self> {
+        Self::build(secret, PRODUCTION_ORIGIN, false, proxy)
     }
 
     #[cfg(test)]
     pub(crate) fn for_test(secret: SecretBuffer, origin: &str) -> AppResult<Self> {
-        Self::build(secret, origin, true)
+        Self::build(
+            secret,
+            origin,
+            true,
+            ProxySnapshot::from_global(
+                ProxyConfig {
+                    mode: maild_proxy::ProxyMode::Direct,
+                    custom: None,
+                },
+                SystemProxySnapshot::default(),
+            ),
+        )
     }
 
-    fn build(secret: SecretBuffer, origin: &str, allow_test_origin: bool) -> AppResult<Self> {
+    #[cfg(any(test, debug_assertions))]
+    pub fn for_test_with_proxy(
+        secret: SecretBuffer,
+        origin: &str,
+        proxy: ProxySnapshot,
+    ) -> AppResult<Self> {
+        Self::build(secret, origin, true, proxy)
+    }
+
+    fn build(
+        secret: SecretBuffer,
+        origin: &str,
+        allow_test_origin: bool,
+        proxy: ProxySnapshot,
+    ) -> AppResult<Self> {
         validate_origin(origin, allow_test_origin)?;
-        let http = reqwest::Client::builder()
-            .no_proxy()
-            .redirect(reqwest::redirect::Policy::none())
-            .connect_timeout(CONNECT_TIMEOUT)
-            .timeout(REQUEST_TIMEOUT)
-            .build()
-            .map_err(|_| {
-                AppError::new(ErrorCode::Network, "无法初始化 NodeSeek Email HTTP 客户端")
-            })?;
+        let http = build_reqwest_client(&proxy)?;
         Ok(Self {
-            http,
+            http: Arc::new(RwLock::new(http)),
+            proxy: Arc::new(RwLock::new(proxy)),
             origin: origin.trim_end_matches('/').to_owned(),
             secret: Arc::new(secret),
             gate: Arc::new(RateGate::default()),
             mailbox_cache: Arc::new(Mutex::new(HashMap::new())),
             read_timeout: REQUEST_TIMEOUT,
         })
+    }
+
+    /// Atomically replace the active [`ProxySnapshot`] and rebuild the underlying `reqwest::Client`
+    /// so stale pooled connections to a previous proxy are dropped immediately.
+    pub fn update_proxy(&self, next: ProxySnapshot) -> AppResult<()> {
+        let client = build_reqwest_client(&next)?;
+        {
+            let mut proxy_guard = self
+                .proxy
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut http_guard = self
+                .http
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            *proxy_guard = next;
+            *http_guard = client;
+        }
+        Ok(())
+    }
+
+    /// Hot-reload the inherited global proxy config while preserving this plugin's local override
+    /// and any extra programmatic resolver.
+    pub fn update_global_proxy(
+        &self,
+        global_config: ProxyConfig,
+        global_system: SystemProxySnapshot,
+    ) -> AppResult<()> {
+        let mut next = self
+            .proxy
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        if next.global_config == global_config && next.global_system == global_system {
+            return Ok(());
+        }
+        next.global_config = global_config;
+        next.global_system = global_system;
+        self.update_proxy(next)
+    }
+
+    /// Hot-reload this plugin's local [`ProxyOverride`] while preserving the inherited global config.
+    pub fn update_plugin_override(&self, plugin_override: ProxyOverride) -> AppResult<()> {
+        let mut next = self
+            .proxy
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        if next.plugin_override == plugin_override {
+            return Ok(());
+        }
+        next.plugin_override = plugin_override;
+        self.update_proxy(next)
+    }
+
+    /// Snapshot of current proxy settings (redacted for diagnostics/tests; never leaks secrets).
+    pub fn proxy_override(&self) -> ProxyOverride {
+        self.proxy
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .plugin_override
+            .without_secret()
     }
 
     #[cfg(test)]
@@ -162,7 +249,7 @@ impl ApiClient {
         if read_timeout.is_zero() {
             return Err(AppError::invalid_input());
         }
-        let mut client = Self::build(secret, origin, true)?;
+        let mut client = Self::for_test(secret, origin)?;
         client.read_timeout = read_timeout;
         Ok(client)
     }
@@ -552,7 +639,12 @@ impl ApiClient {
         self.gate.check()?;
         let url = self.url(path, query)?;
         let key = self.secret.as_str()?;
-        let mut request = self.http.request(method, url).bearer_auth(key);
+        let client = self
+            .http
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let mut request = client.request(method, url).bearer_auth(key);
         if let Some(body) = body {
             request = request.json(body);
         }
@@ -604,6 +696,17 @@ impl ApiClient {
         }
         Ok(url)
     }
+}
+
+fn build_reqwest_client(proxy: &ProxySnapshot) -> AppResult<reqwest::Client> {
+    let builder = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(CONNECT_TIMEOUT)
+        .timeout(REQUEST_TIMEOUT);
+    proxy
+        .apply_reqwest_proxy(builder)
+        .build()
+        .map_err(|_| AppError::new(ErrorCode::Network, "无法初始化 NodeSeek Email HTTP 客户端"))
 }
 
 fn validate_origin(origin: &str, allow_test_origin: bool) -> AppResult<()> {
@@ -1058,7 +1161,13 @@ mod tests {
 
     #[test]
     fn production_origin_cannot_be_replaced() {
-        assert!(ApiClient::build(fake_secret(), "https://example.test", false).is_err());
+        assert!(ApiClient::build(
+            fake_secret(),
+            "https://example.test",
+            false,
+            ProxySnapshot::default_system(),
+        )
+        .is_err());
         assert!(ApiClient::for_test(fake_secret(), "https://127.0.0.1").is_err());
         assert!(ApiClient::for_test(fake_secret(), "http://example.test").is_err());
     }

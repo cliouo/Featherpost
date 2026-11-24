@@ -1,6 +1,7 @@
 pub mod api;
 pub mod error;
 pub mod provider;
+pub mod proxy;
 pub mod secret;
 pub mod state;
 #[cfg(feature = "ui")]

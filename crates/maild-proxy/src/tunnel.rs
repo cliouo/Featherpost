@@ -5,6 +5,7 @@ use std::fmt;
 use std::io;
 use std::net::IpAddr;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context as TaskContext, Poll};
 use std::time::Duration;
 
@@ -13,11 +14,13 @@ use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _, Re
 use tokio::net::TcpStream;
 use zeroize::Zeroizing;
 
+use crate::bypass::is_loopback_host;
 use crate::model::{
     format_host_port, normalize_host, ProxyConfig, ProxyEndpoint, ProxyError, ProxyProtocol,
     ProxyTarget, ResolvedRoute, SystemProxySnapshot,
 };
 use crate::resolve::{resolve_route_with_options, ResolveOptions};
+use crate::routing::{ProxyContext, ProxyContextDefaults, ProxyDecision, ProxyPurpose, ProxyResolver};
 
 /// Maximum HTTP CONNECT response header size (8 KiB).
 pub const MAX_HTTP_CONNECT_HEADER_BYTES: usize = 8 * 1024;
@@ -116,13 +119,27 @@ impl ConnectOptions {
 }
 
 /// Snapshot-backed proxy connector for TCP-based mail protocols (IMAP, SMTP, Probe, Autodiscover).
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ProxyConnector {
     config: ProxyConfig,
     system: SystemProxySnapshot,
+    resolver: Option<Arc<dyn ProxyResolver>>,
+    context_defaults: ProxyContextDefaults,
     resolve_options: ResolveOptions,
     #[cfg(any(test, debug_assertions))]
     accept_invalid_proxy_certs: bool,
+}
+
+impl fmt::Debug for ProxyConnector {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ProxyConnector")
+            .field("config", &self.config)
+            .field("system", &self.system)
+            .field("has_resolver", &self.resolver.is_some())
+            .field("context_defaults", &self.context_defaults)
+            .field("resolve_options", &self.resolve_options)
+            .finish()
+    }
 }
 
 impl ProxyConnector {
@@ -130,6 +147,8 @@ impl ProxyConnector {
         Self {
             config,
             system,
+            resolver: None,
+            context_defaults: ProxyContextDefaults::default(),
             resolve_options: ResolveOptions::default(),
             #[cfg(any(test, debug_assertions))]
             accept_invalid_proxy_certs: false,
@@ -147,6 +166,44 @@ impl ProxyConnector {
         )
     }
 
+    /// Attach a [`ProxyResolver`] evaluated before global config + system proxy fallback.
+    pub fn with_resolver(mut self, resolver: Arc<dyn ProxyResolver>) -> Self {
+        self.resolver = Some(resolver);
+        self
+    }
+
+    /// Attach optional [`ProxyResolver`].
+    pub fn with_optional_resolver(mut self, resolver: Option<Arc<dyn ProxyResolver>>) -> Self {
+        self.resolver = resolver;
+        self
+    }
+
+    /// Attach default [`ProxyContext`] metadata applied to calls on this connector.
+    pub fn with_context_defaults(mut self, defaults: ProxyContextDefaults) -> Self {
+        self.context_defaults = defaults;
+        self
+    }
+
+    pub fn with_purpose(mut self, purpose: ProxyPurpose) -> Self {
+        self.context_defaults.purpose = purpose;
+        self
+    }
+
+    pub fn with_plugin_id(mut self, plugin_id: impl Into<String>) -> Self {
+        self.context_defaults.plugin_id = Some(plugin_id.into());
+        self
+    }
+
+    pub fn with_account_id(mut self, account_id: impl Into<String>) -> Self {
+        self.context_defaults.account_id = Some(account_id.into());
+        self
+    }
+
+    pub fn with_tag(mut self, tag: impl Into<String>) -> Self {
+        self.context_defaults.tags.push(tag.into());
+        self
+    }
+
     #[cfg(any(test, debug_assertions))]
     pub fn with_allow_loopback_proxy(mut self, allow: bool) -> Self {
         self.resolve_options.allow_loopback_proxy = allow;
@@ -159,8 +216,41 @@ impl ProxyConnector {
         self
     }
 
+    fn allow_loopback(&self) -> bool {
+        #[cfg(any(test, debug_assertions))]
+        {
+            self.resolve_options.allow_loopback_proxy
+        }
+        #[cfg(not(any(test, debug_assertions)))]
+        {
+            false
+        }
+    }
+
     pub fn resolve(&self, target: &ProxyTarget) -> ResolvedRoute {
-        resolve_route_with_options(&self.config, &self.system, target, self.resolve_options)
+        let ctx = self.context_defaults.build_context(target.clone());
+        self.resolve_context(&ctx)
+    }
+
+    /// Resolve the effective route for a rich [`ProxyContext`].
+    ///
+    /// Precedence:
+    /// 1. Mandatory loopback bypass (unless opted out in test/debug).
+    /// 2. Attached [`ProxyResolver`] (if any); first non-[`ProxyDecision::Inherit`] wins.
+    /// 3. Global [`ProxyConfig`] + [`SystemProxySnapshot`] fallback.
+    pub fn resolve_context(&self, ctx: &ProxyContext) -> ResolvedRoute {
+        if !self.allow_loopback() && is_loopback_host(&ctx.target.host) {
+            return ResolvedRoute::Direct;
+        }
+        if let Some(resolver) = &self.resolver {
+            let effective = self.context_defaults.apply_to(ctx);
+            match resolver.resolve(&effective) {
+                ProxyDecision::Direct => return ResolvedRoute::Direct,
+                ProxyDecision::Use(ep) => return ResolvedRoute::Proxy(ep),
+                ProxyDecision::Inherit => {}
+            }
+        }
+        resolve_route_with_options(&self.config, &self.system, &ctx.target, self.resolve_options)
     }
 
     /// Establish a direct or proxied stream to `target`.
@@ -169,7 +259,18 @@ impl ProxyConnector {
         target: &ProxyTarget,
         opts: ConnectOptions,
     ) -> Result<(ProxyStream, ResolvedRoute), ProxyError> {
-        let route = self.resolve(target);
+        let ctx = self.context_defaults.build_context(target.clone());
+        self.connect_context(&ctx, opts).await
+    }
+
+    /// Establish a direct or proxied stream using full [`ProxyContext`] routing metadata.
+    pub async fn connect_context(
+        &self,
+        ctx: &ProxyContext,
+        opts: ConnectOptions,
+    ) -> Result<(ProxyStream, ResolvedRoute), ProxyError> {
+        let route = self.resolve_context(ctx);
+        let target = &ctx.target;
         let stream = match &route {
             ResolvedRoute::Direct => {
                 let tcp = connect_tcp_addrs(&target.host, target.port, opts, false).await?;

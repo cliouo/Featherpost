@@ -991,6 +991,7 @@ impl Bridge {
                 csp: prepared.csp,
                 links: prepared.links,
                 parts,
+                remote_urls: prepared.remote_urls,
                 allow_remote,
             },
         );

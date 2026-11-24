@@ -1003,6 +1003,17 @@ impl Bridge {
         Ok(UiProxyConfig::from(result))
     }
 
+    /// 进程内专用：经本机流式 IPC 读取完整全局代理配置（含密码），仅供 Rust 侧
+    /// [`crate::remote_image::RemoteImageFetcher`] 使用，绝不暴露给 WebView 命令层。
+    pub async fn proxy_config_with_secret(
+        &self,
+    ) -> Result<maild_client::ProxyConfigResult, UiError> {
+        self.handle()
+            .proxy_config_with_secret()
+            .await
+            .map_err(|error| proxy_error("getProxyConfig", error))
+    }
+
     pub async fn set_proxy_config(
         &self,
         update: UiProxyConfigUpdate,

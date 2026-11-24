@@ -1062,7 +1062,13 @@ impl AccountManager {
         let proxy = self
             .ctx
             .get::<crate::proxy_preference::ProxyService>()
-            .map(|p| p.connector());
+            .map(|p| {
+                let mut defaults = maild_proxy::ProxyContextDefaults::mail();
+                if !account.is_empty() {
+                    defaults = defaults.with_account_id(account);
+                }
+                p.connector_with_context(defaults)
+            });
         let outgoing_side = async {
             match &draft.outgoing {
                 None => None,

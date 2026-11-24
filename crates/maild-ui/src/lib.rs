@@ -18,6 +18,7 @@ mod macos_locale;
 #[cfg(target_os = "macos")]
 mod macos_window;
 pub mod mailbox;
+pub mod remote_image;
 pub mod system;
 pub mod settings;
 pub mod settings_packages;
@@ -46,13 +47,14 @@ pub use bridge::{
     LOCALE_EVENT, PROXY_EVENT, STATE_EVENT,
 };
 use documents::{
-    document_response, navigation_verdict, not_found, part_response, route, DocumentStore,
-    ProtocolBase, Route, Verdict, SCHEME,
+    document_response, navigation_verdict, not_found, part_response, remote_image_response, route,
+    DocumentStore, ProtocolBase, Route, Verdict, SCHEME,
 };
 
 pub struct AppState {
     pub bridge: Arc<Bridge>,
     pub documents: Arc<DocumentStore>,
+    pub remote_images: Arc<remote_image::RemoteImageFetcher>,
     pub base: ProtocolBase,
     pub files: compose_files::FileSelections,
     pub packages: settings_packages::PackageSelections,
@@ -68,11 +70,14 @@ pub struct AppState {
 /// 持有连接 actor 的 runtime（见 `main.rs`）。
 pub fn run(bridge: Arc<Bridge>) -> Result<(), tauri::Error> {
     let documents = Arc::new(DocumentStore::new());
+    let remote_images = Arc::new(remote_image::RemoteImageFetcher::new());
     let base = ProtocolBase::for_platform();
     let for_setup = bridge.clone();
     let for_proxy = bridge.clone();
     let for_focus = bridge.clone();
     let for_exit = bridge.clone();
+    let remote_for_state = remote_images.clone();
+    let remote_for_proxy = remote_images.clone();
     let documents_for_window = documents.clone();
     let base_for_window = base.clone();
     let builder = tauri::Builder::default();
@@ -82,6 +87,7 @@ pub fn run(bridge: Arc<Bridge>) -> Result<(), tauri::Error> {
         .manage(AppState {
             bridge,
             documents,
+            remote_images,
             base,
             files: compose_files::FileSelections::default(),
             packages: settings_packages::PackageSelections::default(),
@@ -91,7 +97,7 @@ pub fn run(bridge: Arc<Bridge>) -> Result<(), tauri::Error> {
             locale: shell_locale::ShellLocale::default(),
         })
         // ADR-0033 决策 4：文档与 part 只经令牌可达。处理器在 tokio 上异步跑——part 要经认证连接
-        // 向 daemon 取字节。
+        // 向 daemon 取字节；Phase 3 远程图片经 `RemoteImageFetcher`（走 `maild-proxy`）抓取。
         .register_asynchronous_uri_scheme_protocol(SCHEME, |context, request, responder| {
             let app = context.app_handle().clone();
             let path = request.uri().path().to_string();
@@ -120,6 +126,16 @@ pub fn run(bridge: Arc<Bridge>) -> Result<(), tauri::Error> {
                         {
                             Ok((mime, bytes)) => part_response(&mime, bytes),
                             // 原因已在桥里进 stderr；对文档来说只是「图没有」。
+                            Err(_) => not_found(),
+                        }
+                    }
+                    Route::Remote(token, index) => {
+                        match state
+                            .remote_images
+                            .serve_remote(&state.documents, &token, index)
+                            .await
+                        {
+                            Ok(image) => remote_image_response(&image.content_type, image.bytes),
                             Err(_) => not_found(),
                         }
                     }
@@ -208,8 +224,8 @@ pub fn run(bridge: Arc<Bridge>) -> Result<(), tauri::Error> {
             // 补上 `applicationShouldTerminate:`，统一路由进下面的退出流水线。
             #[cfg(target_os = "macos")]
             macos_window::install_terminate_handler(app.handle().clone());
-            spawn_state_pump(app.handle().clone(), for_setup);
-            spawn_proxy_pump(app.handle().clone(), for_proxy);
+            spawn_state_pump(app.handle().clone(), for_setup, remote_for_state);
+            spawn_proxy_pump(app.handle().clone(), for_proxy, remote_for_proxy);
             Ok(())
         })
         .on_window_event(move |window, event| {
@@ -477,8 +493,12 @@ fn emit_link(app: &tauri::AppHandle, documents: &DocumentStore, token: &str, ind
     }
 }
 
-/// 连接快照单向推送：每次 `ViewState` 变化投影一次发给 webview；上线那一刻顺带 claim intent。
-fn spawn_state_pump(app: tauri::AppHandle, bridge: Arc<Bridge>) {
+/// 连接快照单向推送：每次 `ViewState` 变化投影一次发给 webview；上线那一刻顺带 claim intent 并同步远程图片代理。
+fn spawn_state_pump(
+    app: tauri::AppHandle,
+    bridge: Arc<Bridge>,
+    remote_images: Arc<remote_image::RemoteImageFetcher>,
+) {
     tauri::async_runtime::spawn(async move {
         let mut state = bridge.subscribe();
         let mut was_online = false;
@@ -520,6 +540,13 @@ fn spawn_state_pump(app: tauri::AppHandle, bridge: Arc<Bridge>) {
             } else if online && !was_online {
                 spawn_intent_claim(app.clone(), bridge.clone());
             }
+            if online && !was_online {
+                let bridge = bridge.clone();
+                let remote_images = remote_images.clone();
+                tauri::async_runtime::spawn(async move {
+                    remote_images.refresh_from_bridge(&bridge, 0).await;
+                });
+            }
             if online {
                 spawn_compat_check(bridge.clone());
             }
@@ -536,8 +563,13 @@ fn spawn_state_pump(app: tauri::AppHandle, bridge: Arc<Bridge>) {
     });
 }
 
-/// 转发后台的 `preferences/proxy` 推送事件给 webview（不含任何密码）。
-fn spawn_proxy_pump(app: tauri::AppHandle, bridge: Arc<Bridge>) {
+/// 转发后台的 `preferences/proxy` 推送事件给 webview（不含任何密码），并热刷新
+/// [`remote_image::RemoteImageFetcher`]（通过本机流式 IPC 读取含密配置并原子替换客户端）。
+fn spawn_proxy_pump(
+    app: tauri::AppHandle,
+    bridge: Arc<Bridge>,
+    remote_images: Arc<remote_image::RemoteImageFetcher>,
+) {
     tauri::async_runtime::spawn(async move {
         let mut events = bridge.subscribe_events();
         loop {
@@ -545,10 +577,12 @@ fn spawn_proxy_pump(app: tauri::AppHandle, bridge: Arc<Bridge>) {
                 Ok(maild_app::AppEvent::Notification(
                     maild_client::ServerNotification::ProxyPreference(event),
                 )) => {
+                    let generation = event.generation;
                     let payload = settings::UiProxyEvent::from(*event);
                     if let Err(error) = app.emit(PROXY_EVENT, &payload) {
                         eprintln!("[maild-ui] 推送代理偏好事件失败: {error}");
                     }
+                    remote_images.refresh_from_bridge(&bridge, generation).await;
                 }
                 Ok(_) => {}
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
@@ -556,6 +590,7 @@ fn spawn_proxy_pump(app: tauri::AppHandle, bridge: Arc<Bridge>) {
                         let payload = settings::UiProxyEvent::from_config(config, 0);
                         let _ = app.emit(PROXY_EVENT, &payload);
                     }
+                    remote_images.refresh_from_bridge(&bridge, 0).await;
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
             }

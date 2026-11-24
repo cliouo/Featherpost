@@ -955,7 +955,11 @@ async fn serve(
 ) -> Result<ServeExit, ReceiveError> {
     let connector = ctx
         .get::<crate::proxy_preference::ProxyService>()
-        .map(|service| service.connector())
+        .map(|service| {
+            service.connector_with_context(
+                maild_proxy::ProxyContextDefaults::mail().with_account_id(&cfg.account),
+            )
+        })
         .unwrap_or_else(ProxyConnector::direct_only);
     let client = connect_client_with_proxy(cfg, &connector).await?;
     let password = std::str::from_utf8(secret.expose()).map_err(fixed(
