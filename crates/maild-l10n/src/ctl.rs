@@ -40,6 +40,10 @@ pub struct Ctl {
     pub reading_policy_not_persisted: &'static str,
     /// `locale` 读到停摆的偏好文件时的整行提示。
     pub locale_not_persisted: &'static str,
+    /// `proxy` 读到停摆的偏好文件时的整行提示。
+    pub proxy_not_persisted: &'static str,
+    /// `proxy test` 未通过时的结论。
+    pub proxy_test_failed: &'static str,
 
     // —— 账户 ——
     /// `account test` / `provider-test` 探测未通过时的结论（退出码 4）。
@@ -89,6 +93,9 @@ pub struct AccountDetailTexts {
     pub provider_timeout: &'static str,
     pub provider_failed: &'static str,
     pub provider_response_invalid: &'static str,
+    pub proxy_connect_failed: &'static str,
+    pub proxy_auth_failed: &'static str,
+    pub proxy_tunnel_failed: &'static str,
     pub internal: &'static str,
     /// 新 daemon 给了本 CLI 认不出的 code。
     pub unknown: &'static str,
@@ -116,6 +123,9 @@ impl AccountDetailTexts {
             "provider_timeout" => self.provider_timeout,
             "provider_failed" => self.provider_failed,
             "provider_response_invalid" => self.provider_response_invalid,
+            "proxy_connect_failed" => self.proxy_connect_failed,
+            "proxy_auth_failed" => self.proxy_auth_failed,
+            "proxy_tunnel_failed" => self.proxy_tunnel_failed,
             "internal" => self.internal,
             _ => return None,
         })
@@ -146,6 +156,9 @@ const ZH_ACCOUNT_DETAIL: AccountDetailTexts = AccountDetailTexts {
     provider_timeout: "收信插件响应超时",
     provider_failed: "收信插件报告了错误",
     provider_response_invalid: "收信插件返回了无效数据",
+    proxy_connect_failed: "无法连接代理服务器",
+    proxy_auth_failed: "代理服务器拒绝了身份认证",
+    proxy_tunnel_failed: "通过代理建立连接隧道失败",
     internal: "内部错误",
     unknown: "连接出现问题",
 };
@@ -169,6 +182,9 @@ const EN_ACCOUNT_DETAIL: AccountDetailTexts = AccountDetailTexts {
     provider_timeout: "The mail plugin didn't respond in time",
     provider_failed: "The mail plugin reported an error",
     provider_response_invalid: "The mail plugin returned invalid data",
+    proxy_connect_failed: "Couldn't connect to the proxy server",
+    proxy_auth_failed: "The proxy server rejected authentication",
+    proxy_tunnel_failed: "Couldn't establish a tunnel through the proxy",
     internal: "Internal error",
     unknown: "Connection problem",
 };
@@ -191,6 +207,8 @@ pub(crate) const ZH_HANS: Ctl = Ctl {
     draft_attachment_unreadable: "[源 part 已不可读]",
     reading_policy_not_persisted: "persisted: false（策略文件停摆：读到的是缺省值，写会被拒绝）",
     locale_not_persisted: "persisted: false（偏好文件停摆：读到的是缺省值，写会被拒绝）",
+    proxy_not_persisted: "persisted: false（代理配置文件停摆：读到的是缺省值，写会被拒绝）",
+    proxy_test_failed: "代理连通性测试未通过",
 
     probe_failed: "探测未通过",
     prompt_imap_password: "IMAP 密码",
@@ -228,6 +246,9 @@ pub(crate) const EN: Ctl = Ctl {
         "persisted: false (policy file unusable: showing defaults; changes will be refused)",
     locale_not_persisted:
         "persisted: false (preference file unusable: showing defaults; changes will be refused)",
+    proxy_not_persisted:
+        "persisted: false (proxy file unusable: showing defaults; changes will be refused)",
+    proxy_test_failed: "proxy connectivity test failed",
 
     probe_failed: "probe did not pass",
     prompt_imap_password: "IMAP password:",
@@ -426,6 +447,8 @@ mod tests {
             en.draft_attachment_unreadable,
             en.reading_policy_not_persisted,
             en.locale_not_persisted,
+            en.proxy_not_persisted,
+            en.proxy_test_failed,
             en.probe_failed,
             en.prompt_imap_password,
             en.prompt_smtp_password,

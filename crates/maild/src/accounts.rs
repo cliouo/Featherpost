@@ -30,7 +30,10 @@ use crate::loader::{load, plugin_config, Assembly, LoadError, Registry};
 use crate::menu::{MenuConfig, MenuPlugin};
 use crate::notify::{NotifyConfig, NotifyPlugin};
 use crate::otp::{OtpConfig, OtpPlugin};
-use crate::probe::{probe_incoming, probe_outgoing, IncomingProbe, OutgoingProbe, ProbeOutcome};
+use crate::probe::{
+    probe_incoming_with_proxy, probe_outgoing_with_proxy, IncomingProbe, OutgoingProbe,
+    ProbeOutcome,
+};
 use crate::events::AccountDetailCode;
 use crate::receive::{
     spawn_managed_receive, Receive, ReceiveConfig, ReceiveError, ReceivePlugin, SecretFetcher,
@@ -1056,6 +1059,10 @@ impl AccountManager {
         incoming_secret: &[u8],
         outgoing_secret: Option<&[u8]>,
     ) -> ProbeReport {
+        let proxy = self
+            .ctx
+            .get::<crate::proxy_preference::ProxyService>()
+            .map(|p| p.connector());
         let outgoing_side = async {
             match &draft.outgoing {
                 None => None,
@@ -1069,7 +1076,7 @@ impl AccountManager {
                     let (server, port, security, username, _sharing) =
                         outgoing.smtp().expect("Smtp 变体已匹配");
                     Some(
-                        probe_outgoing(
+                        probe_outgoing_with_proxy(
                             OutgoingProbe {
                                 server,
                                 port,
@@ -1078,6 +1085,7 @@ impl AccountManager {
                                 secret: outgoing_secret,
                             },
                             PROBE_DEADLINE,
+                            proxy.as_ref(),
                         )
                         .await,
                     )
@@ -1089,7 +1097,7 @@ impl AccountManager {
                 IncomingSettings::Imap { .. } => {
                     let (server, port, security, username, mailbox, idle, _) =
                         draft.incoming.imap().expect("Imap 变体已匹配");
-                    probe_incoming(
+                    probe_incoming_with_proxy(
                         IncomingProbe {
                             server,
                             port,
@@ -1100,6 +1108,7 @@ impl AccountManager {
                             idle,
                         },
                         PROBE_DEADLINE,
+                        proxy.as_ref(),
                     )
                     .await
                 }
@@ -1946,7 +1955,10 @@ impl AccountManager {
             tls: security.as_str().to_string(),
             accept_invalid_certs: false,
         };
-        crate::transport::Transport::from_config(config)
+        crate::transport::Transport::from_config_with_proxy(
+            config,
+            self.ctx.get::<crate::proxy_preference::ProxyService>(),
+        )
             .send(&sender, to, subject, body)
             .await
             .map_err(|error| ManagerError::Internal(format!("发送失败: {error}")))
@@ -2024,7 +2036,10 @@ impl AccountManager {
             tls: security.as_str().to_string(),
             accept_invalid_certs: false,
         };
-        crate::transport::Transport::from_config(config)
+        crate::transport::Transport::from_config_with_proxy(
+            config,
+            self.ctx.get::<crate::proxy_preference::ProxyService>(),
+        )
             .send_message_checked(&message)
             .await
             .map_err(ManagerError::Delivery)
@@ -2063,6 +2078,38 @@ impl AccountManager {
         let state = self.state.lock().unwrap();
         state.catalog.profile(account).is_some()
             || state.legacy.iter().any(|(name, ..)| name == account)
+    }
+
+    /// 首个已启用账户的 IMAP `(host, port, scheme)`，供 `testProxy` 缺省目标使用。
+    pub fn first_enabled_imap_target(&self) -> Option<(String, u16, maild_proxy::TargetScheme)> {
+        let state = self.state.lock().unwrap();
+        for profile in &state.catalog.profiles {
+            if !profile.enabled || profile.archived_at.is_some() {
+                continue;
+            }
+            if let Some((server, port, security, ..)) = profile.incoming.imap() {
+                let scheme = match security {
+                    crate::account_catalog::SecurityMode::Implicit => {
+                        maild_proxy::TargetScheme::Imaps
+                    }
+                    crate::account_catalog::SecurityMode::StartTls => {
+                        maild_proxy::TargetScheme::Imap
+                    }
+                };
+                return Some((server.to_string(), port, scheme));
+            }
+        }
+        for (_, cfg, _, _) in &state.legacy {
+            if !cfg.server.is_empty() && cfg.port != 0 {
+                let scheme = if cfg.tls == "implicit" {
+                    maild_proxy::TargetScheme::Imaps
+                } else {
+                    maild_proxy::TargetScheme::Imap
+                };
+                return Some((cfg.server.clone(), cfg.port, scheme));
+            }
+        }
+        None
     }
 
     /// 账户自身的地址集合：profile 地址 + 名下 active 别名。

@@ -13,11 +13,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use cordis::{Context, Plugin, PluginError, Service};
+use maild_proxy::{ConnectOptions, ProxyConnector, ProxyStream, ProxyTarget, TargetScheme};
 use serde::Deserialize;
 use tokio::io::{
     AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader,
 };
-use tokio::net::TcpStream;
 use zeroize::Zeroizing;
 
 const MAX_MAILBOX_BYTES: usize = 320;
@@ -90,6 +90,7 @@ impl Service for TransportConfig {
 /// 发送服务（spine `ctx.transport` 的最小形态）。
 pub struct Transport {
     cfg: TransportConfig,
+    proxy: Option<Arc<crate::proxy_preference::ProxyService>>,
 }
 
 impl Service for Transport {
@@ -107,7 +108,15 @@ pub struct DeliveryFailure {
 impl Transport {
     /// 用任意参数构造发送器（per-account 发信复用同一实现）。
     pub fn from_config(cfg: TransportConfig) -> Self {
-        Self { cfg }
+        Self { cfg, proxy: None }
+    }
+
+    /// 构造带全局代理服务的发送器。
+    pub fn from_config_with_proxy(
+        cfg: TransportConfig,
+        proxy: Option<Arc<crate::proxy_preference::ProxyService>>,
+    ) -> Self {
+        Self { cfg, proxy }
     }
 
     /// 发一封纯文本邮件。错误包含失败阶段和响应码，不回显可能携带凭据的服务端文本。
@@ -178,7 +187,17 @@ impl Transport {
             ));
         }
 
-        let stream = connect_smtp(&self.cfg.server, self.cfg.port).await?;
+        let connector = self
+            .proxy
+            .as_ref()
+            .map(|p| p.connector())
+            .unwrap_or_else(ProxyConnector::direct_only);
+        let scheme = if self.cfg.tls == "implicit" {
+            TargetScheme::Smtps
+        } else {
+            TargetScheme::Smtp
+        };
+        let stream = connect_smtp(&connector, &self.cfg.server, self.cfg.port, scheme).await?;
 
         match self.cfg.tls.as_str() {
             "none" => {
@@ -210,8 +229,8 @@ impl Transport {
 
     async fn upgrade_starttls(
         &self,
-        mut stream: TcpStream,
-    ) -> Result<tokio_native_tls::TlsStream<TcpStream>, String> {
+        mut stream: ProxyStream,
+    ) -> Result<tokio_native_tls::TlsStream<ProxyStream>, String> {
         // STARTTLS 响应后紧跟 TLS 帧；协商阶段逐字节读，不能让 BufReader 预取握手字节。
         let greeting = read_reply_exact(&mut stream, "greeting").await?;
         expect_class(&greeting, "greeting", 2)?;
@@ -534,31 +553,26 @@ fn auth_expect_code(reply: &SmtpReply, phase: &str, code: u16) -> Result<(), Smt
     }
 }
 
-/// 多地址解析后逐个连接（单地址 10s）。错误不含服务器原文。
-async fn connect_smtp(server: &str, port: u16) -> Result<TcpStream, String> {
-    let target = format!("{server}:{port}");
-    let addresses: Vec<std::net::SocketAddr> =
-        match tokio::time::timeout(SMTP_RESOLVE_TIMEOUT, tokio::net::lookup_host((server, port)))
-            .await
-        {
-            Ok(Ok(addresses)) => addresses.collect(),
-            Ok(Err(e)) => return Err(format!("连接 SMTP {target} 失败: DNS 解析失败: {e}")),
-            Err(_) => return Err(format!("连接 SMTP {target} 失败: DNS 解析超时")),
-        };
-    if addresses.is_empty() {
-        return Err(format!("连接 SMTP {target} 失败: DNS 无可用地址"));
-    }
-    let mut last_error = String::new();
-    for address in addresses {
-        match tokio::time::timeout(SMTP_CONNECT_TIMEOUT_PER_ADDRESS, TcpStream::connect(address))
-            .await
-        {
-            Ok(Ok(stream)) => return Ok(stream),
-            Ok(Err(e)) => last_error = format!("{address}: {e}"),
-            Err(_) => last_error = format!("{address}: 连接超时"),
-        }
-    }
-    Err(format!("连接 SMTP {target} 失败: {last_error}"))
+/// 经 [`ProxyConnector`] 建立到 SMTP 服务器的直连或代理隧道连接。错误不含服务器或代理密码原文。
+async fn connect_smtp(
+    connector: &ProxyConnector,
+    server: &str,
+    port: u16,
+    scheme: TargetScheme,
+) -> Result<ProxyStream, String> {
+    let target = ProxyTarget::new(server, port, scheme);
+    let opts = ConnectOptions {
+        connect_per_addr: SMTP_CONNECT_TIMEOUT_PER_ADDRESS,
+        connect_total: SMTP_RESOLVE_TIMEOUT + SMTP_CONNECT_TIMEOUT_PER_ADDRESS,
+        proxy_handshake: SMTP_STEP_TIMEOUT,
+        tcp_nodelay: true,
+        tcp_keepalive: false,
+    };
+    connector
+        .connect(&target, opts)
+        .await
+        .map(|(stream, _route)| stream)
+        .map_err(|e| format!("连接 SMTP {server}:{port} 失败: {e}"))
 }
 
 async fn with_step_timeout<F, T>(future: F, timeout_detail: &str) -> Result<T, String>
@@ -641,13 +655,19 @@ where
     }
 }
 
-pub(crate) async fn read_reply_exact(stream: &mut TcpStream, phase: &str) -> Result<SmtpReply, String> {
+pub(crate) async fn read_reply_exact<S>(stream: &mut S, phase: &str) -> Result<SmtpReply, String>
+where
+    S: AsyncRead + Unpin,
+{
     tokio::time::timeout(SMTP_STEP_TIMEOUT, read_reply_exact_untimed(stream, phase))
         .await
         .unwrap_or_else(|_| Err(format!("SMTP {phase} 等待响应超时")))
 }
 
-async fn read_reply_exact_untimed(stream: &mut TcpStream, phase: &str) -> Result<SmtpReply, String> {
+async fn read_reply_exact_untimed<S>(stream: &mut S, phase: &str) -> Result<SmtpReply, String>
+where
+    S: AsyncRead + Unpin,
+{
     let mut lines = Vec::new();
     loop {
         let line = read_line_exact(stream)
@@ -861,8 +881,10 @@ impl Plugin for TransportPlugin {
 
     fn apply(&self, ctx: &Context) -> Result<(), PluginError> {
         let cfg = ctx.get::<TransportConfig>().expect("inject 就绪");
+        let proxy = ctx.get::<crate::proxy_preference::ProxyService>();
         ctx.provide::<Transport>(Arc::new(Transport {
             cfg: cfg.as_ref().clone(),
+            proxy,
         }));
         Ok(())
     }

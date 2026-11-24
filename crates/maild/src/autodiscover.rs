@@ -16,6 +16,9 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::time::Duration;
 
+use maild_proxy::{
+    ConnectOptions, ProxyConnector, ProxyProtocol, ProxyTarget, ResolvedRoute, TargetScheme,
+};
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpStream;
 
@@ -436,6 +439,19 @@ pub async fn discover_provider(
     input: &str,
     allow_network: bool,
 ) -> Result<ProviderDiscovery, String> {
+    discover_provider_with_proxy(input, allow_network, None).await
+}
+
+/// 经可选代理连接器识别服务商。
+///
+/// 代理路径在建连前同样校验目标主机为合法公网非私有域名/非私有 IP 字面量（防 SSRF），
+/// 远程 DNS 代理（`socks5h` / `http` / `https`）无需本地 DNS 解析即可正常工作，且允许
+/// 代理服务器自身位于本机回环或局域网。
+pub async fn discover_provider_with_proxy(
+    input: &str,
+    allow_network: bool,
+    proxy: Option<&ProxyConnector>,
+) -> Result<ProviderDiscovery, String> {
     if let Some(found) = detect_from_address(input) {
         return Ok(found);
     }
@@ -445,7 +461,7 @@ pub async fn discover_provider(
 
     let mut discovery = heuristic(&domain, &username);
     if allow_network {
-        let (incoming, outgoing) = probe_candidates(&domain).await;
+        let (incoming, outgoing) = probe_candidates(&domain, proxy).await;
         if incoming.is_some() || outgoing.is_some() {
             discovery.source = "tcp_probe".to_string();
             discovery.confidence = "high".to_string();
@@ -654,6 +670,7 @@ fn candidates(domain: &str) -> (Vec<DiscoveredEndpoint>, Vec<DiscoveredEndpoint>
 /// 在总预算内并发探测候选端点；返回各方向优先级最高的可达端点。
 async fn probe_candidates(
     domain: &str,
+    proxy: Option<&ProxyConnector>,
 ) -> (Option<DiscoveredEndpoint>, Option<DiscoveredEndpoint>) {
     let (incoming, outgoing) = candidates(domain);
     let incoming_count = incoming.len();
@@ -665,7 +682,19 @@ async fn probe_candidates(
     for (index, candidate) in all.iter().enumerate() {
         let server = candidate.server.clone();
         let port = candidate.port;
-        tasks.spawn(async move { (index, tcp_reachable_public(&server, port).await) });
+        let scheme = match (index < incoming_count, candidate.security) {
+            (true, SecurityMode::Implicit) => TargetScheme::Imaps,
+            (true, SecurityMode::StartTls) => TargetScheme::Imap,
+            (false, SecurityMode::Implicit) => TargetScheme::Smtps,
+            (false, SecurityMode::StartTls) => TargetScheme::Smtp,
+        };
+        let proxy = proxy.cloned();
+        tasks.spawn(async move {
+            (
+                index,
+                tcp_reachable_public(&server, port, scheme, proxy.as_ref()).await,
+            )
+        });
     }
     while let Ok(Some(joined)) = tokio::time::timeout_at(deadline, tasks.join_next()).await {
         if let Ok((index, true)) = joined {
@@ -683,9 +712,48 @@ async fn probe_candidates(
     (pick(0..incoming_count), pick(incoming_count..all.len()))
 }
 
-/// 解析 `server:port`；任一解析地址为非公网即放弃（防 DNS 指向内网），否则只连接
-/// 已校验的第一个地址（不二次解析），握手成功立即断开。
-async fn tcp_reachable_public(server: &str, port: u16) -> bool {
+/// 校验目标为公网主机后再探测 TCP 可达性：
+/// - 若经代理：先校验目标主机不是私有/保留域名或 IP 字面量（允许代理自身位于回环/局域网）。
+///   对本地 DNS 的 `socks5`，仍先在本地解析并校验全部解析 IP 均为公网地址；
+///   对远程 DNS 的 `socks5h` / `http` / `https`，直接交由代理建立隧道。
+/// - 若直连：本地解析 `server:port`，任一解析地址为非公网即放弃，仅连接已校验地址。
+async fn tcp_reachable_public(
+    server: &str,
+    port: u16,
+    scheme: TargetScheme,
+    proxy: Option<&ProxyConnector>,
+) -> bool {
+    if validate_public_domain(server).is_err() {
+        return false;
+    }
+    if let Some(connector) = proxy {
+        let target = ProxyTarget::new(server, port, scheme);
+        if let ResolvedRoute::Proxy(endpoint) = connector.resolve(&target) {
+            if endpoint.protocol == ProxyProtocol::Socks5 {
+                let Ok(resolved) = tokio::net::lookup_host((server, port)).await else {
+                    return false;
+                };
+                let addresses: Vec<SocketAddr> = resolved.collect();
+                if addresses.is_empty()
+                    || addresses.iter().any(|address| !is_public_ip(&address.ip()))
+                {
+                    return false;
+                }
+            }
+            let opts = ConnectOptions {
+                connect_per_addr: NETWORK_BUDGET,
+                connect_total: NETWORK_BUDGET,
+                proxy_handshake: NETWORK_BUDGET,
+                tcp_nodelay: true,
+                tcp_keepalive: false,
+            };
+            if let Ok((stream, _route)) = connector.connect(&target, opts).await {
+                drop(stream);
+                return true;
+            }
+            return false;
+        }
+    }
     let Ok(resolved) = tokio::net::lookup_host((server, port)).await else {
         return false;
     };

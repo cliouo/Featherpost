@@ -35,8 +35,9 @@ use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::accounts::Accounts;
 use crate::events::{
-    AccountState, AccountStateInfo, AgentLifecycleEvents, FrontendIntentQueued,
-    LocalePreferenceChanged, MailFiltered, MailMessage,
+    AccountDetailCode, AccountState, AccountStateInfo, AgentLifecycleEvents, FrontendIntentQueued,
+    LocalePreferenceChanged, MailFiltered, MailMessage, ProxyPreferenceChanged,
+    ProxyPreferenceEvent,
 };
 use crate::frontend::is_builtin_frontend;
 use crate::loader::plugin_config;
@@ -45,6 +46,7 @@ use crate::notify::{NotificationAvailability, Notifier};
 use crate::plugin_identity::{
     IdentitySeam, PluginKind, Principal, RotateError, SharedPrincipal, VerifyError,
 };
+use crate::proxy_preference::{ProxyConfigUpdate, ProxyService, SetError as ProxySetError};
 use crate::reading_policy::{PatchError, PolicyPatch, ReadingPolicy, RemoteContentDecision};
 use crate::rules::{RulesPatch, RulesSettings};
 use crate::store::{AttachmentLookup, Store};
@@ -590,6 +592,10 @@ fn method_policy(method: &str) -> MethodPolicy {
         // 不新增授权词。
         "getLocalePreference" => MethodPolicy::Open,
         "setLocalePreference" => MethodPolicy::Capability("settings_write"),
+        // 全局代理偏好：读配置（默认不含密码）对所有主体开放；修改与连通性测试复用既有 settings_write，
+        // 不新增授权词。
+        "getProxyConfig" => MethodPolicy::Open,
+        "setProxyConfig" | "testProxy" => MethodPolicy::Capability("settings_write"),
         "listAccounts" | "listFolders" | "listMessageSummaries" | "listMessages"
         | "getMessage" | "searchMessages" | "getThread" | "getSearchIndexStatus" => {
             // 换一个检索维度不构成新的权限面：读到的是 `listMessages` 已经能读的同一批
@@ -818,7 +824,7 @@ pub async fn dispatch_with_session(
         "status" => status(ctx).await,
         "syncMessages" => sync_messages(ctx, &request.params).await,
         "fetchServerMessage" => fetch_server_message(ctx, &request.params).await,
-        "discoverEmailProvider" => discover_email_provider(&request.params).await,
+        "discoverEmailProvider" => discover_email_provider(ctx, &request.params).await,
         "listEmailPresets" => list_email_presets(&request.params),
         "listAccounts" => list_accounts(ctx).await,
         "listFolders" => list_folders(ctx, &request.params).await,
@@ -830,6 +836,9 @@ pub async fn dispatch_with_session(
         "setReadingPolicy" => set_reading_policy(ctx, &request.params).await,
         "getLocalePreference" => get_locale_preference(ctx, &request.params).await,
         "setLocalePreference" => set_locale_preference(ctx, &request.params).await,
+        "getProxyConfig" => get_proxy_config(ctx, origin, &request.params).await,
+        "setProxyConfig" => set_proxy_config(ctx, &request.params).await,
+        "testProxy" => test_proxy(ctx, &request.params).await,
         "searchMessages" => search_messages(ctx, &request.params).await,
         "getThread" => get_thread(ctx, &request.params).await,
         "getSearchIndexStatus" => search_index_status(ctx, &request.params).await,
@@ -1146,7 +1155,7 @@ async fn fetch_server_message(ctx: &Context, params: &Value) -> HandlerResult {
 ///
 /// 本地知识库优先、零网络；`allow_network = true` 才做有界的公网可达性探测。`input`
 /// 为空串时返回预设卡片列表（与 `listEmailPresets` 相同）。
-async fn discover_email_provider(params: &Value) -> HandlerResult {
+async fn discover_email_provider(ctx: &Context, params: &Value) -> HandlerResult {
     let object = params
         .as_object()
         .ok_or_else(|| invalid_params("参数必须是对象"))?;
@@ -1168,9 +1177,11 @@ async fn discover_email_provider(params: &Value) -> HandlerResult {
     if input.is_empty() {
         return Ok(json!({ "presets": crate::autodiscover::list_presets() }));
     }
-    let discovery = crate::autodiscover::discover_provider(&input, allow_network)
-        .await
-        .map_err(|detail| invalid_params(&detail))?;
+    let proxy = ctx.get::<ProxyService>().map(|service| service.connector());
+    let discovery =
+        crate::autodiscover::discover_provider_with_proxy(&input, allow_network, proxy.as_ref())
+            .await
+            .map_err(|detail| invalid_params(&detail))?;
     serde_json::to_value(discovery).map_err(|error| internal(format!("序列化失败: {error}")))
 }
 
@@ -2004,6 +2015,166 @@ async fn set_locale_preference(ctx: &Context, params: &Value) -> HandlerResult {
         ctx.emit::<LocalePreferenceChanged>(view.effective.clone());
     }
     locale_view_response(view)
+}
+
+fn proxy_service_unavailable() -> JsonRpcError {
+    JsonRpcError {
+        code: SERVICE_UNAVAILABLE,
+        message: "全局代理服务未装配（daemon 未以配置文件方式启动）".into(),
+        data: None,
+    }
+}
+
+#[derive(Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GetProxyConfigParams {
+    #[serde(default)]
+    include_secret: bool,
+}
+
+/// `getProxyConfig`：返回 `{ config, has_password, effective_system, persisted }`。
+///
+/// 默认剥离密码；仅本机流式 IPC 允许 `include_secret = true`（HTTP 端点一律拒绝）。
+async fn get_proxy_config(ctx: &Context, origin: RequestOrigin, params: &Value) -> HandlerResult {
+    let parsed: GetProxyConfigParams = if params.is_null() {
+        GetProxyConfigParams::default()
+    } else {
+        serde_json::from_value(params.clone())
+            .map_err(|error| invalid_params(&format!("代理配置查询参数无效: {error}")))?
+    };
+    if parsed.include_secret && matches!(origin, RequestOrigin::Http) {
+        return Err(JsonRpcError {
+            code: INVALID_REQUEST,
+            message: "getProxyConfig 的 include_secret 仅支持本地流式 IPC 传输".into(),
+            data: None,
+        });
+    }
+    let service = ctx
+        .get::<ProxyService>()
+        .ok_or_else(proxy_service_unavailable)?;
+    serde_json::to_value(service.view(parsed.include_secret))
+        .map_err(|_| internal("代理配置序列化失败".into()))
+}
+
+/// `setProxyConfig`：更新并原子落盘全局代理配置。
+///
+/// 省略 `password` 保留已存密码；传入新 `password` 替换；`clear_password: true` 清除密码。
+/// 变更成功后递增 generation 并向所有流式连接推送 `preferences/proxy`（不含密码）。
+async fn set_proxy_config(ctx: &Context, params: &Value) -> HandlerResult {
+    let update: ProxyConfigUpdate = serde_json::from_value(params.clone())
+        .map_err(|error| invalid_params(&format!("代理配置参数无效: {error}")))?;
+    let service = ctx
+        .get::<ProxyService>()
+        .ok_or_else(proxy_service_unavailable)?;
+    let (view, event, changed) = service.set(&update).map_err(|error| match error {
+        ProxySetError::Invalid(reason) => invalid_params(&format!("代理配置参数无效: {reason}")),
+        ProxySetError::Unavailable(reason) => JsonRpcError {
+            code: SERVICE_UNAVAILABLE,
+            message: format!("代理配置文件停摆，拒绝覆盖: {reason}"),
+            data: None,
+        },
+        ProxySetError::Io(reason) => internal(format!("代理配置写入失败: {reason}")),
+    })?;
+    if changed {
+        ctx.emit::<ProxyPreferenceChanged>(event);
+    }
+    serde_json::to_value(view).map_err(|_| internal("代理配置序列化失败".into()))
+}
+
+#[derive(Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TestProxyParams {
+    #[serde(default)]
+    config: Option<ProxyConfigUpdate>,
+    #[serde(default)]
+    use_saved_password: bool,
+    #[serde(default)]
+    target: Option<String>,
+    #[serde(default)]
+    scheme: Option<maild_proxy::TargetScheme>,
+}
+
+/// `testProxy`：测试当前活动代理或未保存草稿到目标的连通性，不落盘、不修改运行状态。
+async fn test_proxy(ctx: &Context, params: &Value) -> HandlerResult {
+    let parsed: TestProxyParams = if params.is_null() {
+        TestProxyParams::default()
+    } else {
+        serde_json::from_value(params.clone())
+            .map_err(|error| invalid_params(&format!("代理测试参数无效: {error}")))?
+    };
+    let service = ctx
+        .get::<ProxyService>()
+        .ok_or_else(proxy_service_unavailable)?;
+    let test_config = match &parsed.config {
+        Some(draft) => service
+            .resolve_draft(draft, parsed.use_saved_password)
+            .map_err(|reason| invalid_params(&format!("代理草稿配置无效: {reason}")))?,
+        None => service.snapshot(),
+    };
+    let target = match parsed.target.as_deref() {
+        Some(raw) => maild_proxy::ProxyTarget::parse_host_port(raw, parsed.scheme)
+            .map_err(|reason| invalid_params(&format!("测试目标无效: {reason}")))?,
+        None => {
+            let (host, port, inferred_scheme) = ctx
+                .get::<crate::accounts::AccountManager>()
+                .and_then(|manager| manager.first_enabled_imap_target())
+                .ok_or_else(|| {
+                    invalid_params("未指定测试目标且没有已启用的 IMAP 账户，请提供 target（例如 imap.example.com:993）")
+                })?;
+            maild_proxy::ProxyTarget::new(host, port, parsed.scheme.unwrap_or(inferred_scheme))
+        }
+    };
+
+    let connector = service.connector_for(test_config);
+    let planned_route = connector.resolve(&target).describe();
+    let started = std::time::Instant::now();
+    match connector
+        .connect(&target, maild_proxy::ConnectOptions::test_default())
+        .await
+    {
+        Ok((stream, resolved)) => {
+            drop(stream);
+            let latency_ms = started.elapsed().as_millis() as u64;
+            Ok(json!({
+                "ok": true,
+                "route": resolved.describe(),
+                "stage": "ready",
+                "latency_ms": latency_ms,
+                "detail_code": Value::Null,
+                "detail": "",
+            }))
+        }
+        Err(error) => {
+            let latency_ms = started.elapsed().as_millis() as u64;
+            let (stage, detail_code) = match error.kind {
+                maild_proxy::ProxyErrorKind::ProxyConnectFailed
+                | maild_proxy::ProxyErrorKind::ProxyTimeout => {
+                    ("proxy_connect", AccountDetailCode::ProxyConnectFailed)
+                }
+                maild_proxy::ProxyErrorKind::AuthRequired => {
+                    ("proxy_auth", AccountDetailCode::ProxyAuthFailed)
+                }
+                maild_proxy::ProxyErrorKind::TunnelFailed
+                | maild_proxy::ProxyErrorKind::InvalidConfig => {
+                    ("proxy_tunnel", AccountDetailCode::ProxyTunnelFailed)
+                }
+                maild_proxy::ProxyErrorKind::DirectConnectTimeout => {
+                    ("connect", AccountDetailCode::ConnectTimeout)
+                }
+                maild_proxy::ProxyErrorKind::DirectConnectFailed => {
+                    ("connect", AccountDetailCode::ConnectFailed)
+                }
+            };
+            Ok(json!({
+                "ok": false,
+                "route": planned_route,
+                "stage": stage,
+                "latency_ms": latency_ms,
+                "detail_code": detail_code.as_str(),
+                "detail": crate::probe::sanitize_detail(&error.public_message()),
+            }))
+        }
+    }
 }
 
 /// 进程内读 `effective`（ADR-0048 决策 2）。没有装配偏好服务（纯 store 装配、测试）时回落
@@ -4424,6 +4595,14 @@ fn locale_notification(effective: Vec<String>) -> String {
     notification("preferences/locale", json!({ "effective": effective }))
 }
 
+/// `preferences/proxy` 推给所有流式连接（不含密码的摘要 + `generation`）。
+fn proxy_notification(event: ProxyPreferenceEvent) -> String {
+    notification(
+        "preferences/proxy",
+        serde_json::to_value(event).expect("ProxyPreferenceEvent is serializable"),
+    )
+}
+
 fn frontend_intent_notification(principal: &Principal, target: &str) -> Option<String> {
     match principal {
         Principal::Frontend(id) if id == target => {
@@ -4578,6 +4757,13 @@ async fn serve_with_shutdown<R, W, F>(
             let _ = tx.try_send(locale_notification(effective));
         }))
     };
+    // 全局代理偏好/系统代理变化 → 所有流式连接（非秘密摘要 + generation）。
+    let proxy_listener = {
+        let tx = tx.clone();
+        ListenerGuard::new(ctx.on_emit::<ProxyPreferenceChanged>(move |event| {
+            let _ = tx.try_send(proxy_notification(event));
+        }))
+    };
     // 用户请求整体停机 → 已认证前端在排空窗口内刷盘草稿、撤下 Dock 图标后自行退出。
     let stopping_listener = agent_stopping_listener(&ctx, tx.clone(), session.shared_principal());
 
@@ -4657,6 +4843,7 @@ async fn serve_with_shutdown<R, W, F>(
     drop(intent_listener);
     drop(stopping_listener);
     drop(locale_listener);
+    drop(proxy_listener);
     // ADR-0021：连接关闭 → 按属主注销 provider 端点并让其未决调用立即失败。
     if let Some((plugin_id, endpoint)) = session.take_registered() {
         let removed = ctx
@@ -5455,6 +5642,9 @@ mod tests {
             ("readAttachment", Capability("messages_read")),
             ("getReadingPolicy", Capability("settings_read")),
             ("setReadingPolicy", Capability("settings_write")),
+            ("getProxyConfig", Open),
+            ("setProxyConfig", Capability("settings_write")),
+            ("testProxy", Capability("settings_write")),
             // ADR-0034 决策 7：草稿自成一域，读写两个词。并进 messages_read 会让只申请
             // 「读邮件」的主体看到用户正在写什么；并进 messages_send 会让能发信的主体翻草稿箱。
             ("listDrafts", Capability("drafts_read")),
