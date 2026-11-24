@@ -398,8 +398,8 @@ fn broker_can_reload_a_previously_corrupt_selection_after_explicit_repair() {
         .set_default(crate::frontend::BUILTIN_RECOVERY_FRONTEND)
         .is_err());
     let bundle = tempfile::tempdir().unwrap();
-    source_fixture(bundle.path()).repair(root.path()).unwrap();
-    broker.reload_after_repair(root.path()).unwrap();
+    let repaired = source_fixture(bundle.path()).repair(root.path()).unwrap();
+    broker.reload_after_repair(root.path(), &repaired.id).unwrap();
     assert_eq!(broker.default_frontend(), BUNDLED_FRONTEND_ID);
     broker
         .set_default(crate::frontend::BUILTIN_RECOVERY_FRONTEND)
@@ -884,7 +884,7 @@ fn cross_protocol_upgrade_and_rollback_matrix() {
     // Explicit repair replaces the future-protocol package with the bundled 0.1.0 copy and backs it up.
     let repaired = source_v1.repair(root.path()).unwrap();
     assert_eq!(repaired.version, "0.1.0");
-    broker.reload_after_repair(root.path()).unwrap();
+    broker.reload_after_repair(root.path(), &repaired.id).unwrap();
     assert_eq!(broker.default_frontend(), BUNDLED_FRONTEND_ID);
 }
 
@@ -918,7 +918,7 @@ fn runtime_permission_checks_do_not_exempt_preinstalled_frontend() {
     );
 }
 
-fn studio_source_fixture(root: &Path) -> (BundledFrontend, BundledFrontend) {
+pub(crate) fn studio_source_fixture(root: &Path) -> (BundledFrontend, BundledFrontend) {
     let legacy = source_fixture(root);
     let source = legacy.source.parent().unwrap().join(STUDIO_FRONTEND_ID);
     let old_app = legacy.source.join(UI_BUNDLE_NAME);
@@ -1051,7 +1051,6 @@ fn studio_same_version_resync_preserves_explicit_default_and_legacy_bytes() {
         )
         .unwrap()
     );
-    assert!(studio.repair(root.path()).is_err());
     let manifest = installed.join("frontend.toml");
     let newer = fs::read_to_string(&manifest)
         .unwrap()
@@ -1119,4 +1118,147 @@ fn studio_integrity_and_capacity_fail_before_marker_or_legacy_changes() {
     assert!(studio.preinstall(root.path()).is_err());
     assert!(!root.path().join(STUDIO_FRONTEND_ID).exists());
     assert!(root.path().join(BUNDLED_FRONTEND_ID).is_dir());
+}
+
+#[test]
+fn repair_restores_and_defaults_to_studio_when_bundled() {
+    let bundle = tempfile::tempdir().unwrap();
+    let (legacy, _studio) = studio_source_fixture(bundle.path());
+    let root = tempfile::tempdir().unwrap();
+    // Pre-existing legacy package, damaged Studio package, legacy default selection, and another package.
+    installed(root.path());
+    let old_studio = root.path().join(STUDIO_FRONTEND_ID);
+    fs::create_dir(&old_studio).unwrap();
+    fs::write(old_studio.join("original"), b"damaged studio bytes").unwrap();
+    state(root.path(), &default_state_for(BUNDLED_FRONTEND_ID));
+    fs::create_dir(root.path().join("another.ui")).unwrap();
+    fs::write(root.path().join("another.ui/keep"), b"other").unwrap();
+
+    let result = legacy.repair(root.path()).unwrap();
+    assert_eq!(result.id, STUDIO_FRONTEND_ID);
+    assert_eq!(result.version, "0.3.3");
+    let backup = root.path().join(BACKUPS).join(&result.backup);
+    assert_eq!(
+        fs::read(backup.join(STUDIO_FRONTEND_ID).join("original")).unwrap(),
+        b"damaged studio bytes"
+    );
+    assert_eq!(
+        fs::read(backup.join(STATE)).unwrap(),
+        default_state_for(BUNDLED_FRONTEND_ID)
+    );
+    assert_eq!(
+        fs::read(root.path().join(STATE)).unwrap(),
+        default_state_for(STUDIO_FRONTEND_ID)
+    );
+    assert!(root.path().join(marker_for(STUDIO_FRONTEND_ID)).exists());
+    // Legacy and third-party packages are untouched.
+    assert_eq!(
+        fs::read(root.path().join(BUNDLED_FRONTEND_ID).join("original")).unwrap(),
+        b"old package bytes"
+    );
+    assert_eq!(
+        fs::read(root.path().join("another.ui/keep")).unwrap(),
+        b"other"
+    );
+
+    let broker = crate::frontend::FrontendBroker::with_install_root(
+        &crate::frontend::FrontendConfig::default(),
+        Some(root.path()),
+    )
+    .unwrap();
+    assert_eq!(broker.default_frontend(), STUDIO_FRONTEND_ID);
+    broker
+        .reload_after_repair(root.path(), &result.id)
+        .unwrap();
+    assert_eq!(broker.default_frontend(), STUDIO_FRONTEND_ID);
+
+    // Offline repair uses the same Studio-first resolution.
+    let offline_dir = tempfile::tempdir().unwrap();
+    let paths = offline_paths(offline_dir.path(), "offline.db");
+    let offline_result = offline(&paths, |dir| legacy.repair(dir)).unwrap();
+    assert_eq!(offline_result.id, STUDIO_FRONTEND_ID);
+    assert_eq!(
+        fs::read(paths.frontend_dir.join(STATE)).unwrap(),
+        default_state_for(STUDIO_FRONTEND_ID)
+    );
+}
+
+#[test]
+fn repair_with_studio_rolls_back_at_each_checkpoint_and_fails_closed_on_damaged_studio() {
+    for point in ["backed_up", "package_published", "state_published"] {
+        let bundle = tempfile::tempdir().unwrap();
+        let (legacy, _studio) = studio_source_fixture(bundle.path());
+        let root = tempfile::tempdir().unwrap();
+        let old_studio = root.path().join(STUDIO_FRONTEND_ID);
+        fs::create_dir(&old_studio).unwrap();
+        fs::write(old_studio.join("original"), b"old studio bytes").unwrap();
+        state(root.path(), b"future format original");
+
+        let error = legacy
+            .repair_with(root.path(), |at| {
+                if at == point {
+                    Err("injected failure".into())
+                } else {
+                    Ok(())
+                }
+            })
+            .unwrap_err();
+        assert!(error.contains("已回退"), "{point}: {error}");
+        assert_eq!(
+            fs::read(root.path().join(STUDIO_FRONTEND_ID).join("original")).unwrap(),
+            b"old studio bytes",
+            "{point}"
+        );
+        assert_eq!(
+            fs::read(root.path().join(STATE)).unwrap(),
+            b"future format original",
+            "{point}"
+        );
+    }
+
+    // A damaged Studio payload inside the bundle fails closed without falling back to legacy UI.
+    let bundle = tempfile::tempdir().unwrap();
+    let (legacy, studio) = studio_source_fixture(bundle.path());
+    let root = tempfile::tempdir().unwrap();
+    state(root.path(), &default_state_for(STUDIO_FRONTEND_ID));
+    fs::write(
+        studio.source.join("recovery.sha256"),
+        format!("{}\n", "0".repeat(64)),
+    )
+    .unwrap();
+    assert!(legacy.repair(root.path()).unwrap_err().contains("校验和"));
+    assert_eq!(
+        fs::read(root.path().join(STATE)).unwrap(),
+        default_state_for(STUDIO_FRONTEND_ID)
+    );
+    assert!(!root.path().join(BUNDLED_FRONTEND_ID).exists());
+    assert!(!root.path().join(BACKUPS).exists());
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::symlink;
+        let bundle = tempfile::tempdir().unwrap();
+        let (legacy, studio) = studio_source_fixture(bundle.path());
+        let outside = tempfile::tempdir().unwrap();
+        fs::remove_dir_all(&studio.source).unwrap();
+        symlink(outside.path(), &studio.source).unwrap();
+        let root = tempfile::tempdir().unwrap();
+        assert!(legacy.repair(root.path()).is_err());
+        assert!(!root.path().join(BUNDLED_FRONTEND_ID).exists());
+        assert!(!root.path().join(STATE).exists());
+    }
+}
+
+#[test]
+fn repair_falls_back_to_legacy_when_studio_is_not_bundled() {
+    let bundle = tempfile::tempdir().unwrap();
+    let legacy = source_fixture(bundle.path());
+    let root = tempfile::tempdir().unwrap();
+    state(root.path(), &default_state_for(STUDIO_FRONTEND_ID));
+    let outcome = legacy.repair(root.path()).unwrap();
+    assert_eq!(outcome.id, BUNDLED_FRONTEND_ID);
+    assert_eq!(
+        fs::read(root.path().join(STATE)).unwrap(),
+        default_state_for(BUNDLED_FRONTEND_ID)
+    );
 }

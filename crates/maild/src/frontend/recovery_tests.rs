@@ -170,10 +170,10 @@ fn nonauthoritative_catalog_preserves_credentials_and_repair_restores_writes() {
         fs::remove_dir(root.path().join(format!("extra{n}"))).unwrap();
     }
     let source = tempfile::tempdir().unwrap();
-    crate::recovery::tests::source_fixture(source.path())
+    let repaired = crate::recovery::tests::source_fixture(source.path())
         .repair(root.path())
         .unwrap();
-    broker.reload_after_repair(root.path()).unwrap();
+    broker.reload_after_repair(root.path(), &repaired.id).unwrap();
     assert!(broker.permits_package_mutation());
     broker.reload_from_disk(Some(root.path())).unwrap();
     assert_eq!(

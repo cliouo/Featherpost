@@ -966,14 +966,14 @@ fn inspect_installed_payload(installed: &Path, bundled: &Path, identity: crate::
 impl FrontendBroker {
     /// Explicit recovery alone may replace damaged selection state. Publish both snapshots only
     /// after the repaired catalog and newly written selection have been checked.
-    pub(crate) fn reload_after_repair(&self, root: &Path) -> Result<(), String> {
+    pub(crate) fn reload_after_repair(&self, root: &Path, expected_id: &str) -> Result<(), String> {
         // Any failure after disk commit must not leave the stale in-memory selection permitting
         // removal of the actual persisted default. Successful validation replaces this state.
         self.selection.lock().unwrap().freeze();
         let catalog = FrontendCatalog::load(Some(root))?;
-        let repaired = selection::Selection::load(crate::recovery::BUNDLED_FRONTEND_ID, Some(root));
+        let repaired = selection::Selection::load(expected_id, Some(root));
         if !repaired.has_state
-            || repaired.id != crate::recovery::BUNDLED_FRONTEND_ID
+            || repaired.id != expected_id
             || !repaired.is_healthy()
             || !catalog.records.contains_key(&repaired.id)
         {
@@ -989,11 +989,7 @@ impl FrontendBroker {
     }
 }
 
-/// Check the same non-hidden entry budget as the catalog, counting a new recovery package.
-pub(crate) fn check_recovery_capacity(root: &Path) -> Result<(), String> {
-    check_bundled_capacity(root, crate::recovery::BUNDLED_FRONTEND_ID)
-}
-
+/// Check the same non-hidden entry budget as the catalog, counting a new/replaced bundled package.
 pub(crate) fn check_bundled_capacity(root: &Path, id: &str) -> Result<(), String> {
     let mut resulting = 1; // the replacement/new bundled frontend
     for entry in fs::read_dir(root).map_err(|_| "前端目录不可读取")? {
@@ -1334,7 +1330,8 @@ impl Plugin for FrontendPlugin {
                         Err(_) => eprintln!("[maild/frontend] 内置前端升级未完成，继续使用已安装版本"),
                     }
                 }
-                // Studio is a second managed package, never the native repair target.
+                // Studio is bundled alongside the legacy UI and becomes the native repair target
+                // when present; preinstall and refresh still respect removal and never write defaults.
                 if let (Some(_), Some(root), Some(source)) =
                     (&lease, &root, ctx.get::<crate::recovery::BundledFrontend>())
                 {

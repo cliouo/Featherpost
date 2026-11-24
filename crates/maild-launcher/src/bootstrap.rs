@@ -76,8 +76,11 @@ listen = "@SOCKET@"
 # idle = true
 "#;
 
-const STUDIO_FRONTEND_ID: &str = "dev.featherpost.studio";
+const STUDIO_FRONTEND_ID: &str = maild::recovery::STUDIO_FRONTEND_ID;
 
+/// The `follow_system_timezone = true` line in [`FIRST_RUN_CONFIG_TEMPLATE`].
+/// Templates generated before commit `bd8359c` omitted this line.
+const FOLLOW_SYSTEM_TIMEZONE_LINE: &str = "follow_system_timezone = true\n";
 /// The OTP pattern line in [`FIRST_RUN_CONFIG_TEMPLATE`].
 const OTP_PATTERN_LINE: &str = "pattern = \"\\\\d{6}\"\n";
 /// Pre-l10n templates pinned the OTP title right after the pattern. It is no longer written:
@@ -98,13 +101,25 @@ fn first_run_config_for(frontend: &str) -> String {
         .replace("@PRODUCT@", maild_brand::PRODUCT_NAME)
 }
 
-/// The exact text a pre-l10n launcher generated for `frontend` (with the pinned OTP title).
+/// The exact text a pre-l10n launcher (post-`bd8359c`) generated for `frontend` (with the pinned
+/// OTP title and `follow_system_timezone = true`).
 fn legacy_first_run_config_for(frontend: &str) -> String {
     first_run_config_for(frontend).replacen(
         OTP_PATTERN_LINE,
         &format!("{OTP_PATTERN_LINE}{LEGACY_OTP_TITLE_LINE}"),
         1,
     )
+}
+
+/// The exact text an initial-release launcher (pre-`bd8359c`) generated for `frontend` (with the
+/// pinned OTP title and without `follow_system_timezone = true`).
+fn pre_timezone_legacy_first_run_config_for(frontend: &str) -> String {
+    legacy_first_run_config_for(frontend).replacen(FOLLOW_SYSTEM_TIMEZONE_LINE, "", 1)
+}
+
+fn is_untouched_legacy_default_config(original: &str) -> bool {
+    original == legacy_first_run_config_for(maild_brand::BUNDLED_FRONTEND_ID)
+        || original == pre_timezone_legacy_first_run_config_for(maild_brand::BUNDLED_FRONTEND_ID)
 }
 
 /// Only the complete installed app bundle (`maild_brand::APP_BUNDLE_NAME`) without connection overrides prepares platform config.
@@ -182,10 +197,9 @@ fn upgrade_generated_config(
 
     let original = fs::read_to_string(&paths.config_file)
         .map_err(|error| format!("读取旧版首次启动配置失败: {error}"))?;
-    // Only the exact old template is eligible for implicit-default migration. Never infer that
-    // from a header: a user may have edited any setting, or explicitly selected legacy.
-    let implicit_legacy =
-        original == legacy_first_run_config_for(maild_brand::BUNDLED_FRONTEND_ID);
+    // Only exact untouched old templates are eligible for implicit-default migration. Never infer
+    // that from a header: a user may have edited any setting, or explicitly selected legacy.
+    let implicit_legacy = is_untouched_legacy_default_config(&original);
     let upgraded = if implicit_legacy {
         // Any saved selection (including damaged state or a link) or I/O uncertainty wins.
         match fs::symlink_metadata(paths.frontend_dir.join(".default.json")) {
@@ -444,65 +458,88 @@ mod tests {
 
     #[test]
     fn only_exact_untouched_generated_legacy_config_migrates_once() {
-        let dir = tempfile::tempdir().unwrap();
-        let paths = migration_paths(dir.path());
-        ensure_private_config_dir(&paths.config_dir).unwrap();
-        fs::write(
-            &paths.config_file,
-            legacy_first_run_config_for(maild_brand::BUNDLED_FRONTEND_ID),
-        )
-        .unwrap();
-        #[cfg(unix)]
-        fs::set_permissions(
-            &paths.config_file,
-            std::os::unix::fs::PermissionsExt::from_mode(0o600),
-        )
-        .unwrap();
-        assert!(bootstrap_config(&paths).unwrap());
-        assert_eq!(
-            fs::read_to_string(&paths.config_file).unwrap(),
-            first_run_config()
-        );
-        assert!(!paths.frontend_dir.join(".default.json").exists());
-        assert!(!bootstrap_config(&paths).unwrap());
-    }
-
-    #[test]
-    fn saved_choices_corruption_and_edited_configs_are_never_migrated() {
-        for (edited, state) in [
+        let templates = [
             (
-                false,
-                Some(r#"{"version":1,"default":"dev.featherpost.ui"}"#),
+                "post-bd8359c",
+                legacy_first_run_config_for(maild_brand::BUNDLED_FRONTEND_ID),
             ),
-            (false, Some(r#"{"version":1,"default":"custom.ui"}"#)),
-            (false, Some("damaged selection")),
-            (true, None),
-        ] {
+            (
+                "pre-bd8359c",
+                pre_timezone_legacy_first_run_config_for(maild_brand::BUNDLED_FRONTEND_ID),
+            ),
+        ];
+        assert!(templates[0].1.contains(FOLLOW_SYSTEM_TIMEZONE_LINE));
+        assert!(!templates[1].1.contains(FOLLOW_SYSTEM_TIMEZONE_LINE));
+        for (label, template) in templates {
+            assert!(
+                template.contains(&format!("default = \"{}\"", maild_brand::BUNDLED_FRONTEND_ID)),
+                "{label}"
+            );
             let dir = tempfile::tempdir().unwrap();
             let paths = migration_paths(dir.path());
             ensure_private_config_dir(&paths.config_dir).unwrap();
-            let mut original = legacy_first_run_config_for(maild_brand::BUNDLED_FRONTEND_ID);
-            if edited {
-                original.push_str("\n# User edited this file.\n");
-            }
-            fs::write(&paths.config_file, &original).unwrap();
+            fs::write(&paths.config_file, &template).unwrap();
             #[cfg(unix)]
             fs::set_permissions(
                 &paths.config_file,
                 std::os::unix::fs::PermissionsExt::from_mode(0o600),
             )
             .unwrap();
-            if let Some(state) = state {
-                fs::create_dir_all(&paths.frontend_dir).unwrap();
-                fs::write(paths.frontend_dir.join(".default.json"), state).unwrap();
-            }
-            assert!(!bootstrap_config(&paths).unwrap());
-            assert_eq!(fs::read_to_string(&paths.config_file).unwrap(), original);
-            if let Some(state) = state {
-                assert_eq!(
-                    fs::read_to_string(paths.frontend_dir.join(".default.json")).unwrap(),
-                    state
-                );
+            assert!(bootstrap_config(&paths).unwrap(), "{label} should migrate");
+            assert_eq!(
+                fs::read_to_string(&paths.config_file).unwrap(),
+                first_run_config(),
+                "{label}"
+            );
+            assert!(!paths.frontend_dir.join(".default.json").exists(), "{label}");
+            assert!(
+                !bootstrap_config(&paths).unwrap(),
+                "{label} migration must be idempotent"
+            );
+        }
+    }
+
+    #[test]
+    fn saved_choices_corruption_and_edited_configs_are_never_migrated() {
+        for base in [
+            legacy_first_run_config_for(maild_brand::BUNDLED_FRONTEND_ID),
+            pre_timezone_legacy_first_run_config_for(maild_brand::BUNDLED_FRONTEND_ID),
+        ] {
+            for (edited, state) in [
+                (
+                    false,
+                    Some(r#"{"version":1,"default":"dev.featherpost.ui"}"#),
+                ),
+                (false, Some(r#"{"version":1,"default":"custom.ui"}"#)),
+                (false, Some("damaged selection")),
+                (true, None),
+            ] {
+                let dir = tempfile::tempdir().unwrap();
+                let paths = migration_paths(dir.path());
+                ensure_private_config_dir(&paths.config_dir).unwrap();
+                let mut original = base.clone();
+                if edited {
+                    original.push_str("\n# User edited this file.\n");
+                }
+                fs::write(&paths.config_file, &original).unwrap();
+                #[cfg(unix)]
+                fs::set_permissions(
+                    &paths.config_file,
+                    std::os::unix::fs::PermissionsExt::from_mode(0o600),
+                )
+                .unwrap();
+                if let Some(state) = state {
+                    fs::create_dir_all(&paths.frontend_dir).unwrap();
+                    fs::write(paths.frontend_dir.join(".default.json"), state).unwrap();
+                }
+                assert!(!bootstrap_config(&paths).unwrap());
+                assert_eq!(fs::read_to_string(&paths.config_file).unwrap(), original);
+                if let Some(state) = state {
+                    assert_eq!(
+                        fs::read_to_string(paths.frontend_dir.join(".default.json")).unwrap(),
+                        state
+                    );
+                }
             }
         }
     }

@@ -20,7 +20,7 @@ use crate::agent_lifecycle::AgentLifecycleLock;
 use crate::store::{DatabaseLock, StoreConfig};
 
 pub const BUNDLED_FRONTEND_ID: &str = maild_brand::BUNDLED_FRONTEND_ID;
-pub(crate) const STUDIO_FRONTEND_ID: &str = "dev.featherpost.studio";
+pub const STUDIO_FRONTEND_ID: &str = "dev.featherpost.studio";
 
 #[derive(Clone, Copy)]
 pub(crate) struct BundledIdentity {
@@ -42,13 +42,23 @@ const STATE: &str = ".default.json";
 const BACKUPS: &str = ".repair-backups";
 
 /// One-shot preinstall marker beside the installed packages (`.preinstalled-<frontend id>`).
-fn marker() -> String {
-    format!(".preinstalled-{BUNDLED_FRONTEND_ID}")
+fn marker_for(id: &str) -> String {
+    format!(".preinstalled-{id}")
 }
 
-/// Default-selection state written by repair: the bundled frontend.
+/// Default-selection state written by repair for `id`.
+fn default_state_for(id: &str) -> Vec<u8> {
+    format!("{{\"version\":1,\"default\":\"{id}\"}}\n").into_bytes()
+}
+
+#[cfg(test)]
+fn marker() -> String {
+    marker_for(BUNDLED_FRONTEND_ID)
+}
+
+#[cfg(test)]
 fn default_state() -> Vec<u8> {
-    format!("{{\"version\":1,\"default\":\"{BUNDLED_FRONTEND_ID}\"}}\n").into_bytes()
+    default_state_for(BUNDLED_FRONTEND_ID)
 }
 
 /// Bundle-relative executables (launcher, Agent) that locate the top-level app bundle.
@@ -63,6 +73,7 @@ fn bundle_entry_points() -> [PathBuf; 2] {
 }
 
 /// A source derived from the running app bundle (`maild_brand::APP_BUNDLE_NAME`), never from RPC parameters or configuration.
+#[derive(Clone)]
 pub struct BundledFrontend {
     app: PathBuf,
     source: PathBuf,
@@ -140,17 +151,18 @@ impl BundledFrontend {
     /// Caller owns the frontend-directory lease plus the lifecycle or API mutation lane.
     /// The marker is durable BEFORE publication, so removal is never silently undone on retry.
     pub(crate) fn preinstall(&self, root: &Path) -> Result<PreinstallOutcome, String> {
+        let marker = marker_for(self.identity.id);
         files::check_directory(root)?;
-        if files::exists(&root.join(format!(".preinstalled-{}", self.identity.id)))? {
+        if files::exists(&root.join(&marker))? {
             return Ok(PreinstallOutcome::AlreadyConsidered);
         }
         if files::exists(&root.join(self.identity.id))? {
-            files::mark_once(root, &format!(".preinstalled-{}", self.identity.id))?;
+            files::mark_once(root, &marker)?;
             return Ok(PreinstallOutcome::ExistingPreserved);
         }
         crate::frontend::check_bundled_capacity(root, self.identity.id)?;
         let (_stage, staged, _) = self.stage(root)?;
-        files::mark_once(root, &format!(".preinstalled-{}", self.identity.id))?;
+        files::mark_once(root, &marker)?;
         files::rename_new(&staged, &root.join(self.identity.id))
             .map_err(|_| "首次预装未发布；现有条目保留，请使用显式修复")?;
         files::sync_directory(root)?;
@@ -253,12 +265,22 @@ impl BundledFrontend {
             .ok_or_else(|| "内置前端清单缺少版本".into())
     }
 
-    /// Explicit replacement, including same-version/corrupt packages. Old bytes are retained.
-    /// Caller must serialize this with all package/default mutations.
-    pub(crate) fn repair(&self, root: &Path) -> Result<RepairOutcome, String> {
-        if self.identity.id != BUNDLED_FRONTEND_ID {
-            return Err("显式恢复仅适用于原版前端".into());
+    /// Select the bundled frontend restored by explicit repair: Studio when bundled alongside the
+    /// app, otherwise the legacy bundled UI. Unsafe Studio paths inside the bundle fail closed.
+    fn repair_target(&self) -> Result<Self, String> {
+        if self.identity.id == STUDIO_FRONTEND_ID {
+            return Ok(self.clone());
         }
+        match self.studio()? {
+            Some(studio) => Ok(studio),
+            None => Ok(self.clone()),
+        }
+    }
+
+    /// Explicit replacement, including same-version/corrupt packages. Old bytes are retained.
+    /// Restores Studio and selects it as default when bundled; falls back to the legacy bundled
+    /// frontend otherwise. Caller must serialize this with all package/default mutations.
+    pub(crate) fn repair(&self, root: &Path) -> Result<RepairOutcome, String> {
         self.repair_with(root, |_| Ok(()))
     }
 
@@ -267,10 +289,19 @@ impl BundledFrontend {
         root: &Path,
         checkpoint: impl Fn(&str) -> Result<(), String>,
     ) -> Result<RepairOutcome, String> {
+        self.repair_target()?.repair_self_with(root, checkpoint)
+    }
+
+    fn repair_self_with(
+        &self,
+        root: &Path,
+        checkpoint: impl Fn(&str) -> Result<(), String>,
+    ) -> Result<RepairOutcome, String> {
+        let id = self.identity.id;
         files::check_directory(root)?;
-        crate::frontend::check_recovery_capacity(root)?;
+        crate::frontend::check_bundled_capacity(root, id)?;
         let (_stage, staged, version) = self.stage(root)?;
-        files::mark_once(root, &marker())?;
+        files::mark_once(root, &marker_for(id))?;
         let backups = root.join(BACKUPS);
         files::ensure_directory(&backups)?;
         let backup = tempfile::Builder::new()
@@ -280,9 +311,9 @@ impl BundledFrontend {
             .keep();
         // Backups are deliberately retained even after a failed transaction.
         files::sync_directory(&backups)?;
-        let target = root.join(BUNDLED_FRONTEND_ID);
+        let target = root.join(id);
         let state = root.join(STATE);
-        let old_package = backup.join(BUNDLED_FRONTEND_ID);
+        let old_package = backup.join(id);
         let old_state = backup.join(STATE);
         let mut package_saved = false;
         let mut state_saved = false;
@@ -308,7 +339,7 @@ impl BundledFrontend {
             // No overwrite: an unexpected new choice aborts the transaction.
             let mut temp = tempfile::NamedTempFile::new_in(root).map_err(|_| "默认选择暂存失败")?;
             use std::io::Write as _;
-            temp.write_all(&default_state())
+            temp.write_all(&default_state_for(id))
                 .map_err(|_| "默认选择写入失败")?;
             temp.as_file().sync_all().map_err(|_| "默认选择落盘失败")?;
             temp.persist_noclobber(&state)
@@ -346,7 +377,7 @@ impl BundledFrontend {
             return Err(format!("{error}；已回退，备份保留"));
         }
         Ok(RepairOutcome {
-            id: BUNDLED_FRONTEND_ID.into(),
+            id: id.into(),
             version,
             backup: backup
                 .file_name()
