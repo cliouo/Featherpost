@@ -36,13 +36,16 @@ maild-client = { path = "../maild-client" }
 maild-l10n = { path = "../maild-l10n" }
 # ADR-0044：单实例锁位于平台 runtime 目录。
 maild-paths = { path = "../maild-paths" }
+maild-proxy = { path = "../maild-proxy", features = ["reqwest"] }
 regex = "1"
+reqwest = { version = "0.13.4", default-features = false, features = ["rustls", "socks"] }
 # ADR-0033 决策 8：系统保存面板（与 maild-launcher 同一套 rfd feature 组合）。
 rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "tokio"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri = { version = "2", features = [] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
+url = "2"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

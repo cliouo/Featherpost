@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use tauri::http::{header, Response, StatusCode};
 use tauri::Url;
 
-use crate::html::{Link, LINK_PATH};
+use crate::html::{Link, LINK_PATH, REMOTE_PATH};
 
 /// 文档与 part 走的自定义协议名（`brand.toml` 的 `uri_scheme`；须与 `tauri.conf.json` CSP 的
 /// `frame-src` 一致）。
@@ -53,7 +53,8 @@ pub struct DocumentIdentity {
     pub uid: String,
 }
 
-/// 一份准备好的文档。`html` 已重写；`parts` 是本封可经 part 通道取回的 `part_index → mime`。
+/// 一份准备好的文档。`html` 已重写；`parts` 是本封可经 part 通道取回的 `part_index → mime`；
+/// `remote_urls` 是 `allow_remote = true` 时经 `/remote/<token>/<idx>` 通道抓取的远程图片白名单表。
 #[derive(Clone, Debug)]
 pub struct Document {
     pub identity: DocumentIdentity,
@@ -61,6 +62,7 @@ pub struct Document {
     pub csp: String,
     pub links: Vec<Link>,
     pub parts: HashMap<u32, String>,
+    pub remote_urls: Vec<String>,
     pub allow_remote: bool,
 }
 
@@ -131,6 +133,7 @@ fn valid_token(value: &str) -> bool {
 pub enum Route {
     Doc(String),
     Part(String, u32),
+    Remote(String, usize),
     Unknown,
 }
 
@@ -146,6 +149,12 @@ pub fn route(path: &str) -> Route {
         (Some("part"), Some(token), Some(part), None) if valid_token(token) => {
             match part.parse::<u32>() {
                 Ok(part) => Route::Part(token.to_string(), part),
+                Err(_) => Route::Unknown,
+            }
+        }
+        (Some(seg), Some(token), Some(idx), None) if seg == REMOTE_PATH && valid_token(token) => {
+            match idx.parse::<usize>() {
+                Ok(idx) => Route::Remote(token.to_string(), idx),
                 Err(_) => Route::Unknown,
             }
         }
@@ -240,6 +249,28 @@ pub fn part_response(mime_type: &str, bytes: Vec<u8>) -> Response<Vec<u8>> {
         .expect("静态头部合法")
 }
 
+/// 远程图片响应（`Route::Remote`）：强制 `image/*` MIME、`X-Content-Type-Options: nosniff`、`Cache-Control: no-store`。
+pub fn remote_image_response(content_type: &str, bytes: Vec<u8>) -> Response<Vec<u8>> {
+    let valid_image_mime = !content_type.is_empty()
+        && !content_type.contains(['\r', '\n'])
+        && content_type
+            .split(';')
+            .next()
+            .map(str::trim)
+            .is_some_and(|media| media.to_ascii_lowercase().starts_with("image/"));
+    if !valid_image_mime {
+        return not_found();
+    }
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, content_type)
+        .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff")
+        .header(header::CACHE_CONTROL, "no-store")
+        .header(header::CONTENT_LENGTH, bytes.len())
+        .body(bytes)
+        .expect("静态头部合法")
+}
+
 pub fn not_found() -> Response<Vec<u8>> {
     Response::builder()
         .status(StatusCode::NOT_FOUND)
@@ -264,6 +295,7 @@ mod tests {
             csp: "default-src 'none'".into(),
             links: vec![],
             parts: HashMap::from([(2u32, "image/png".to_string())]),
+            remote_urls: vec!["https://cdn.example.test/a.png".into()],
             allow_remote: false,
         }
     }
@@ -317,6 +349,14 @@ mod tests {
             route(&format!("/part/{token}/7")),
             Route::Part(token.clone(), 7)
         );
+        assert_eq!(
+            route(&format!("/remote/{token}/0")),
+            Route::Remote(token.clone(), 0)
+        );
+        assert_eq!(
+            route(&format!("/remote/{token}/255")),
+            Route::Remote(token.clone(), 255)
+        );
         for bad in [
             &format!("/link/{token}/0"),
             "/doc/short",
@@ -325,6 +365,11 @@ mod tests {
             &format!("/part/{token}"),
             &format!("/part/{token}/x"),
             &format!("/part/{token}/1/2"),
+            &format!("/remote/{token}"),
+            &format!("/remote/{token}/x"),
+            &format!("/remote/{token}/-1"),
+            &format!("/remote/{token}/1/2"),
+            "/remote/short/0",
             "/other",
             "/",
             "",
@@ -355,6 +400,11 @@ mod tests {
             verdict(&format!("{SCHEME}://localhost/part/{token}/2")),
             Verdict::Deny,
             "part 不是导航目标"
+        );
+        assert_eq!(
+            verdict(&format!("{SCHEME}://localhost/remote/{token}/0")),
+            Verdict::Deny,
+            "remote 图片不是导航目标"
         );
         assert_eq!(
             verdict(&format!("{SCHEME}://localhost/link/{token}/3")),
@@ -423,6 +473,20 @@ mod tests {
         assert_eq!(
             odd.headers()[header::CONTENT_TYPE],
             "application/octet-stream"
+        );
+        let remote_ok = remote_image_response("image/webp", vec![4, 5, 6]);
+        assert_eq!(remote_ok.status(), StatusCode::OK);
+        assert_eq!(remote_ok.headers()[header::CONTENT_TYPE], "image/webp");
+        assert_eq!(remote_ok.headers()[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+        assert_eq!(remote_ok.headers()[header::CACHE_CONTROL], "no-store");
+        assert_eq!(remote_ok.headers()[header::CONTENT_LENGTH], "3");
+        assert_eq!(
+            remote_image_response("text/html", b"<script>".to_vec()).status(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            remote_image_response("image/png\r\nX-Bad: 1", vec![]).status(),
+            StatusCode::NOT_FOUND
         );
         assert_eq!(not_found().status(), StatusCode::NOT_FOUND);
     }

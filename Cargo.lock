@@ -3566,6 +3566,7 @@ dependencies = [
  "maild-brand",
  "maild-client",
  "maild-paths",
+ "maild-proxy",
  "reqwest",
  "rusqlite",
  "security-framework",
@@ -3596,6 +3597,7 @@ dependencies = [
  "reqwest",
  "rustls",
  "serde",
+ "serde_json",
  "tokio",
  "tokio-native-tls",
  "tokio-rustls",
@@ -3619,11 +3621,13 @@ dependencies = [
  "maild-client",
  "maild-l10n",
  "maild-paths",
+ "maild-proxy",
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",
  "objc2-core-foundation",
  "rcgen",
  "regex",
+ "reqwest",
  "rfd",
  "rustls",
  "serde",
@@ -3633,6 +3637,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-rustls",
+ "url",
 ]
 
 [[package]]

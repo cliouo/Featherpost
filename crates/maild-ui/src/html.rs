@@ -25,6 +25,12 @@ pub const TRUNCATION_MARKER: &str = "<!-- maild: truncated -->";
 /// 不到导航 delegate；同一协议的 `/doc/` 已证明能到，`/link/` 走同一条路，在 `on_navigation` 里被
 /// 取消并翻译成事件，协议处理器本身对它只回 404。
 pub const LINK_PATH: &str = "link";
+/// 远程图片代理路径（全局代理 Phase 3）：`<协议基址>/remote/<token>/<n>`。
+/// 当 `allow_remote = true` 时所有远程图片引用全部改写为此路径，由 Rust 侧 `RemoteImageFetcher`
+/// 经 `maild-proxy` 抓取，WebView 自身永远不发起直连公网请求。
+pub const REMOTE_PATH: &str = "remote";
+/// 单封文档去重后的远程图片 URL 上限。超出上限的引用会被中和（不保留原始公网 URL）。
+pub const MAX_REMOTE_URLS: usize = 256;
 
 /// 整个元素（含内容）删除的标签。`form` 单独处理：删标签保内容，版式常靠它排布。
 const REMOVED_ELEMENTS: &[&str] = &[
@@ -90,6 +96,8 @@ pub struct Prepared {
     pub html: String,
     pub csp: String,
     pub links: Vec<Link>,
+    /// 当 `allow_remote = true` 时去重登记的远程图片 URL 表（下标与 `/remote/<token>/<idx>` 对应，最多 256 项）。
+    pub remote_urls: Vec<String>,
     /// 原文里的远程引用数（不论放行与否）。
     pub remote_refs: usize,
     pub cid_resolved: usize,
@@ -100,11 +108,12 @@ pub struct Prepared {
     pub allow_remote: bool,
 }
 
-/// 文档级 CSP（决策 2）。放行只多给图片 `https: http:`；样式表、字体、媒体永远没有外部来源。
-pub fn document_csp(csp_source: &str, allow_remote: bool) -> String {
-    let remote = if allow_remote { " https: http:" } else { "" };
+/// 文档级 CSP（决策 2 + 全局代理 Phase 3）：永久锁死 `img-src <csp_source> data:`，
+/// 移除 `https: http:`，确保 WebView 本身永不发起直连公网请求；允许加载远程图片时所有引用都改写为
+/// `<url_prefix>/remote/<token>/<idx>`，由 Rust 侧经 `maild-proxy` 抓取。
+pub fn document_csp(csp_source: &str) -> String {
     format!(
-        "default-src 'none'; img-src {csp_source} data:{remote}; style-src 'unsafe-inline'; \
+        "default-src 'none'; img-src {csp_source} data:; style-src 'unsafe-inline'; \
          font-src 'none'; media-src 'none'; frame-src 'none'; object-src 'none'; \
          form-action 'none'; base-uri 'none'"
     )
@@ -113,6 +122,8 @@ pub fn document_csp(csp_source: &str, allow_remote: bool) -> String {
 #[derive(Default)]
 struct State {
     links: Vec<Link>,
+    remote_urls: Vec<String>,
+    remote_index: HashMap<String, usize>,
     remote_refs: usize,
     cid_resolved: usize,
     cid_missing: usize,
@@ -141,8 +152,62 @@ impl Rewriter<'_> {
         )
     }
 
-    /// 资源引用的分类。`data:` 保留（CSP 只对图片放它）；`cid:` 查表；远程按放行决定；其余删除。
-    fn resource(&self, state: &mut State, raw: &str) -> Resource {
+    fn remote_url(&self, remote_index: usize) -> String {
+        format!(
+            "{}/{REMOTE_PATH}/{}/{}",
+            self.part_url_prefix, self.token, remote_index
+        )
+    }
+
+    /// 登记一条远程图片 URL（规范化协议相对 `//host` → `https://host`、校验 http(s)、去重、上限 256）。
+    fn register_remote(
+        &self,
+        state: &mut State,
+        raw_trimmed: &str,
+        decode_html_entities: bool,
+    ) -> Resource {
+        state.remote_refs += 1;
+        if !self.allow_remote {
+            return Resource::Remove;
+        }
+        let decoded;
+        let candidate = if decode_html_entities {
+            decoded = decode_entities(raw_trimmed);
+            decoded.trim()
+        } else {
+            raw_trimmed
+        };
+        if candidate.is_empty() || candidate.chars().any(char::is_control) {
+            return Resource::Remove;
+        }
+        let with_scheme = if candidate.starts_with("//") {
+            format!("https:{candidate}")
+        } else {
+            candidate.to_string()
+        };
+        let Ok(mut parsed) = url::Url::parse(&with_scheme) else {
+            return Resource::Remove;
+        };
+        if !matches!(parsed.scheme(), "http" | "https") || !parsed.has_host() {
+            return Resource::Remove;
+        }
+        // 片段不影响 HTTP 取回，剥离以便同一资源的不同片段复用去重槽位。
+        parsed.set_fragment(None);
+        let normalized = parsed.to_string();
+        if let Some(&idx) = state.remote_index.get(&normalized) {
+            return Resource::Rewrite(self.remote_url(idx));
+        }
+        if state.remote_urls.len() >= MAX_REMOTE_URLS {
+            return Resource::Remove;
+        }
+        let idx = state.remote_urls.len();
+        state.remote_urls.push(normalized.clone());
+        state.remote_index.insert(normalized, idx);
+        Resource::Rewrite(self.remote_url(idx))
+    }
+
+    /// 资源引用的分类。`data:` 保留（CSP 只对图片放它）；`cid:` 查表；远程在放行时改写为 `/remote/`，否则删除；其余删除。
+    fn resource(&self, state: &mut State, raw: &str, decode_html_entities: bool) -> Resource {
         let value = raw.trim();
         match scheme_of(value) {
             Some("cid") => {
@@ -173,20 +238,10 @@ impl Rewriter<'_> {
             }
             Some("data") => Resource::Keep,
             Some("http") | Some("https") => {
-                state.remote_refs += 1;
-                if self.allow_remote {
-                    Resource::Keep
-                } else {
-                    Resource::Remove
-                }
+                self.register_remote(state, value, decode_html_entities)
             }
             None if value.starts_with("//") => {
-                state.remote_refs += 1;
-                if self.allow_remote {
-                    Resource::Keep
-                } else {
-                    Resource::Remove
-                }
+                self.register_remote(state, value, decode_html_entities)
             }
             _ => {
                 state.dropped_refs += 1;
@@ -195,8 +250,8 @@ impl Rewriter<'_> {
         }
     }
 
-    /// CSS 里的 `url()` 与 `@import`：cid 映射、远程按放行、其余中和成空 data URL（不破坏声明语法）。
-    fn rewrite_css(&self, state: &mut State, css: &str) -> String {
+    /// CSS 里的 `url()` 与 `@import`：cid 映射、远程在放行时改写为 `/remote/`、其余中和成空 data URL（不破坏声明语法）。
+    fn rewrite_css(&self, state: &mut State, css: &str, decode_html_entities: bool) -> String {
         static IMPORT: OnceLock<Regex> = OnceLock::new();
         static URL: OnceLock<Regex> = OnceLock::new();
         let import = IMPORT.get_or_init(|| Regex::new(r"(?is)@import\b[^;{]*;?").expect("regex"));
@@ -214,7 +269,7 @@ impl Rewriter<'_> {
                 .or_else(|| captures.get(3))
                 .map(|m| m.as_str())
                 .unwrap_or("");
-            match self.resource(state, raw) {
+            match self.resource(state, raw, decode_html_entities) {
                 Resource::Keep => captures[0].to_string(),
                 // 单引号：`style` 属性值由 lol_html 用双引号包裹并转义内部双引号，单引号原样输出。
                 Resource::Rewrite(target) => format!("url('{target}')"),
@@ -222,6 +277,32 @@ impl Rewriter<'_> {
             }
         })
         .into_owned()
+    }
+
+    fn rewrite_srcset(&self, state: &mut State, el: &mut Element, name: &str, value: &str) {
+        let candidates = parse_srcset_candidates(value);
+        if candidates.is_empty() {
+            el.remove_attribute(name);
+            return;
+        }
+        let mut rewritten = Vec::with_capacity(candidates.len());
+        for (url_part, descriptor) in candidates {
+            let target = match self.resource(state, url_part, true) {
+                Resource::Keep => url_part.to_string(),
+                Resource::Rewrite(mapped) => mapped,
+                Resource::Remove => continue,
+            };
+            if descriptor.is_empty() {
+                rewritten.push(target);
+            } else {
+                rewritten.push(format!("{target} {descriptor}"));
+            }
+        }
+        if rewritten.is_empty() {
+            el.remove_attribute(name);
+        } else {
+            let _ = el.set_attribute(name, &rewritten.join(", "));
+        }
     }
 
     fn rewrite_link(&self, state: &mut State, el: &mut Element, raw: &str) {
@@ -274,14 +355,11 @@ impl Rewriter<'_> {
                 continue;
             }
             if lower == "srcset" {
-                state.remote_refs += 1;
-                if !self.allow_remote {
-                    el.remove_attribute(&name);
-                }
+                self.rewrite_srcset(state, el, &name, &value);
                 continue;
             }
             if lower == "style" {
-                let rewritten = self.rewrite_css(state, &value);
+                let rewritten = self.rewrite_css(state, &value, true);
                 if rewritten != value {
                     let _ = el.set_attribute(&name, &rewritten);
                 }
@@ -290,7 +368,7 @@ impl Rewriter<'_> {
     }
 
     fn apply_resource(&self, state: &mut State, el: &mut Element, name: &str, value: &str) {
-        match self.resource(state, value) {
+        match self.resource(state, value, true) {
             Resource::Keep => {}
             Resource::Rewrite(target) => {
                 let _ = el.set_attribute(name, &target);
@@ -307,6 +385,59 @@ impl Rewriter<'_> {
             }
         }
     }
+}
+
+/// 按 HTML 标准拆解 `srcset` 候选项（兼容 URL 内部逗号与 `data:` URL）。
+fn parse_srcset_candidates(raw: &str) -> Vec<(&str, &str)> {
+    let bytes = raw.as_bytes();
+    let len = bytes.len();
+    let mut i = 0;
+    let mut out = Vec::new();
+    while i < len {
+        // 跳过前导空白与多余逗号
+        while i < len && (bytes[i].is_ascii_whitespace() || bytes[i] == b',') {
+            i += 1;
+        }
+        if i >= len {
+            break;
+        }
+        // 读取 URL 直到空白
+        let url_start = i;
+        while i < len && !bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        let raw_url = &raw[url_start..i];
+        if raw_url.ends_with(',') {
+            let trimmed_url = raw_url.trim_end_matches(',');
+            if !trimmed_url.is_empty() {
+                out.push((trimmed_url, ""));
+            }
+            continue;
+        }
+        // 读取可选描述符（如 `2x`、`400w`）直到顶层逗号
+        while i < len && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        let desc_start = i;
+        let mut paren_depth: usize = 0;
+        while i < len {
+            match bytes[i] {
+                b'(' => paren_depth += 1,
+                b')' => paren_depth = paren_depth.saturating_sub(1),
+                b',' if paren_depth == 0 => break,
+                _ => {}
+            }
+            i += 1;
+        }
+        let desc = raw[desc_start..i].trim();
+        if i < len && bytes[i] == b',' {
+            i += 1;
+        }
+        if !raw_url.is_empty() {
+            out.push((raw_url, desc));
+        }
+    }
+    out
 }
 
 /// 取 URL 的 scheme（小写）。没有合法 scheme（相对地址、实体编码把冒号藏起来了……）返回 `None`。
@@ -415,7 +546,7 @@ fn host_of(url: &str) -> String {
 
 /// 重写一封邮件的 HTML。失败（极端畸形输入让重写器报错）时返回错误，由调用方回退纯文本。
 pub fn prepare(input: PrepareInput<'_>) -> Result<Prepared, String> {
-    let csp = document_csp(input.csp_source, input.allow_remote);
+    let csp = document_csp(input.csp_source);
     let inject = format!(
         "<meta charset=\"utf-8\"><meta http-equiv=\"Content-Security-Policy\" content=\"{csp}\">\
          <meta name=\"referrer\" content=\"no-referrer\">"
@@ -460,7 +591,7 @@ pub fn prepare(input: PrepareInput<'_>) -> Result<Prepared, String> {
                     if chunk.last_in_text_node() {
                         let css = std::mem::take(&mut *style_buffer_for_text.borrow_mut());
                         let rewritten =
-                            rewriter_ref.rewrite_css(&mut style_state.borrow_mut(), &css);
+                            rewriter_ref.rewrite_css(&mut style_state.borrow_mut(), &css, false);
                         chunk.replace(&rewritten, ContentType::Html);
                     } else {
                         chunk.remove();
@@ -485,6 +616,7 @@ pub fn prepare(input: PrepareInput<'_>) -> Result<Prepared, String> {
         html,
         csp,
         links: state.links,
+        remote_urls: state.remote_urls,
         remote_refs: state.remote_refs,
         cid_resolved: state.cid_resolved,
         cid_missing: state.cid_missing,
@@ -498,6 +630,8 @@ impl State {
     fn clone_out(&self) -> State {
         State {
             links: self.links.clone(),
+            remote_urls: self.remote_urls.clone(),
+            remote_index: self.remote_index.clone(),
             remote_refs: self.remote_refs,
             cid_resolved: self.cid_resolved,
             cid_missing: self.cid_missing,
@@ -760,16 +894,42 @@ mod tests {
         assert!(!blocked.allow_remote);
 
         let allowed = run(&hostile(), true);
-        assert!(allowed.html.contains("<img src=\"https://evil.example/pixel.gif\" srcset=\"https://evil.example/2x.gif 2x\">"));
+        let prefix = prefix();
+        // Phase 3：allow_remote = true 时所有远程图片引用均改写为 `/remote/<token>/<idx>`，
+        // WebView 的 CSP 永久锁死为 `img-src <csp_source> data:`，永不直连公网。
+        assert_eq!(
+            allowed.remote_urls,
+            vec![
+                "https://evil.example/t.gif",
+                "https://evil.example/bg.png",
+                "https://evil.example/p.png",
+                "https://evil.example/pixel.gif",
+                "https://evil.example/2x.gif",
+                "https://evil.example/s.svg",
+            ]
+        );
         assert!(allowed
             .html
-            .contains(".y{background:url(https://evil.example/t.gif)}"));
+            .contains(&format!(".y{{background:url('{prefix}/remote/{TOKEN}/0')}}")));
         assert!(allowed
             .html
-            .contains("background=\"https://evil.example/bg.png\""));
+            .contains(&format!("background=\"{prefix}/remote/{TOKEN}/1\"")));
+        assert!(allowed
+            .html
+            .contains(&format!("background-image:url('{prefix}/remote/{TOKEN}/2')")));
+        assert!(allowed.html.contains(&format!(
+            "<img src=\"{prefix}/remote/{TOKEN}/3\" srcset=\"{prefix}/remote/{TOKEN}/4 2x\">"
+        )));
+        assert!(allowed
+            .html
+            .contains(&format!("xlink:href=\"{prefix}/remote/{TOKEN}/5\"")));
+        assert!(!allowed.html.contains("https://evil.example"));
         assert!(allowed
             .csp
-            .contains(&format!("img-src {} data: https: http:;", csp_source())));
+            .contains(&format!("img-src {} data:;", csp_source())));
+        assert!(!allowed.csp.contains("https:"));
+        assert!(!allowed.csp.contains("http:"));
+        assert!(blocked.remote_urls.is_empty());
         // 放行也不放样式表、字体、媒体、脚本。
         assert!(!allowed.html.to_ascii_lowercase().contains("<link"));
         assert!(!allowed.html.contains("@import"));
@@ -778,6 +938,62 @@ mod tests {
         assert!(allowed.csp.contains("font-src 'none'"));
         assert!(allowed.csp.contains("style-src 'unsafe-inline';"));
         assert_eq!(allowed.remote_refs, blocked.remote_refs);
+    }
+
+    #[test]
+    fn remote_urls_normalize_protocol_relative_decode_entities_dedup_and_cap_at_256() {
+        let prefix = prefix();
+        let html = concat!(
+            r#"<img src="//cdn.example.test/a.png?x=1&amp;y=2">"#,
+            r#"<img src="https://CDN.EXAMPLE.TEST/a.png?x=1&amp;y=2">"#,
+            r#"<img srcset="https://cdn.example.test/w_400,q_auto/p.jpg 400w, //cdn.example.test/b.png 2x">"#,
+            r#"<svg><image href="//cdn.example.test/b.png"/></svg>"#,
+        );
+        let out = run(html, true);
+        assert_eq!(
+            out.remote_urls,
+            vec![
+                "https://cdn.example.test/a.png?x=1&y=2",
+                "https://cdn.example.test/w_400,q_auto/p.jpg",
+                "https://cdn.example.test/b.png",
+            ]
+        );
+        assert_eq!(out.remote_refs, 5);
+        assert_eq!(
+            out.html
+                .matches(&format!("{prefix}/remote/{TOKEN}/0"))
+                .count(),
+            2,
+            "protocol-relative and https:// uppercase host dedup to index 0"
+        );
+        assert!(out.html.contains(&format!(
+            "srcset=\"{prefix}/remote/{TOKEN}/1 400w, {prefix}/remote/{TOKEN}/2 2x\""
+        )));
+        assert!(out
+            .html
+            .contains(&format!("href=\"{prefix}/remote/{TOKEN}/2\"")));
+        assert!(!out.html.contains("cdn.example.test"));
+
+        // Over 256 unique URLs: cap at MAX_REMOTE_URLS and neutralize the overflow.
+        let mut many = String::new();
+        for i in 0..(MAX_REMOTE_URLS + 10) {
+            many.push_str(&format!(
+                "<img src=\"https://cdn.example.test/img-{i}.png\">"
+            ));
+        }
+        let capped = run(&many, true);
+        assert_eq!(capped.remote_urls.len(), MAX_REMOTE_URLS);
+        assert_eq!(capped.remote_refs, MAX_REMOTE_URLS + 10);
+        assert!(
+            !capped.html.contains(" src=\"https://"),
+            "overflow URLs must never remain as raw https:// in HTML"
+        );
+        assert!(capped
+            .html
+            .contains(&format!("{prefix}/remote/{TOKEN}/255")));
+        assert!(!capped
+            .html
+            .contains(&format!("{prefix}/remote/{TOKEN}/256")));
     }
 
     #[test]

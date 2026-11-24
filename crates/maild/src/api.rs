@@ -1177,7 +1177,9 @@ async fn discover_email_provider(ctx: &Context, params: &Value) -> HandlerResult
     if input.is_empty() {
         return Ok(json!({ "presets": crate::autodiscover::list_presets() }));
     }
-    let proxy = ctx.get::<ProxyService>().map(|service| service.connector());
+    let proxy = ctx.get::<ProxyService>().map(|service| {
+        service.connector_with_context(maild_proxy::ProxyContextDefaults::mail())
+    });
     let discovery =
         crate::autodiscover::discover_provider_with_proxy(&input, allow_network, proxy.as_ref())
             .await

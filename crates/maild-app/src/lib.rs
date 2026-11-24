@@ -479,6 +479,12 @@ impl ConnectionHandle {
         self.request_typed("getProxyConfig", json!({})).await
     }
 
+    /// 读取全局代理配置并包含密码（仅允许本地流式 IPC；绝不可转发给 WebView）。
+    pub async fn proxy_config_with_secret(&self) -> Result<ProxyConfigResult, ClientError> {
+        self.request_typed("getProxyConfig", json!({ "include_secret": true }))
+            .await
+    }
+
     pub async fn set_proxy_config(
         &self,
         update: &ProxyConfigUpdate,

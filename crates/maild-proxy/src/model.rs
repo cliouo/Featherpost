@@ -587,6 +587,19 @@ pub fn validate_custom_config(cfg: &CustomProxyConfig) -> Result<CustomProxyConf
     })
 }
 
+/// Validate and normalize a standalone [`ProxyEndpoint`].
+pub fn validate_endpoint(endpoint: &ProxyEndpoint) -> Result<ProxyEndpoint, String> {
+    let validated = validate_custom_config(&CustomProxyConfig {
+        protocol: endpoint.protocol,
+        host: endpoint.host.clone(),
+        port: endpoint.port,
+        username: endpoint.username.clone(),
+        password: endpoint.password.clone(),
+        bypass: Vec::new(),
+    })?;
+    Ok(validated.to_endpoint())
+}
+
 /// Validate and normalize a full [`ProxyConfig`].
 pub fn validate_proxy_config(cfg: &ProxyConfig) -> Result<ProxyConfig, String> {
     let custom = cfg

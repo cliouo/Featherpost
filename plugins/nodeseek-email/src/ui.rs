@@ -11,11 +11,16 @@ use maild_client::{
     discover_endpoint, AccountDraftInput, ClientError, DiscoveryOptions, ErrorKind, IncomingInput,
     OutgoingInput, RpcClient,
 };
+use maild_proxy::{CustomProxyConfig, ProxyOverride, ProxyProtocol};
 use tokio::runtime::{Builder, Runtime};
 use tokio::sync::mpsc as async_mpsc;
 
 use crate::api::{ApiClient, Mailbox, Quota};
 use crate::error::{AppError, ErrorCode};
+use crate::proxy::{
+    describe_global_proxy, fetch_global_proxy_from_daemon, load_effective_proxy_snapshot,
+    PluginProxySettings, PluginProxyStore,
+};
 use crate::secret::{PlatformSecretStore, SecretBuffer, SecretStore as _};
 use crate::state::{canonicalize_address, StateStore};
 use crate::PLUGIN_ID;
@@ -32,6 +37,26 @@ const WARNING: Color32 = Color32::from_rgb(157, 96, 35);
 const DANGER: Color32 = Color32::from_rgb(174, 65, 53);
 const MAX_NOTICE_CHARS: usize = 240;
 const DOMAINS: [&str; 2] = ["seek.li", "nodeseek.org"];
+const PROXY_PROTOCOLS: [ProxyProtocol; 4] = [
+    ProxyProtocol::Socks5h,
+    ProxyProtocol::Socks5,
+    ProxyProtocol::Http,
+    ProxyProtocol::Https,
+];
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum ProxyModeChoice {
+    #[default]
+    Inherit,
+    Direct,
+    Custom,
+}
+
+#[derive(Clone)]
+struct ProxyUiSnapshot {
+    settings: PluginProxySettings,
+    global_summary: String,
+}
 
 #[derive(Clone)]
 struct Snapshot {
@@ -49,6 +74,10 @@ enum Job {
     },
     ClearKey {
         generation: u64,
+    },
+    SaveProxy {
+        generation: u64,
+        settings: PluginProxySettings,
     },
     Refresh {
         generation: u64,
@@ -71,6 +100,7 @@ enum Outcome {
     Key {
         generation: u64,
         result: Result<bool, AppError>,
+        proxy: Option<ProxyUiSnapshot>,
     },
     Saved {
         generation: u64,
@@ -79,6 +109,10 @@ enum Outcome {
     Cleared {
         generation: u64,
         result: Result<(), AppError>,
+    },
+    ProxySaved {
+        generation: u64,
+        result: Result<ProxyUiSnapshot, AppError>,
     },
     Refreshed {
         generation: u64,
@@ -113,6 +147,17 @@ struct UiState {
     busy: bool,
     key_configured: Option<bool>,
     api_key: String,
+    proxy_mode: ProxyModeChoice,
+    proxy_protocol: usize,
+    proxy_host: String,
+    proxy_port: String,
+    proxy_username: String,
+    proxy_password: String,
+    proxy_has_saved_password: bool,
+    proxy_clear_password: bool,
+    proxy_bypass: String,
+    proxy_saved_custom: Option<CustomProxyConfig>,
+    global_proxy_summary: Option<String>,
     local_part: String,
     domain: usize,
     checked: Option<(String, bool)>,
@@ -130,6 +175,74 @@ impl UiState {
         self.generation
     }
 
+    fn apply_proxy_snapshot(&mut self, snapshot: ProxyUiSnapshot) {
+        self.global_proxy_summary = Some(snapshot.global_summary);
+        self.proxy_has_saved_password = snapshot.settings.has_password();
+        self.proxy_clear_password = false;
+        self.proxy_password.clear();
+        self.proxy_saved_custom = snapshot.settings.effective_custom().cloned();
+        self.proxy_mode = match &snapshot.settings.proxy_override {
+            ProxyOverride::Inherit => ProxyModeChoice::Inherit,
+            ProxyOverride::Direct => ProxyModeChoice::Direct,
+            ProxyOverride::Custom(_) => ProxyModeChoice::Custom,
+        };
+        if let Some(custom) = snapshot.settings.effective_custom() {
+            self.proxy_protocol = PROXY_PROTOCOLS
+                .iter()
+                .position(|p| *p == custom.protocol)
+                .unwrap_or(0);
+            self.proxy_host = custom.host.clone();
+            self.proxy_port = custom.port.to_string();
+            self.proxy_username = custom.username.clone().unwrap_or_default();
+            self.proxy_bypass = custom.bypass.join(", ");
+        }
+    }
+
+    fn build_proxy_settings(&self) -> Result<PluginProxySettings, AppError> {
+        let preserved = self.proxy_saved_custom.clone();
+        match self.proxy_mode {
+            ProxyModeChoice::Inherit => Ok(PluginProxySettings {
+                proxy_override: ProxyOverride::Inherit,
+                saved_custom: preserved,
+            }),
+            ProxyModeChoice::Direct => Ok(PluginProxySettings {
+                proxy_override: ProxyOverride::Direct,
+                saved_custom: preserved,
+            }),
+            ProxyModeChoice::Custom => {
+                let port: u16 = self.proxy_port.trim().parse().map_err(|_| {
+                    AppError::new(ErrorCode::InvalidInput, "代理端口必须是 1..=65535 的整数")
+                })?;
+                let password = if self.proxy_clear_password {
+                    None
+                } else if !self.proxy_password.is_empty() {
+                    Some(self.proxy_password.clone())
+                } else {
+                    preserved.as_ref().and_then(|c| c.password.clone())
+                };
+                let bypass: Vec<String> = self
+                    .proxy_bypass
+                    .split([',', ';', '\n'])
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(ToOwned::to_owned)
+                    .collect();
+                let custom = CustomProxyConfig {
+                    protocol: PROXY_PROTOCOLS[self.proxy_protocol],
+                    host: self.proxy_host.trim().to_string(),
+                    port,
+                    username: {
+                        let u = self.proxy_username.trim();
+                        (!u.is_empty()).then(|| u.to_string())
+                    },
+                    password,
+                    bypass,
+                };
+                PluginProxySettings::from_override(ProxyOverride::Custom(custom)).validate()
+            }
+        }
+    }
+
     fn address(&self) -> Result<String, AppError> {
         canonicalize_address(&format!(
             "{}@{}",
@@ -143,6 +256,7 @@ impl UiState {
             Outcome::Key { generation, .. }
             | Outcome::Saved { generation, .. }
             | Outcome::Cleared { generation, .. }
+            | Outcome::ProxySaved { generation, .. }
             | Outcome::Refreshed { generation, .. }
             | Outcome::Checked { generation, .. }
             | Outcome::Created { generation, .. }
@@ -153,17 +267,22 @@ impl UiState {
         }
         self.busy = false;
         match outcome {
-            Outcome::Key { result, .. } => match result {
-                Ok(configured) => {
-                    self.key_configured = Some(configured);
-                    if configured {
-                        return Some(Job::Refresh {
-                            generation: self.next_generation(),
-                        });
-                    }
+            Outcome::Key { result, proxy, .. } => {
+                if let Some(snapshot) = proxy {
+                    self.apply_proxy_snapshot(snapshot);
                 }
-                Err(error) => self.fail(error),
-            },
+                match result {
+                    Ok(configured) => {
+                        self.key_configured = Some(configured);
+                        if configured {
+                            return Some(Job::Refresh {
+                                generation: self.next_generation(),
+                            });
+                        }
+                    }
+                    Err(error) => self.fail(error),
+                }
+            }
             Outcome::Saved { result, .. } => match result {
                 Ok(()) => {
                     self.key_configured = Some(true);
@@ -181,6 +300,13 @@ impl UiState {
                     self.quota = None;
                     self.checked = None;
                     self.notice = Some(("本地 API Key 已清除，远端邮箱未变更".into(), ACCENT));
+                }
+                Err(error) => self.fail(error),
+            },
+            Outcome::ProxySaved { result, .. } => match result {
+                Ok(snapshot) => {
+                    self.apply_proxy_snapshot(snapshot);
+                    self.notice = Some(("NodeSeek Email 代理设置已保存并生效".into(), ACCENT));
                 }
                 Err(error) => self.fail(error),
             },
@@ -373,6 +499,8 @@ impl NodeSeekEmailUi {
         }
 
         self.render_credentials(ui);
+        ui.add_space(16.0);
+        self.render_proxy_settings(ui);
         if self.state.key_configured != Some(true) {
             return;
         }
@@ -383,6 +511,111 @@ impl NodeSeekEmailUi {
         ui.add_space(16.0);
         self.render_mailboxes(ui);
         ui.add_space(20.0);
+    }
+
+    fn save_proxy(&mut self) {
+        match self.state.build_proxy_settings() {
+            Ok(settings) => {
+                self.state.proxy_password.clear();
+                let generation = self.state.next_generation();
+                self.submit(Job::SaveProxy {
+                    generation,
+                    settings,
+                });
+            }
+            Err(error) => self.state.fail(error),
+        }
+    }
+
+    fn render_proxy_settings(&mut self, ui: &mut egui::Ui) {
+        section_header(
+            ui,
+            "网络代理",
+            &format!(
+                "默认跟随 {} 全局代理；也可仅为 NodeSeek Email 单独覆盖",
+                maild_brand::PRODUCT_NAME
+            ),
+        );
+        ui.horizontal_wrapped(|ui| {
+            ui.selectable_value(
+                &mut self.state.proxy_mode,
+                ProxyModeChoice::Inherit,
+                "跟随全局代理",
+            );
+            ui.selectable_value(
+                &mut self.state.proxy_mode,
+                ProxyModeChoice::Direct,
+                "直连（不使用代理）",
+            );
+            ui.selectable_value(
+                &mut self.state.proxy_mode,
+                ProxyModeChoice::Custom,
+                "独立自定义代理",
+            );
+        });
+        if self.state.proxy_mode == ProxyModeChoice::Inherit {
+            let summary = self
+                .state
+                .global_proxy_summary
+                .as_deref()
+                .unwrap_or("将自动继承全局代理配置与实时变更");
+            ui.label(RichText::new(summary).size(12.5).color(MUTED));
+        }
+        if self.state.proxy_mode == ProxyModeChoice::Custom {
+            ui.add_space(6.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new("协议").color(MUTED));
+                for (index, protocol) in PROXY_PROTOCOLS.iter().enumerate() {
+                    ui.selectable_value(&mut self.state.proxy_protocol, index, protocol.as_str());
+                }
+            });
+            ui.horizontal_wrapped(|ui| {
+                let host_width = (ui.available_width() - 120.0).clamp(160.0, 380.0);
+                ui.add_sized(
+                    [host_width, 36.0],
+                    TextEdit::singleline(&mut self.state.proxy_host)
+                        .hint_text("代理主机（如 127.0.0.1）"),
+                );
+                ui.add_sized(
+                    [100.0, 36.0],
+                    TextEdit::singleline(&mut self.state.proxy_port).hint_text("端口（7890）"),
+                );
+            });
+            ui.horizontal_wrapped(|ui| {
+                let field_width = ((ui.available_width() - 16.0) / 2.0).clamp(140.0, 240.0);
+                ui.add_sized(
+                    [field_width, 36.0],
+                    TextEdit::singleline(&mut self.state.proxy_username)
+                        .hint_text("用户名（可选）"),
+                );
+                let pw_hint = if self.state.proxy_has_saved_password {
+                    "密码（留空保留已存密码）"
+                } else {
+                    "密码（可选）"
+                };
+                ui.add_sized(
+                    [field_width, 36.0],
+                    TextEdit::singleline(&mut self.state.proxy_password)
+                        .password(true)
+                        .hint_text(pw_hint),
+                );
+            });
+            if self.state.proxy_has_saved_password {
+                ui.checkbox(&mut self.state.proxy_clear_password, "清除已保存的代理密码");
+            }
+            ui.add_sized(
+                [ui.available_width().min(500.0), 36.0],
+                TextEdit::singleline(&mut self.state.proxy_bypass)
+                    .hint_text("旁路规则（可选，逗号分隔，如 *.internal, 10.0.0.0/8）"),
+            );
+        }
+        ui.add_space(6.0);
+        if ui
+            .add_enabled(!self.state.busy, egui::Button::new("保存代理设置"))
+            .clicked()
+        {
+            self.save_proxy();
+        }
     }
 
     fn render_credentials(&mut self, ui: &mut egui::Ui) {
@@ -636,10 +869,15 @@ impl Drop for NodeSeekEmailUi {
 
 async fn run_job(job: Job) -> Outcome {
     match job {
-        Job::InspectKey { generation } => Outcome::Key {
-            generation,
-            result: PlatformSecretStore.exists(),
-        },
+        Job::InspectKey { generation } => {
+            let result = PlatformSecretStore.exists();
+            let proxy = load_proxy_ui_snapshot().await.ok();
+            Outcome::Key {
+                generation,
+                result,
+                proxy,
+            }
+        }
         Job::SaveKey { generation, secret } => Outcome::Saved {
             generation,
             result: PlatformSecretStore.save(secret),
@@ -648,6 +886,22 @@ async fn run_job(job: Job) -> Outcome {
             generation,
             result: PlatformSecretStore.delete(),
         },
+        Job::SaveProxy {
+            generation,
+            settings,
+        } => {
+            let result = async {
+                let store = PluginProxyStore::discover()?;
+                let saved = store.save(&settings)?;
+                let (global_cfg, global_sys, _) = fetch_global_proxy_from_daemon().await;
+                Ok(ProxyUiSnapshot {
+                    settings: saved,
+                    global_summary: describe_global_proxy(&global_cfg, &global_sys),
+                })
+            }
+            .await;
+            Outcome::ProxySaved { generation, result }
+        }
         Job::Refresh { generation } => Outcome::Refreshed {
             generation,
             result: refresh_snapshot().await,
@@ -656,7 +910,7 @@ async fn run_job(job: Job) -> Outcome {
             generation,
             address,
         } => {
-            let result = match api_client() {
+            let result = match api_client().await {
                 Ok(api) => api.check_mailbox(&address).await,
                 Err(error) => Err(error),
             };
@@ -670,7 +924,7 @@ async fn run_job(job: Job) -> Outcome {
             generation,
             address,
         } => {
-            let result = match api_client() {
+            let result = match api_client().await {
                 Ok(api) => api
                     .create_mailbox(&address)
                     .await
@@ -697,12 +951,22 @@ async fn run_job(job: Job) -> Outcome {
     }
 }
 
-fn api_client() -> Result<ApiClient, AppError> {
-    ApiClient::production(PlatformSecretStore.load()?)
+async fn load_proxy_ui_snapshot() -> Result<ProxyUiSnapshot, AppError> {
+    let settings = PluginProxyStore::discover()?.load()?;
+    let (global_cfg, global_sys, _) = fetch_global_proxy_from_daemon().await;
+    Ok(ProxyUiSnapshot {
+        settings,
+        global_summary: describe_global_proxy(&global_cfg, &global_sys),
+    })
+}
+
+async fn api_client() -> Result<ApiClient, AppError> {
+    let proxy = load_effective_proxy_snapshot().await;
+    ApiClient::production_with_proxy(PlatformSecretStore.load()?, proxy)
 }
 
 async fn refresh_snapshot() -> Result<Snapshot, AppError> {
-    let api = api_client()?;
+    let api = api_client().await?;
     let (mailboxes, quota) = tokio::join!(api.list_mailboxes(), api.quota());
     Ok(Snapshot {
         mailboxes: mailboxes?,
@@ -1049,9 +1313,32 @@ mod tests {
             kind: ErrorKind::Rpc,
             message: "provider 未注册".into(),
             rpc_code: Some(-32001),
+            rpc_data: None,
         });
         assert_eq!(error.code(), ErrorCode::Upstream);
         assert!(error.to_string().contains("provider 未注册"));
         assert!(error.to_string().contains("-32001"));
+    }
+
+    #[test]
+    fn proxy_ui_state_builds_inherit_direct_and_custom_overrides() {
+        let mut state = UiState::default();
+        assert_eq!(
+            state.build_proxy_settings().unwrap().proxy_override,
+            ProxyOverride::Inherit
+        );
+        state.proxy_mode = ProxyModeChoice::Direct;
+        assert_eq!(
+            state.build_proxy_settings().unwrap().proxy_override,
+            ProxyOverride::Direct
+        );
+        state.proxy_mode = ProxyModeChoice::Custom;
+        state.proxy_host = "127.0.0.1".into();
+        state.proxy_port = "7890".into();
+        state.proxy_username = "alice".into();
+        state.proxy_password = "pw".into();
+        let saved = state.build_proxy_settings().unwrap();
+        assert!(matches!(saved.proxy_override, ProxyOverride::Custom(_)));
+        assert!(saved.has_password());
     }
 }

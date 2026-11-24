@@ -12,13 +12,15 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 #[cfg(any(test, debug_assertions))]
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use cordis::{Context, Service};
+use cordis::{Context, CordisError, Service};
 use maild_proxy::{
-    detect_system_proxy, validate_custom_config, validate_proxy_config, CustomProxyConfig,
-    ProxyConfig, ProxyConnector, ProxyMode, ProxyProtocol, SystemProxySnapshot,
+    detect_system_proxy, validate_custom_config, validate_proxy_config, ChainedResolver,
+    CustomProxyConfig, ProxyConfig, ProxyConnector, ProxyContext, ProxyContextDefaults,
+    ProxyMode, ProxyOverride, ProxyProtocol, ProxyResolver, ResolvedRoute, SystemProxySnapshot,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
@@ -110,6 +112,12 @@ enum State {
 
 type SystemProxyReader = Arc<dyn Fn() -> SystemProxySnapshot + Send + Sync>;
 
+struct RegisteredResolver {
+    id: u64,
+    priority: i32,
+    resolver: Arc<dyn ProxyResolver>,
+}
+
 /// 全局代理偏好与连接器工厂服务。
 pub struct ProxyService {
     path: PathBuf,
@@ -117,6 +125,8 @@ pub struct ProxyService {
     generation: watch::Sender<u64>,
     system_reader: SystemProxyReader,
     last_system: Mutex<SystemProxySnapshot>,
+    resolvers: Mutex<Vec<RegisteredResolver>>,
+    next_resolver_id: AtomicU64,
     #[cfg(target_os = "macos")]
     watch_os_changes: bool,
     #[cfg(target_os = "macos")]
@@ -168,6 +178,8 @@ impl ProxyService {
             generation,
             system_reader,
             last_system: Mutex::new(initial_system),
+            resolvers: Mutex::new(Vec::new()),
+            next_resolver_id: AtomicU64::new(1),
             #[cfg(target_os = "macos")]
             watch_os_changes,
             #[cfg(target_os = "macos")]
@@ -388,9 +400,118 @@ impl ProxyService {
         resolve_update(&current, update, use_saved_password)
     }
 
-    /// 构造使用当前活动配置与系统快照的 [`ProxyConnector`]。
+    /// 注册一个自定义代理解析器（按 `priority` 降序、注册先后 FIFO 评估；首个非 `Inherit` 决策生效）。
+    ///
+    /// 注册成功后自增 `generation`，让持有 `subscribe_generation()` 的长连接及时感知路由变更。
+    pub fn register_resolver(&self, priority: i32, resolver: Arc<dyn ProxyResolver>) -> u64 {
+        let id = self.next_resolver_id.fetch_add(1, Ordering::Relaxed);
+        {
+            let mut list = self.resolvers.lock().unwrap();
+            list.push(RegisteredResolver {
+                id,
+                priority,
+                resolver,
+            });
+            list.sort_by(|a, b| b.priority.cmp(&a.priority).then_with(|| a.id.cmp(&b.id)));
+        }
+        self.bump_generation();
+        id
+    }
+
+    /// 注销之前通过 [`Self::register_resolver`] 注册的解析器。
+    pub fn unregister_resolver(&self, id: u64) -> bool {
+        let removed = {
+            let mut list = self.resolvers.lock().unwrap();
+            let before = list.len();
+            list.retain(|entry| entry.id != id);
+            list.len() != before
+        };
+        if removed {
+            self.bump_generation();
+        }
+        removed
+    }
+
+    /// Cordis 作用域绑定版解析器注册：将解析器的生命周期绑定到 `ctx` 所在 fiber，
+    /// 当组件卸载或 `ctx.dispose()` 时自动注销并递增 `generation`。
+    pub fn register_resolver_scoped(
+        self: &Arc<Self>,
+        ctx: &Context,
+        priority: i32,
+        resolver: Arc<dyn ProxyResolver>,
+    ) -> Result<u64, CordisError> {
+        let id = self.register_resolver(priority, resolver);
+        let weak = Arc::downgrade(self);
+        if let Err(err) = ctx.try_effect_sync(move || {
+            if let Some(service) = weak.upgrade() {
+                service.unregister_resolver(id);
+            }
+        }) {
+            self.unregister_resolver(id);
+            return Err(err);
+        }
+        Ok(id)
+    }
+
+    /// 快照当前已注册的解析器链；无注册时返回 `None`（零额外开销快路径）。
+    pub fn resolver_chain(&self) -> Option<Arc<ChainedResolver>> {
+        let list = self.resolvers.lock().unwrap();
+        if list.is_empty() {
+            return None;
+        }
+        let mut chain = ChainedResolver::new();
+        for entry in list.iter() {
+            chain.push_arc(entry.priority, Arc::clone(&entry.resolver));
+        }
+        #[cfg(any(test, debug_assertions))]
+        {
+            chain = chain.with_allow_loopback_proxy(self.allow_loopback_proxy.load(Ordering::Relaxed));
+        }
+        Some(Arc::new(chain))
+    }
+
+    /// 解析单个 [`ProxyContext`] 的最终路由（已注册解析器链 → 全局配置 → 系统代理）。
+    pub fn resolve_context(&self, ctx: &ProxyContext) -> ResolvedRoute {
+        self.connector().resolve_context(ctx)
+    }
+
+    /// 构造使用当前活动配置、系统快照与已注册解析器链的 [`ProxyConnector`]。
     pub fn connector(&self) -> ProxyConnector {
+        self.connector_with_context(ProxyContextDefaults::default())
+    }
+
+    /// 构造附带默认上下文元数据（用途、账户、插件、标签）的 [`ProxyConnector`]。
+    pub fn connector_with_context(&self, defaults: ProxyContextDefaults) -> ProxyConnector {
+        let resolver = self
+            .resolver_chain()
+            .map(|chain| chain as Arc<dyn ProxyResolver>);
         self.connector_for(self.snapshot())
+            .with_optional_resolver(resolver)
+            .with_context_defaults(defaults)
+    }
+
+    /// 构造带有局部 [`ProxyOverride`] 的作用域 [`ProxyConnector`]：
+    /// `ProxyOverride::Inherit` 自动回退至已注册解析器链与全局代理，`Direct`/`Custom` 独立生效。
+    pub fn connector_for_override(
+        &self,
+        override_cfg: &ProxyOverride,
+        defaults: ProxyContextDefaults,
+    ) -> ProxyConnector {
+        let mut chain = ChainedResolver::new();
+        chain.push_with_priority(i32::MAX, override_cfg.clone());
+        {
+            let list = self.resolvers.lock().unwrap();
+            for entry in list.iter() {
+                chain.push_arc(entry.priority, Arc::clone(&entry.resolver));
+            }
+        }
+        #[cfg(any(test, debug_assertions))]
+        {
+            chain = chain.with_allow_loopback_proxy(self.allow_loopback_proxy.load(Ordering::Relaxed));
+        }
+        self.connector_for(self.snapshot())
+            .with_resolver(Arc::new(chain))
+            .with_context_defaults(defaults)
     }
 
     /// 构造使用指定配置与当前系统快照的 [`ProxyConnector`]（供 `testProxy` 草稿测试）。
@@ -727,5 +848,109 @@ mod tests {
         std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
         std::os::unix::fs::symlink(&target, dir.path().join(PREFERENCE_FILE)).unwrap();
         assert!(!open(dir.path().join(PREFERENCE_FILE)).is_ready());
+    }
+
+    #[tokio::test]
+    async fn cordis_scoped_resolver_registration_and_overrides_work() {
+        use maild_proxy::{
+            ConditionalProxyConfig, ProxyDecision, ProxyEndpoint, ProxyMatcher, ProxyPurpose,
+            ProxyRule, ProxyTarget, TargetScheme,
+        };
+
+        let dir = secure_dir();
+        let svc = Arc::new(open(dir.path().join(PREFERENCE_FILE)));
+        // Global custom proxy
+        svc.set(&ProxyConfigUpdate {
+            mode: ProxyMode::Custom,
+            custom: Some(CustomProxyUpdate {
+                protocol: ProxyProtocol::Http,
+                host: "10.0.0.1".into(),
+                port: 3128,
+                username: None,
+                password: None,
+                clear_password: false,
+                bypass: vec![],
+            }),
+            clear_password: false,
+        })
+        .unwrap();
+
+        let special_ep = ProxyEndpoint {
+            protocol: ProxyProtocol::Socks5h,
+            host: "10.0.0.2".into(),
+            port: 1080,
+            username: None,
+            password: None,
+        };
+        let rule_resolver = ConditionalProxyConfig::new(
+            vec![ProxyRule::new(
+                ProxyMatcher::default()
+                    .with_purpose(ProxyPurpose::Mail)
+                    .with_account_id("work"),
+                ProxyDecision::Use(special_ep.clone()),
+            )],
+            ProxyOverride::Inherit,
+        )
+        .compile()
+        .unwrap();
+
+        let gen_before = svc.generation();
+        let ctx = Context::new();
+        let _handle = ctx.inject([], {
+            let svc = Arc::clone(&svc);
+            let resolver: Arc<dyn ProxyResolver> = Arc::new(rule_resolver);
+            move |c| {
+                svc.register_resolver_scoped(c, 10, Arc::clone(&resolver))
+                    .map(|_| ())
+                    .map_err(|e| Box::new(e) as cordis::ComponentError)
+            }
+        });
+        assert!(svc.generation() > gen_before);
+
+        let target = ProxyTarget::new("imap.example.com", 993, TargetScheme::Imaps);
+        // Account "work" matches scoped resolver -> special_ep
+        let work_conn = svc.connector_with_context(
+            ProxyContextDefaults::mail().with_account_id("work"),
+        );
+        assert_eq!(work_conn.resolve(&target), ResolvedRoute::Proxy(special_ep));
+
+        // Account "personal" does not match -> inherits global proxy
+        let personal_conn = svc.connector_with_context(
+            ProxyContextDefaults::mail().with_account_id("personal"),
+        );
+        assert_eq!(
+            personal_conn.resolve(&target),
+            ResolvedRoute::Proxy(ProxyEndpoint {
+                protocol: ProxyProtocol::Http,
+                host: "10.0.0.1".into(),
+                port: 3128,
+                username: None,
+                password: None,
+            })
+        );
+
+        // Plugin override Direct beats both resolver and global
+        let direct_conn = svc.connector_for_override(
+            &ProxyOverride::Direct,
+            ProxyContextDefaults::mail().with_account_id("work"),
+        );
+        assert_eq!(direct_conn.resolve(&target), ResolvedRoute::Direct);
+
+        // Disposing the Cordis context automatically unregisters the scoped resolver
+        let gen_mid = svc.generation();
+        ctx.dispose().await;
+        assert!(svc.generation() > gen_mid);
+        assert!(svc.resolver_chain().is_none());
+        assert_eq!(
+            svc.connector_with_context(ProxyContextDefaults::mail().with_account_id("work"))
+                .resolve(&target),
+            ResolvedRoute::Proxy(ProxyEndpoint {
+                protocol: ProxyProtocol::Http,
+                host: "10.0.0.1".into(),
+                port: 3128,
+                username: None,
+                password: None,
+            })
+        );
     }
 }

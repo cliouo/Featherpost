@@ -1,7 +1,14 @@
+use std::io::BufRead as _;
+
 use clap::{Parser, Subcommand};
 use maild_client::{discover_endpoint, AccountProfileView, DiscoveryOptions, RpcClient};
+use maild_proxy::{CustomProxyConfig, ProxyOverride, ProxyProtocol};
 use nodeseek_email::api::ApiClient;
 use nodeseek_email::error::{AppError, AppResult, ErrorCode};
+use nodeseek_email::proxy::{
+    describe_global_proxy, fetch_global_proxy_from_daemon, load_effective_proxy_snapshot,
+    PluginProxySettings, PluginProxyStore,
+};
 use nodeseek_email::secret::{read_api_key, PlatformSecretStore, SecretStore as _};
 use nodeseek_email::state::{canonicalize_address, MailboxBinding, StateStore};
 use nodeseek_email::PLUGIN_ID;
@@ -35,6 +42,44 @@ enum Command {
     Mailbox(MailboxCommand),
     /// Show the provider quota fields returned by NodeSeek Email.
     Quota,
+    /// View or override proxy settings specifically for NodeSeek Email (default: inherit global proxy).
+    #[command(subcommand)]
+    Proxy(ProxyCommand),
+}
+
+#[derive(Subcommand)]
+enum ProxyCommand {
+    /// Show this plugin's proxy override and the inherited global Featherpost proxy summary.
+    Status,
+    /// Configure plugin-level proxy override (`inherit`, `direct`, or `custom`).
+    Set {
+        /// Override mode: `inherit` (follow global), `direct`, or `custom`.
+        #[arg(long)]
+        mode: String,
+        /// Custom proxy protocol (`socks5h`, `socks5`, `http`, `https`).
+        #[arg(long)]
+        protocol: Option<String>,
+        /// Custom proxy host.
+        #[arg(long)]
+        host: Option<String>,
+        /// Custom proxy port.
+        #[arg(long)]
+        port: Option<u16>,
+        /// Optional custom proxy username.
+        #[arg(long)]
+        username: Option<String>,
+        /// Read one proxy password line from stdin (never passed on argv).
+        #[arg(long)]
+        password_stdin: bool,
+        /// Clear any saved custom proxy password.
+        #[arg(long)]
+        clear_password: bool,
+        /// Comma-separated bypass entries (optional).
+        #[arg(long)]
+        bypass: Option<String>,
+    },
+    /// Reset plugin proxy override back to `inherit` (follow global proxy).
+    Reset,
 }
 
 #[derive(Subcommand)]
@@ -114,7 +159,8 @@ async fn execute(cli: Cli) -> AppResult<()> {
             );
         }
         Command::Mailbox(command) => {
-            let api = ApiClient::production(PlatformSecretStore.load()?)?;
+            let proxy = load_effective_proxy_snapshot().await;
+            let api = ApiClient::production_with_proxy(PlatformSecretStore.load()?, proxy)?;
             match command {
                 MailboxCommand::List => {
                     for mailbox in api.list_mailboxes().await? {
@@ -153,7 +199,8 @@ async fn execute(cli: Cli) -> AppResult<()> {
             }
         }
         Command::Quota => {
-            let api = ApiClient::production(PlatformSecretStore.load()?)?;
+            let proxy = load_effective_proxy_snapshot().await;
+            let api = ApiClient::production_with_proxy(PlatformSecretStore.load()?, proxy)?;
             let quota = api.quota().await?;
             let current = quota
                 .current
@@ -171,6 +218,141 @@ async fn execute(cli: Cli) -> AppResult<()> {
                 optional_i64(quota.storage_usage_percent),
                 quota.storage_quota_source.as_deref().unwrap_or("-")
             );
+        }
+        Command::Proxy(command) => execute_proxy_command(command).await?,
+    }
+    Ok(())
+}
+
+async fn execute_proxy_command(command: ProxyCommand) -> AppResult<()> {
+    let store = PluginProxyStore::discover()?;
+    match command {
+        ProxyCommand::Status => {
+            let settings = store.load()?;
+            let (global_cfg, global_sys, daemon_online) = fetch_global_proxy_from_daemon().await;
+            let plugin_desc = match &settings.proxy_override {
+                ProxyOverride::Inherit => "inherit".to_string(),
+                ProxyOverride::Direct => "direct".to_string(),
+                ProxyOverride::Custom(cfg) => format!("custom ({})", cfg.to_endpoint().redacted_url()),
+            };
+            println!(
+                "plugin_override={}\thas_password={}\tglobal={}\tdaemon_online={}",
+                plugin_desc,
+                settings.has_password(),
+                describe_global_proxy(&global_cfg, &global_sys),
+                daemon_online
+            );
+        }
+        ProxyCommand::Reset => {
+            let existing = store.load()?;
+            let next = PluginProxySettings {
+                proxy_override: ProxyOverride::Inherit,
+                saved_custom: existing.effective_custom().cloned(),
+            };
+            store.save(&next)?;
+            println!("override=inherit");
+        }
+        ProxyCommand::Set {
+            mode,
+            protocol,
+            host,
+            port,
+            username,
+            password_stdin,
+            clear_password,
+            bypass,
+        } => {
+            let existing = store.load()?;
+            if password_stdin && clear_password {
+                return Err(AppError::new(
+                    ErrorCode::InvalidInput,
+                    "--password-stdin 与 --clear-password 不能同时使用",
+                ));
+            }
+            let normalized = mode.trim().to_ascii_lowercase();
+            let next = match normalized.as_str() {
+                "inherit" => PluginProxySettings {
+                    proxy_override: ProxyOverride::Inherit,
+                    saved_custom: existing.effective_custom().cloned(),
+                },
+                "direct" => PluginProxySettings {
+                    proxy_override: ProxyOverride::Direct,
+                    saved_custom: existing.effective_custom().cloned(),
+                },
+                "custom" => {
+                    let prev = existing.effective_custom();
+                    let proto = match protocol.as_deref() {
+                        Some(raw) => ProxyProtocol::parse_scheme(raw).map_err(|detail| {
+                            AppError::with_detail(ErrorCode::InvalidInput, "代理协议无效", detail)
+                        })?,
+                        None => prev.map(|c| c.protocol).unwrap_or(ProxyProtocol::Socks5h),
+                    };
+                    let host = host
+                        .or_else(|| prev.map(|c| c.host.clone()))
+                        .ok_or_else(|| {
+                            AppError::new(ErrorCode::InvalidInput, "custom 模式必须指定 --host")
+                        })?;
+                    let port = port
+                        .or_else(|| prev.map(|c| c.port))
+                        .ok_or_else(|| {
+                            AppError::new(ErrorCode::InvalidInput, "custom 模式必须指定 --port")
+                        })?;
+                    let username = username.or_else(|| prev.and_then(|c| c.username.clone()));
+                    let password = if clear_password {
+                        None
+                    } else if password_stdin {
+                        let mut line = String::new();
+                        std::io::stdin()
+                            .lock()
+                            .read_line(&mut line)
+                            .map_err(|_| AppError::invalid_input())?;
+                        let trimmed = line.trim_end_matches(['\r', '\n']);
+                        if trimmed.is_empty() {
+                            None
+                        } else {
+                            Some(trimmed.to_string())
+                        }
+                    } else {
+                        prev.and_then(|c| c.password.clone())
+                    };
+                    let bypass_list = match bypass {
+                        Some(raw) => raw
+                            .split([',', ';'])
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                            .map(ToOwned::to_owned)
+                            .collect(),
+                        None => prev.map(|c| c.bypass.clone()).unwrap_or_default(),
+                    };
+                    let custom = CustomProxyConfig {
+                        protocol: proto,
+                        host,
+                        port,
+                        username,
+                        password,
+                        bypass: bypass_list,
+                    };
+                    PluginProxySettings::from_override(ProxyOverride::Custom(custom))
+                }
+                _ => {
+                    return Err(AppError::new(
+                        ErrorCode::InvalidInput,
+                        "mode 仅支持 inherit / direct / custom",
+                    ));
+                }
+            };
+            let saved = store.save(&next)?;
+            match &saved.proxy_override {
+                ProxyOverride::Inherit => println!("override=inherit"),
+                ProxyOverride::Direct => println!("override=direct"),
+                ProxyOverride::Custom(cfg) => {
+                    println!(
+                        "override=custom\tendpoint={}\thas_password={}",
+                        cfg.to_endpoint().redacted_url(),
+                        cfg.has_password()
+                    );
+                }
+            }
         }
     }
     Ok(())
@@ -392,6 +574,15 @@ mod tests {
             .collect();
         assert!(long_options.contains(&"api-key-stdin"));
         assert!(!long_options.contains(&"api-key"));
+
+        let proxy = command.find_subcommand("proxy").unwrap();
+        let proxy_set = proxy.find_subcommand("set").unwrap();
+        let proxy_opts: Vec<_> = proxy_set
+            .get_arguments()
+            .filter_map(|arg| arg.get_long())
+            .collect();
+        assert!(proxy_opts.contains(&"password-stdin"));
+        assert!(!proxy_opts.contains(&"password"));
     }
 
     #[test]

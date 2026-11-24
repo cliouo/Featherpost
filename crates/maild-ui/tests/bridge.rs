@@ -566,16 +566,25 @@ async fn the_shell_binds_as_its_frontend_and_projects_the_mailbox() {
         UiErrorCode::NotFound,
         "别的令牌拿不到"
     );
-    // 放行远程：同一封信另一份文档，远程 src 保留，CSP 放图片。
+    // 放行远程（Phase 3）：同一封信另一份文档，远程 src 改写为 `/remote/<token>/<idx>`，
+    // CSP 永久锁死为 `img-src <csp_source> data:`（不含 https:/http:），WebView 永不直连公网。
     let allowed = bridge
         .prepare_document(&documents, &base, "demo", "INBOX", "2", true)
         .await
         .unwrap();
-    let allowed_doc = documents.get(allowed.token.as_deref().unwrap()).unwrap();
-    assert!(allowed_doc
-        .html
-        .contains("src=\"https://remote.example/t.gif\""));
-    assert!(allowed_doc.csp.contains("https: http:"));
+    let allowed_token = allowed.token.as_deref().unwrap();
+    let allowed_doc = documents.get(allowed_token).unwrap();
+    assert!(allowed_doc.html.contains(&format!(
+        "src=\"{}/remote/{allowed_token}/0\"",
+        base.url_prefix
+    )));
+    assert!(!allowed_doc.html.contains("src=\"https://"));
+    assert_eq!(
+        allowed_doc.remote_urls,
+        vec!["https://remote.example/t.gif"]
+    );
+    assert!(!allowed_doc.csp.contains("https:"));
+    assert!(!allowed_doc.csp.contains("http:"));
     assert!(!stored.csp.contains("https:"));
     // 释放：文档与 part 都拿不到。
     assert!(documents.release(&token));

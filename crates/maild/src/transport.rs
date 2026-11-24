@@ -190,7 +190,7 @@ impl Transport {
         let connector = self
             .proxy
             .as_ref()
-            .map(|p| p.connector())
+            .map(|p| p.connector_with_context(maild_proxy::ProxyContextDefaults::mail()))
             .unwrap_or_else(ProxyConnector::direct_only);
         let scheme = if self.cfg.tls == "implicit" {
             TargetScheme::Smtps
