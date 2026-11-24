@@ -410,6 +410,13 @@ fn mailbox_response(
     }
 }
 
+fn repair_response_confirmed(response: &Value) -> bool {
+    matches!(
+        response["id"].as_str(),
+        Some(maild::recovery::STUDIO_FRONTEND_ID | maild::recovery::BUNDLED_FRONTEND_ID)
+    )
+}
+
 impl Controller for NativeController {
     fn mailbox_host(&mut self) -> Result<Option<PathBuf>, &'static str> {
         let catalog = self.call("listFrontends", json!({}), Duration::from_secs(2))?;
@@ -447,7 +454,7 @@ impl Controller for NativeController {
                 if self.status().online {
                     let response =
                         self.call("repairBuiltinFrontend", json!({}), Duration::from_secs(60))?;
-                    if response["id"] != maild::recovery::BUNDLED_FRONTEND_ID {
+                    if !repair_response_confirmed(&response) {
                         return Err(text().error_repair_unconfirmed);
                     }
                     Ok(text().result_repaired_online)
@@ -682,5 +689,19 @@ mod tests {
         // Same-version bytes differ from the bundled checksum.
         let route = launch_route(&catalog(maild_brand::BUNDLED_FRONTEND_ID), || InPlace::Damaged);
         assert!(matches!(route, LaunchRoute::Recovery));
+    }
+
+    #[test]
+    fn repair_confirmation_accepts_studio_and_legacy_bundled_frontends_only() {
+        assert!(repair_response_confirmed(&json!({
+            "id": maild::recovery::STUDIO_FRONTEND_ID
+        })));
+        assert!(repair_response_confirmed(&json!({
+            "id": maild::recovery::BUNDLED_FRONTEND_ID
+        })));
+        assert!(!repair_response_confirmed(&json!({
+            "id": "org.example.third-party"
+        })));
+        assert!(!repair_response_confirmed(&json!({})));
     }
 }

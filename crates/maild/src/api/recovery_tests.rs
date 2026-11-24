@@ -1,7 +1,10 @@
 use super::*;
 use crate::frontend::BUILTIN_RECOVERY_FRONTEND;
 use crate::frontend::{FrontendBroker, FrontendConfig, FrontendInstallRoot};
-use crate::recovery::{tests::source_fixture, BUNDLED_FRONTEND_ID};
+use crate::recovery::{
+    tests::{source_fixture, studio_source_fixture},
+    BUNDLED_FRONTEND_ID, STUDIO_FRONTEND_ID,
+};
 
 fn request(params: Value) -> JsonRpcRequest {
     serde_json::from_value(json!({"jsonrpc":"2.0", "id":1,
@@ -136,6 +139,31 @@ async fn recovery_reloads_default_catalog_and_identity_before_success() {
 }
 
 #[tokio::test]
+async fn recovery_reloads_studio_default_catalog_and_identity_when_bundled() {
+    let root = tempfile::tempdir().unwrap();
+    let bundle = tempfile::tempdir().unwrap();
+    let (legacy, _studio) = studio_source_fixture(bundle.path());
+    std::fs::write(root.path().join(".default.json"), b"damaged state").unwrap();
+    let ctx = context(root.path(), legacy);
+    let response = dispatch_with_origin(&ctx, RequestOrigin::UnixSocket, &request(json!({}))).await;
+    assert!(response.error.is_none(), "{:?}", response.error);
+    let result = response.result.unwrap();
+    assert_eq!(result["id"], STUDIO_FRONTEND_ID);
+    assert!(result["backup"].as_str().unwrap().starts_with("repair-"));
+    let broker = ctx.get::<FrontendBroker>().unwrap();
+    assert_eq!(broker.default_frontend(), STUDIO_FRONTEND_ID);
+    assert!(broker
+        .api_capabilities_of(STUDIO_FRONTEND_ID)
+        .unwrap()
+        .contains(&"plugins_manage"));
+    assert!(ctx
+        .get::<IdentitySeam>()
+        .unwrap()
+        .contains(PluginKind::Frontend, STUDIO_FRONTEND_ID));
+    broker.set_default(BUILTIN_RECOVERY_FRONTEND).unwrap();
+}
+
+#[tokio::test]
 async fn missing_bundled_source_is_an_error_without_creating_any_package() {
     let root = tempfile::tempdir().unwrap();
     let ctx = Context::new();
@@ -240,4 +268,52 @@ fn disconnected_request_keeps_mutation_lease_until_repair_and_refresh_finish() {
         assert_eq!(broker.default_frontend(), BUNDLED_FRONTEND_ID);
         assert!(identity.contains(PluginKind::Frontend, BUNDLED_FRONTEND_ID));
     });
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn repair_rpc_restores_studio_and_sets_default_when_bundled() {
+    use maild_client::{Endpoint, RpcClient};
+    let root = tempfile::tempdir().unwrap();
+    let bundle = tempfile::tempdir().unwrap();
+    let (legacy, _studio) = studio_source_fixture(bundle.path());
+    std::fs::write(root.path().join(".default.json"), b"damaged state").unwrap();
+    let ctx = context(root.path(), legacy);
+    let socket = root.path().join("api.sock");
+    let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+    let (stop, stopped) = tokio::sync::oneshot::channel();
+    let task = tokio::spawn(serve_unix(listener, ctx.clone(), async {
+        let _ = stopped.await;
+    }));
+    let client = RpcClient::new(Endpoint::Unix { path: socket }).unwrap();
+    let outcome = client
+        .call("repairBuiltinFrontend", json!({}))
+        .await
+        .unwrap();
+    assert_eq!(outcome["id"], STUDIO_FRONTEND_ID);
+    assert!(outcome["backup"].as_str().unwrap().starts_with("repair-"));
+    let frontends = client.call("listFrontends", json!({})).await.unwrap();
+    assert_eq!(frontends["default"], STUDIO_FRONTEND_ID);
+    assert!(ctx
+        .get::<IdentitySeam>()
+        .unwrap()
+        .contains(PluginKind::Frontend, STUDIO_FRONTEND_ID));
+    let token = client
+        .call(
+            "revealPluginToken",
+            json!({"kind":"frontend", "id":STUDIO_FRONTEND_ID}),
+        )
+        .await
+        .unwrap();
+    assert!(token["token"].as_str().is_some_and(|t| !t.is_empty()));
+    let switched = client
+        .call(
+            "setDefaultFrontend",
+            json!({"id": BUILTIN_RECOVERY_FRONTEND}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(switched["default"], BUILTIN_RECOVERY_FRONTEND);
+    stop.send(()).unwrap();
+    task.await.unwrap().unwrap();
 }

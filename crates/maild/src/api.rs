@@ -3586,7 +3586,7 @@ async fn repair_builtin_frontend(
         let _transaction = transaction;
         let _directory_lease = directory_lease;
         let outcome = source.repair(&root).map_err(transaction_error)?;
-        broker.reload_after_repair(&root).map_err(|_| {
+        broker.reload_after_repair(&root, &outcome.id).map_err(|_| {
             transaction_error("前端已恢复到磁盘，后台目录刷新失败，请重启后台".into())
         })?;
         if let Some(seam) = identity {
