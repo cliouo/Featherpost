@@ -1333,3 +1333,167 @@ async fn version_mismatch_blocks_writes_keeps_reads_and_recovers_on_reconnect() 
     let _ = shutdown2.send(());
     task2.await.unwrap().unwrap();
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn proxy_config_roundtrip_push_secret_guard_and_corrupt_file_readonly() {
+    use maild_ui::settings::{UiCustomProxyUpdate, UiProxyConfigUpdate, UiTestProxyRequest};
+
+    let directory = tempfile::tempdir().unwrap();
+    let paths = test_paths(directory.path());
+    write_config(&paths);
+    install_frontend_package(&paths);
+    let (mut task, shutdown) = spawn_daemon(&paths);
+    let socket = paths.runtime_dir.join("mail.sock");
+    wait_socket_or_fail(&mut task, &socket).await;
+
+    let bridge = Bridge::spawn(Endpoint::Unix {
+        path: socket.clone(),
+    })
+    .unwrap();
+    wait_for(&bridge, |s| s.phase == "online").await;
+    let mut events = bridge.subscribe_events();
+
+    let initial = bridge.proxy_config().await.unwrap();
+    assert_eq!(initial.config.mode, "system");
+    assert!(!initial.has_password);
+    assert!(initial.persisted);
+
+    let saved = bridge
+        .set_proxy_config(UiProxyConfigUpdate {
+            mode: "custom".into(),
+            custom: Some(UiCustomProxyUpdate {
+                protocol: "socks5h".into(),
+                host: "127.0.0.1".into(),
+                port: 7890,
+                username: Some("alice".into()),
+                password: Some("bridge-secret-never-echoed".into()),
+                clear_password: false,
+                bypass: vec!["*.internal".into()],
+            }),
+            clear_password: false,
+        })
+        .await
+        .unwrap();
+    assert_eq!(saved.config.mode, "custom");
+    assert!(saved.has_password);
+    assert!(saved.persisted);
+    let saved_json = serde_json::to_string(&saved).unwrap();
+    assert!(!saved_json.contains("bridge-secret-never-echoed"));
+    assert!(!saved_json.contains("\"password\""));
+
+    // Receive `preferences/proxy` push notification through actor events without secret.
+    let pushed = tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            if let Ok(maild_app::AppEvent::Notification(
+                maild_client::ServerNotification::ProxyPreference(event),
+            )) = events.recv().await
+            {
+                return event;
+            }
+        }
+    })
+    .await
+    .expect("must receive preferences/proxy push");
+    assert_eq!(pushed.config.mode, "custom");
+    assert!(pushed.has_password);
+    assert_eq!(pushed.config.custom.as_ref().unwrap().password, None);
+
+    // Updating port without sending password preserves saved password.
+    let updated = bridge
+        .set_proxy_config(UiProxyConfigUpdate {
+            mode: "custom".into(),
+            custom: Some(UiCustomProxyUpdate {
+                protocol: "socks5h".into(),
+                host: "127.0.0.1".into(),
+                port: 7891,
+                username: Some("alice".into()),
+                password: None,
+                clear_password: false,
+                bypass: vec!["*.internal".into()],
+            }),
+            clear_password: false,
+        })
+        .await
+        .unwrap();
+    assert!(updated.has_password);
+    assert_eq!(updated.config.custom.as_ref().unwrap().port, 7891);
+
+    // Clearing password removes it cleanly.
+    let cleared = bridge
+        .set_proxy_config(UiProxyConfigUpdate {
+            mode: "custom".into(),
+            custom: Some(UiCustomProxyUpdate {
+                protocol: "socks5h".into(),
+                host: "127.0.0.1".into(),
+                port: 7891,
+                username: None,
+                password: None,
+                clear_password: true,
+                bypass: vec![],
+            }),
+            clear_password: false,
+        })
+        .await
+        .unwrap();
+    assert!(!cleared.has_password);
+
+    // testProxy works in direct mode against a local listener.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let target_addr = listener.local_addr().unwrap();
+    let accept_task = tokio::spawn(async move {
+        let _ = listener.accept().await;
+    });
+    let test_res = bridge
+        .test_proxy(UiTestProxyRequest {
+            config: Some(UiProxyConfigUpdate {
+                mode: "direct".into(),
+                custom: None,
+                clear_password: false,
+            }),
+            use_saved_password: false,
+            target: Some(format!("127.0.0.1:{}", target_addr.port())),
+            scheme: None,
+        })
+        .await
+        .unwrap();
+    accept_task.await.unwrap();
+    assert!(test_res.ok, "direct testProxy should succeed: {test_res:?}");
+    assert_eq!(test_res.route, "direct");
+    assert_eq!(test_res.stage, "ready");
+
+    // Shut down daemon, corrupt proxy_preference.toml, restart, and verify persisted=false read-only behavior.
+    bridge.shutdown().await;
+    let _ = shutdown.send(());
+    task.await.unwrap().unwrap();
+
+    let pref_path = paths.config_dir.join("proxy_preference.toml");
+    std::fs::write(&pref_path, "format_version = 999\nmode = \"direct\"\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&pref_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+
+    let (mut task2, shutdown2) = spawn_daemon(&paths);
+    wait_socket_or_fail(&mut task2, &socket).await;
+    let bridge2 = Bridge::spawn(Endpoint::Unix { path: socket }).unwrap();
+    wait_for(&bridge2, |s| s.phase == "online").await;
+
+    let stalled = bridge2.proxy_config().await.unwrap();
+    assert!(!stalled.persisted);
+    assert_eq!(stalled.config.mode, "system");
+
+    let write_err = bridge2
+        .set_proxy_config(UiProxyConfigUpdate {
+            mode: "direct".into(),
+            custom: None,
+            clear_password: false,
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(write_err.reason, "proxy_not_persisted");
+
+    bridge2.shutdown().await;
+    let _ = shutdown2.send(());
+    task2.await.unwrap().unwrap();
+}

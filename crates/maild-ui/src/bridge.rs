@@ -40,6 +40,8 @@ pub const INTENT_EVENT: &str = "maild://intent";
 pub const LINK_EVENT: &str = "maild://link";
 /// 语言偏好变了；载荷是 [`UiLocale`]（ADR-0048）。
 pub const LOCALE_EVENT: &str = "maild://locale";
+/// 全局代理偏好或系统代理变了；载荷是 [`crate::settings::UiProxyEvent`]（不含任何密码）。
+pub const PROXY_EVENT: &str = "maild://proxy";
 
 const MAX_PAGE: u64 = 200;
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(3);
@@ -811,6 +813,10 @@ impl Bridge {
         self.handle.subscribe_state()
     }
 
+    pub fn subscribe_events(&self) -> tokio::sync::broadcast::Receiver<maild_app::AppEvent> {
+        self.handle.subscribe_events()
+    }
+
     pub async fn list_folders(&self, account: &str) -> Result<Vec<UiFolder>, UiError> {
         if account.is_empty() {
             return Err(UiError::invalid("account_required", "account 不能为空"));
@@ -1219,6 +1225,7 @@ mod tests {
                 "listMessageSummaries",
                 "searchMessages",
                 "getReadingPolicy",
+                "getProxyConfig",
                 "whoami",
                 "syncMessages",
                 "discoverEmailProvider",
@@ -1231,6 +1238,8 @@ mod tests {
                 "updateDraft",
                 "markMessages",
                 "setReadingPolicy",
+                "setProxyConfig",
+                "testProxy",
                 "probeAccount",
                 "commitPluginInstall",
                 "setDefaultFrontend",

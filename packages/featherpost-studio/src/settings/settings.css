@@ -369,3 +369,11 @@ body[data-studio-settings] .studio > .studio-workspace {
 .studio-account.expanded .account-monogram { background: var(--studio-primary); color: var(--studio-on-primary); }
 .studio-accounts > .studio-account:last-child { border-radius: 0 0 12px 12px; }
 .studio-accounts > .studio-account:first-of-type > .account-row { border-radius: 0; }
+.studio-settings .proxy-mode-option { background: var(--studio-surface); border-color: var(--studio-border); }
+.studio-settings .proxy-mode-option.selected { border-color: var(--studio-mark); background: var(--studio-tint); }
+.studio-settings .proxy-system-card { background: var(--studio-sidebar); border-color: var(--studio-border); }
+.studio-settings .proxy-auth-fields { border-left-color: var(--studio-border); }
+.studio-settings .proxy-custom-panel h3 { margin-top: 18px; }
+@media (hover: hover) {
+  .studio-settings .proxy-mode-option:not(.selected):not(:has(input:disabled)):hover { border-color: var(--hover-border); background: var(--hover-surface); }
+}

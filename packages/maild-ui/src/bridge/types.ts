@@ -1,6 +1,34 @@
 import type { MailboxBridge, ServerSearchOptions } from '../mailbox/types';
 import type { ComposeBridge } from '../compose/types';
-export type { ServerSearchOptions };
+import type {
+  CustomProxyConfig,
+  CustomProxyUpdate,
+  ProxyConfig,
+  ProxyConfigResult,
+  ProxyConfigUpdate,
+  ProxyEndpointInfo,
+  ProxyMode,
+  ProxyPreferenceEvent,
+  ProxyProtocol,
+  SystemProxySnapshot,
+  TestProxyRequest,
+  TestProxyResult,
+} from '../settings/types';
+export type {
+  CustomProxyConfig,
+  CustomProxyUpdate,
+  ProxyConfig,
+  ProxyConfigResult,
+  ProxyConfigUpdate,
+  ProxyEndpointInfo,
+  ProxyMode,
+  ProxyPreferenceEvent,
+  ProxyProtocol,
+  ServerSearchOptions,
+  SystemProxySnapshot,
+  TestProxyRequest,
+  TestProxyResult,
+};
 // 与 crates/maild-ui/src/bridge.rs 的 DTO 一一对应（snake_case 原样）。这是 webview 侧知道的
 // 全部协议：没有 endpoint、token、原始错误文本，也没有 body_html——HTML 只以隔离文档的 URL 形式
 // 交给 iframe（ADR-0033），宿主脚本从不持有邮件 HTML 字符串。
@@ -210,6 +238,15 @@ export interface LocaleBridge {
   setPreference(update: UiLocaleUpdate): Promise<UiLocalePreference>;
 }
 
+/** 全局代理偏好（不含明文密码回传）。 */
+export interface ProxyBridge {
+  config(): Promise<ProxyConfigResult>;
+  setConfig(update: ProxyConfigUpdate): Promise<ProxyConfigResult>;
+  test(request: TestProxyRequest): Promise<TestProxyResult>;
+  /** `maild://proxy`：代理配置或系统代理变化。 */
+  subscribe(handler: (event: ProxyPreferenceEvent) => void): Promise<() => void>;
+}
+
 export type OpenIntent =
   | { route: 'inbox'; account?: string }
   | { route: 'message'; account: string; uid: string; folder?: string }
@@ -250,6 +287,8 @@ export interface MailBridge {
   openExternalUrl?(url: string): Promise<void>;
   /** 可选：语言偏好（ADR-0048）。没有它时界面停在基础语言，设置页不显示语言选择。 */
   locale?: LocaleBridge;
+  /** 可选：全局代理偏好通道。 */
+  proxy?: ProxyBridge;
 }
 
 export function isUiError(value: unknown): value is UiError {

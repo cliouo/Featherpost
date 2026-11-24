@@ -452,6 +452,137 @@
 .settings-page .setting-copy {
   overflow-wrap: anywhere;
 }
+/* Network & Proxy settings */
+.proxy-banner {
+  margin: 0 0 18px;
+}
+.proxy-mode-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 16px 0;
+}
+.proxy-mode-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--canvas);
+  cursor: pointer;
+  transition: border-color var(--motion-fast) var(--ease-standard), background-color var(--motion-fast) var(--ease-standard);
+}
+.proxy-mode-option.selected {
+  border-color: var(--accent);
+  background: var(--selected);
+}
+.proxy-mode-option:has(input:disabled) {
+  cursor: default;
+  opacity: 0.65;
+}
+.proxy-mode-option input[type="radio"] {
+  margin: 3px 0 0;
+  flex-shrink: 0;
+  accent-color: var(--accent);
+}
+.proxy-mode-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.proxy-mode-copy strong {
+  font-size: 13px;
+  font-weight: 550;
+  color: var(--ink);
+}
+.proxy-mode-copy small {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+@media (hover: hover) {
+  .proxy-mode-option:not(.selected):not(:has(input:disabled)):hover {
+    border-color: var(--hover-border);
+    background: var(--hover-surface);
+  }
+}
+.proxy-mode-panel {
+  margin: 16px 0 0;
+  animation: fp-reveal-down var(--motion-base) var(--ease-standard);
+}
+.proxy-mode-note {
+  padding-top: 0;
+}
+.proxy-system-card {
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--canvas);
+}
+.proxy-system-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.proxy-system-header strong {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.proxy-endpoint-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.proxy-endpoint-row code {
+  display: inline-block;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.proxy-system-empty {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+.proxy-system-meta {
+  display: block;
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.proxy-pac-notice {
+  margin-top: 12px;
+}
+.proxy-auth-row {
+  margin-top: 4px;
+}
+.proxy-auth-fields {
+  padding: 0 0 4px 16px;
+  margin: 12px 0 16px;
+  border-left: 2px solid var(--line);
+  animation: fp-reveal-down var(--motion-base) var(--ease-standard);
+}
+.proxy-password-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: -8px 0 12px;
+}
+.proxy-password-actions small {
+  font-size: 12px;
+  color: var(--warning);
+}
+.proxy-test-section > h3:first-child {
+  margin-top: 0;
+}
 @media (max-width: 1000px) {
   .settings-field-pair {
     grid-template-columns: 1fr;

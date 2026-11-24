@@ -4,7 +4,20 @@ import { listen } from '@tauri-apps/api/event';
 
 import { BridgeError, errorCode } from './errors';
 import { followDaemonLocale, startupLocale } from './locale';
-import type { LocaleBridge, MailBridge, OpenIntent, UiError, UiLink, UiLocale, UiLocalePreference, UiSnapshot } from './types';
+import type {
+  LocaleBridge,
+  MailBridge,
+  OpenIntent,
+  ProxyBridge,
+  ProxyConfigResult,
+  ProxyPreferenceEvent,
+  TestProxyResult,
+  UiError,
+  UiLink,
+  UiLocale,
+  UiLocalePreference,
+  UiSnapshot,
+} from './types';
 import { isUiError } from './types';
 import { BRAND } from '../brand';
 
@@ -12,6 +25,7 @@ const STATE_EVENT = 'maild://state';
 const INTENT_EVENT = 'maild://intent';
 const LINK_EVENT = 'maild://link';
 const LOCALE_EVENT = 'maild://locale';
+const PROXY_EVENT = 'maild://proxy';
 
 // 每次调用时成文，跟随当前界面语言。
 const notInTauri = (): UiError => ({
@@ -46,6 +60,16 @@ const tauriLocale: LocaleBridge = {
   setPreference: (update) => call<UiLocalePreference>('ui_set_locale_preference', { update }),
 };
 
+const tauriProxy: ProxyBridge = {
+  config: () => call<ProxyConfigResult>('ui_proxy_config'),
+  setConfig: (update) => call<ProxyConfigResult>('ui_set_proxy_config', { update }),
+  test: (request) => call<TestProxyResult>('ui_test_proxy', { request }),
+  subscribe: async (handler) => {
+    if (!isTauri()) return () => {};
+    return listen<ProxyPreferenceEvent>(PROXY_EVENT, (event) => handler(event.payload));
+  },
+};
+
 export const tauriBridge: MailBridge = {
   settings: {
     profiles:()=>call('ui_settings_profiles'),probe:request=>call('ui_settings_probe',{request}),
@@ -57,6 +81,10 @@ export const tauriBridge: MailBridge = {
     pickPackage:kind=>call('ui_settings_pick_package',{kind}),cancelPackage:token=>call('ui_settings_cancel_package',{token}),
     installPackage:token=>call('ui_settings_install',{token}),rollbackPreview:(kind,id)=>call('ui_settings_rollback_preview',{kind,id}),
     rollback:preview=>call('ui_settings_rollback',{preview}),
+    proxyConfig: () => tauriProxy.config(),
+    setProxyConfig: (update) => tauriProxy.setConfig(update),
+    testProxy: (request) => tauriProxy.test(request),
+    onProxyChanged: (handler) => tauriProxy.subscribe(handler),
     // 后端发现未注册或失败时返回 null，界面按 imap.<domain> / smtp.<domain> 预填。
     discoverProvider:async address=>{ try { return await call('ui_settings_discover_provider',{address}); } catch { return null; } },
     openExternalUrl:url=>openExternalUrl(url),
@@ -122,6 +150,7 @@ export const tauriBridge: MailBridge = {
   setReadingPolicy: (patch) => call('ui_set_reading_policy', { patch }),
   openExternalUrl,
   locale: tauriLocale,
+  proxy: tauriProxy,
 };
 
 // 默认前端与 Studio 都从这里取桥：导入即开始跟随 daemon 的语言偏好（启动值 + `maild://locale`）。
