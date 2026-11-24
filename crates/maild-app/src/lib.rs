@@ -16,14 +16,16 @@ use tokio::time::Instant;
 pub use maild_client::{
     compat_from_response, AccountDraftInput, AccountProfileView, AccountSecretUpdate,
     AccountSource, AccountsResult, AccountState, CompatVerdict, CreateAccountResult,
-    CredentialsView, ExternalPluginInfo, ExternalPluginsResult, FrontendInfo, FrontendsResult,
-    IncomingInput, IncomingView, MailMessage, MessageResult, MessageSummariesResult,
-    MessageSummary, MessagesResult, Notification, NotificationAuthorization,
-    NotificationAvailability, NotificationStatus, OpenExternalPluginUiResult, OpenFrontendResult,
-    OpenIntent, OpenIntentResult,
-    OutgoingInput, OutgoingView, ProbeOutcomeView, ProbeReportView, ProfilesResult, QuietHours,
+    CredentialsView, CustomProxyConfig, CustomProxyUpdate, ExternalPluginInfo,
+    ExternalPluginsResult, FrontendInfo, FrontendsResult, IncomingInput, IncomingView, MailMessage,
+    MessageResult, MessageSummariesResult, MessageSummary, MessagesResult, Notification,
+    NotificationAuthorization, NotificationAvailability, NotificationStatus,
+    OpenExternalPluginUiResult, OpenFrontendResult, OpenIntent, OpenIntentResult, OutgoingInput,
+    OutgoingView, ProbeOutcomeView, ProbeReportView, ProfilesResult, ProxyConfig,
+    ProxyConfigResult, ProxyConfigUpdate, ProxyEndpointInfo, ProxyPreferenceChanged, QuietHours,
     RemoveAccountResult, RulesPatch, RulesSettings, RuntimeView, SendRequest, ServerNotification,
-    SettingsResult, StatusResult, UpdatePatchInput, DEFAULT_FRONTEND,
+    SettingsResult, StatusResult, SystemProxySnapshot, TestProxyRequest, TestProxyResult,
+    UpdatePatchInput, DEFAULT_FRONTEND,
 };
 
 const COMMAND_CAPACITY: usize = 64;
@@ -471,6 +473,28 @@ impl ConnectionHandle {
         maild_client::validate_settings_result(&result, true)
             .map_err(|error| ClientError::rpc(format!("setSettings 响应无效: {error}")))?;
         Ok(result)
+    }
+
+    pub async fn proxy_config(&self) -> Result<ProxyConfigResult, ClientError> {
+        self.request_typed("getProxyConfig", json!({})).await
+    }
+
+    pub async fn set_proxy_config(
+        &self,
+        update: &ProxyConfigUpdate,
+    ) -> Result<ProxyConfigResult, ClientError> {
+        let params = serde_json::to_value(update)
+            .map_err(|_| ClientError::rpc("setProxyConfig 请求序列化失败"))?;
+        self.request_typed("setProxyConfig", params).await
+    }
+
+    pub async fn test_proxy(
+        &self,
+        request: &TestProxyRequest,
+    ) -> Result<TestProxyResult, ClientError> {
+        let params = serde_json::to_value(request)
+            .map_err(|_| ClientError::rpc("testProxy 请求序列化失败"))?;
+        self.request_typed("testProxy", params).await
     }
 
     pub async fn send(&self, message: &SendRequest) -> Result<(), ClientError> {

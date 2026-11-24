@@ -13,7 +13,12 @@ import type {
   PackageChoice,
   PackagePreview,
   Probe,
+  ProxyConfigResult,
+  ProxyConfigUpdate,
+  ProxyPreferenceEvent,
   RulesResult,
+  TestProxyRequest,
+  TestProxyResult,
 } from "../src/settings/types";
 import { BRAND } from "../src/brand";
 export const account = (): AccountProfile => ({
@@ -80,6 +85,32 @@ export class FakeSettings implements SettingsBridge {
   savedRules: Rules[] = [];
   notificationRequests: boolean[] = [];
   probeResult: Probe | null = null;
+  proxyState: ProxyConfigResult = {
+    config: { mode: "system", custom: null },
+    has_password: false,
+    effective_system: {
+      http: null,
+      https: null,
+      socks5: null,
+      bypass: [],
+      exclude_simple_hostnames: false,
+      pac_url: null,
+      source: "none",
+    },
+    persisted: true,
+  };
+  proxyWrites: ProxyConfigUpdate[] = [];
+  proxyTests: TestProxyRequest[] = [];
+  proxyTestResult: TestProxyResult = {
+    ok: true,
+    route: "direct",
+    stage: "ready",
+    latency_ms: 42,
+    detail_code: null,
+    detail: "",
+  };
+  proxyError: Error | null = null;
+  proxyHandlers = new Set<(event: ProxyPreferenceEvent) => void>();
   discoverProvider?: SettingsBridge["discoverProvider"];
   openExternalUrl?: SettingsBridge["openExternalUrl"];
   async profiles() {
@@ -147,4 +178,58 @@ export class FakeSettings implements SettingsBridge {
     return preview();
   }
   async rollback(_preview: PackagePreview) {}
+  async proxyConfig(): Promise<ProxyConfigResult> {
+    if (this.proxyError) throw this.proxyError;
+    return structuredClone(this.proxyState);
+  }
+  async setProxyConfig(update: ProxyConfigUpdate): Promise<ProxyConfigResult> {
+    if (this.proxyError) throw this.proxyError;
+    this.proxyWrites.push(structuredClone(update));
+    const prevCustom = this.proxyState.config.custom;
+    let nextCustom = prevCustom ? structuredClone(prevCustom) : null;
+    let hasPassword = this.proxyState.has_password;
+    if (update.custom) {
+      const clear = Boolean(update.clear_password || update.custom.clear_password);
+      if (clear) {
+        hasPassword = false;
+      } else if (update.custom.password !== undefined && update.custom.password !== null && update.custom.password !== "") {
+        hasPassword = true;
+      }
+      nextCustom = {
+        protocol: update.custom.protocol,
+        host: update.custom.host,
+        port: update.custom.port,
+        username: update.custom.username ?? null,
+        bypass: [...update.custom.bypass],
+      };
+    } else if (update.clear_password) {
+      hasPassword = false;
+    }
+    this.proxyState = {
+      ...this.proxyState,
+      config: { mode: update.mode, custom: nextCustom },
+      has_password: hasPassword,
+    };
+    return structuredClone(this.proxyState);
+  }
+  async testProxy(request: TestProxyRequest): Promise<TestProxyResult> {
+    if (this.proxyError) throw this.proxyError;
+    this.proxyTests.push(structuredClone(request));
+    return structuredClone(this.proxyTestResult);
+  }
+  async onProxyChanged(handler: (event: ProxyPreferenceEvent) => void) {
+    this.proxyHandlers.add(handler);
+    return () => {
+      this.proxyHandlers.delete(handler);
+    };
+  }
+  pushProxy(event: ProxyPreferenceEvent) {
+    this.proxyState = {
+      config: structuredClone(event.config),
+      has_password: event.has_password,
+      effective_system: structuredClone(event.effective_system),
+      persisted: event.persisted,
+    };
+    for (const handler of this.proxyHandlers) handler(structuredClone(event));
+  }
 }

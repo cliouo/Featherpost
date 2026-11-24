@@ -11,6 +11,7 @@ import { useEffect, useState } from "react";
 import { SettingsController } from "../../../maild-ui/src/settings/controller";
 import { Accounts } from "./Accounts";
 import { Addresses } from "../../../maild-ui/src/settings/Addresses";
+import { NetworkProxy } from "../../../maild-ui/src/settings/NetworkProxy";
 import { Notifications } from "../../../maild-ui/src/settings/Notifications";
 import { Extensions as ManagedExtensions } from "../../../maild-ui/src/settings/Extensions";
 import { Dialog } from "../../../maild-ui/src/mailbox/Dialog";
@@ -41,6 +42,7 @@ const descriptions: Record<string, () => string> = {
   "maild.settings.notifications": m.studio_settings_description_notifications,
   "maild.settings.addresses": m.studio_settings_description_addresses,
   "maild.settings.extensions": m.studio_settings_description_extensions,
+  "maild.settings.network": m.studio_settings_description_network,
   "maild.settings.connection": m.studio_settings_description_connection,
 };
 
@@ -434,6 +436,14 @@ export function settingsModule(
         },
         order: 10,
         render: () => <Appearance host={host} language={language} />,
+      },
+      {
+        id: "maild.settings.network",
+        get title() {
+          return m.studio_settings_section_network();
+        },
+        order: 80,
+        render: () => <NetworkProxy controller={controller} />,
       },
       {
         id: "maild.settings.connection",

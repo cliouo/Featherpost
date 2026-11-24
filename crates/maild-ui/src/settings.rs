@@ -1,11 +1,14 @@
 //! Explicit management DTOs. Stored secrets and raw provider errors never enter the webview.
 use crate::{Bridge, UiError, UiErrorCode};
 use maild_client::{
-    AccountDraftInput, AccountProfileView, AddressView, NotificationStatus, PackagePreview,
-    ProbeReportView, ProfilesResult, QuietHours,
+    AccountDraftInput, AccountProfileView, AddressView, CustomProxyConfig, CustomProxyUpdate,
+    NotificationStatus, PackagePreview, ProbeReportView, ProfilesResult, ProxyConfig,
+    ProxyConfigResult, ProxyConfigUpdate, ProxyEndpointInfo, ProxyPreferenceChanged, QuietHours,
+    SystemProxySnapshot, TestProxyRequest, TestProxyResult,
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::fmt;
 
 #[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]
@@ -209,6 +212,463 @@ pub enum PackageAction {
     Open { id: String },
     Default { id: String },
     Refresh,
+}
+
+// —— 全局代理（Phase 2：显式无密码 WebView DTO 与脱敏日志） ——
+
+const MAX_PROXY_HOST_BYTES: usize = 255;
+const MAX_PROXY_USERNAME_BYTES: usize = 255;
+const MAX_PROXY_PASSWORD_BYTES: usize = 1024;
+const MAX_PROXY_BYPASS_ENTRIES: usize = 256;
+const MAX_PROXY_BYPASS_ENTRY_BYTES: usize = 255;
+const MAX_PROXY_TARGET_BYTES: usize = 265;
+
+/// 出站给 WebView 的代理端点摘要：结构上不含 `password` 字段。
+#[derive(Clone, Debug, Default, Serialize, PartialEq, Eq)]
+pub struct UiProxyEndpoint {
+    pub protocol: String,
+    pub host: String,
+    pub port: u16,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+}
+
+impl From<ProxyEndpointInfo> for UiProxyEndpoint {
+    fn from(ep: ProxyEndpointInfo) -> Self {
+        Self {
+            protocol: ep.protocol,
+            host: ep.host,
+            port: ep.port,
+            username: ep.username,
+        }
+    }
+}
+
+/// 出站给 WebView 的自定义代理配置：结构上不含 `password` 字段。
+#[derive(Clone, Debug, Default, Serialize, PartialEq, Eq)]
+pub struct UiCustomProxy {
+    pub protocol: String,
+    pub host: String,
+    pub port: u16,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    pub bypass: Vec<String>,
+}
+
+impl From<CustomProxyConfig> for UiCustomProxy {
+    fn from(cfg: CustomProxyConfig) -> Self {
+        Self {
+            protocol: cfg.protocol,
+            host: cfg.host,
+            port: cfg.port,
+            username: cfg.username,
+            bypass: cfg.bypass,
+        }
+    }
+}
+
+/// 出站给 WebView 的代理配置主体。
+#[derive(Clone, Debug, Default, Serialize, PartialEq, Eq)]
+pub struct UiProxyConfigData {
+    pub mode: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub custom: Option<UiCustomProxy>,
+}
+
+impl From<ProxyConfig> for UiProxyConfigData {
+    fn from(cfg: ProxyConfig) -> Self {
+        Self {
+            mode: cfg.mode,
+            custom: cfg.custom.map(UiCustomProxy::from),
+        }
+    }
+}
+
+/// 出站给 WebView 的系统代理快照（所有端点不含密码）。
+#[derive(Clone, Debug, Default, Serialize, PartialEq, Eq)]
+pub struct UiSystemProxySnapshot {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub http: Option<UiProxyEndpoint>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub https: Option<UiProxyEndpoint>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub socks5: Option<UiProxyEndpoint>,
+    pub bypass: Vec<String>,
+    pub exclude_simple_hostnames: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pac_url: Option<String>,
+    pub source: String,
+}
+
+impl From<SystemProxySnapshot> for UiSystemProxySnapshot {
+    fn from(snapshot: SystemProxySnapshot) -> Self {
+        Self {
+            http: snapshot.http.map(UiProxyEndpoint::from),
+            https: snapshot.https.map(UiProxyEndpoint::from),
+            socks5: snapshot.socks5.map(UiProxyEndpoint::from),
+            bypass: snapshot.bypass,
+            exclude_simple_hostnames: snapshot.exclude_simple_hostnames,
+            pac_url: snapshot.pac_url,
+            source: snapshot.source,
+        }
+    }
+}
+
+/// `ui_proxy_config` / `ui_set_proxy_config` 的应答：不含任何明文密码。
+#[derive(Clone, Debug, Default, Serialize, PartialEq, Eq)]
+pub struct UiProxyConfig {
+    pub config: UiProxyConfigData,
+    pub has_password: bool,
+    pub effective_system: UiSystemProxySnapshot,
+    pub persisted: bool,
+}
+
+impl From<ProxyConfigResult> for UiProxyConfig {
+    fn from(result: ProxyConfigResult) -> Self {
+        Self {
+            config: UiProxyConfigData::from(result.config),
+            has_password: result.has_password,
+            effective_system: UiSystemProxySnapshot::from(result.effective_system),
+            persisted: result.persisted,
+        }
+    }
+}
+
+/// `maild://proxy` 推送事件载荷：不含任何明文密码。
+#[derive(Clone, Debug, Default, Serialize, PartialEq, Eq)]
+pub struct UiProxyEvent {
+    pub config: UiProxyConfigData,
+    pub has_password: bool,
+    pub effective_system: UiSystemProxySnapshot,
+    pub persisted: bool,
+    pub generation: u64,
+}
+
+impl UiProxyEvent {
+    pub fn from_config(config: UiProxyConfig, generation: u64) -> Self {
+        Self {
+            config: config.config,
+            has_password: config.has_password,
+            effective_system: config.effective_system,
+            persisted: config.persisted,
+            generation,
+        }
+    }
+}
+
+impl From<ProxyPreferenceChanged> for UiProxyEvent {
+    fn from(event: ProxyPreferenceChanged) -> Self {
+        Self {
+            config: UiProxyConfigData::from(event.config),
+            has_password: event.has_password,
+            effective_system: UiSystemProxySnapshot::from(event.effective_system),
+            persisted: event.persisted,
+            generation: event.generation,
+        }
+    }
+}
+
+/// WebView 提交的自定义代理配置（Debug 脱敏，绝不输出密码）。
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UiCustomProxyUpdate {
+    pub protocol: String,
+    pub host: String,
+    pub port: u16,
+    #[serde(default)]
+    pub username: Option<String>,
+    #[serde(default)]
+    pub password: Option<String>,
+    #[serde(default)]
+    pub clear_password: bool,
+    #[serde(default)]
+    pub bypass: Vec<String>,
+}
+
+impl fmt::Debug for UiCustomProxyUpdate {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("UiCustomProxyUpdate")
+            .field("protocol", &self.protocol)
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("username", &self.username)
+            .field("password", &self.password.as_ref().map(|_| "[REDACTED]"))
+            .field("clear_password", &self.clear_password)
+            .field("bypass", &self.bypass)
+            .finish()
+    }
+}
+
+/// WebView 提交的全局代理配置更新。
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UiProxyConfigUpdate {
+    pub mode: String,
+    #[serde(default)]
+    pub custom: Option<UiCustomProxyUpdate>,
+    #[serde(default)]
+    pub clear_password: bool,
+}
+
+/// WebView 提交的代理连通性测试请求（可测已保存配置或未保存草稿）。
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UiTestProxyRequest {
+    #[serde(default)]
+    pub config: Option<UiProxyConfigUpdate>,
+    #[serde(default)]
+    pub use_saved_password: bool,
+    #[serde(default)]
+    pub target: Option<String>,
+    #[serde(default)]
+    pub scheme: Option<String>,
+}
+
+/// `ui_test_proxy` 应答：经脱敏和长度裁剪的诊断结果。
+#[derive(Clone, Debug, Default, Serialize, PartialEq, Eq)]
+pub struct UiTestProxyResult {
+    pub ok: bool,
+    pub route: String,
+    pub stage: String,
+    pub latency_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail_code: Option<String>,
+    pub detail: String,
+}
+
+impl From<TestProxyResult> for UiTestProxyResult {
+    fn from(result: TestProxyResult) -> Self {
+        Self {
+            ok: result.ok,
+            route: safe_probe_detail(&result.route),
+            stage: result.stage,
+            latency_ms: result.latency_ms,
+            detail_code: result.detail_code,
+            detail: safe_probe_detail(&result.detail),
+        }
+    }
+}
+
+fn validate_custom_proxy_update(
+    custom: &UiCustomProxyUpdate,
+    top_clear_password: bool,
+) -> Result<CustomProxyUpdate, UiError> {
+    let invalid = || {
+        UiError::invalid(
+            "proxy_invalid",
+            "请检查代理协议、地址、端口、认证信息和旁路规则。",
+        )
+    };
+    let protocol = custom.protocol.trim().to_ascii_lowercase();
+    if !matches!(protocol.as_str(), "http" | "https" | "socks5" | "socks5h") {
+        return Err(invalid());
+    }
+    let host = custom.host.trim();
+    if host.is_empty()
+        || host.len() > MAX_PROXY_HOST_BYTES
+        || host
+            .chars()
+            .any(|ch| ch.is_control() || ch.is_whitespace() || matches!(ch, '/' | '@' | '?' | '#' | '\\'))
+    {
+        return Err(invalid());
+    }
+    if custom.port == 0 {
+        return Err(invalid());
+    }
+    let clear = top_clear_password || custom.clear_password;
+    if clear && custom.password.is_some() {
+        return Err(invalid());
+    }
+    let username = match custom.username.as_deref() {
+        None => None,
+        Some(raw) => {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                if trimmed.len() > MAX_PROXY_USERNAME_BYTES
+                    || trimmed.chars().any(char::is_control)
+                    || trimmed.contains(':')
+                {
+                    return Err(invalid());
+                }
+                Some(trimmed.to_string())
+            }
+        }
+    };
+    let password = match custom.password.as_deref() {
+        None => None,
+        Some("") => None,
+        Some(raw) => {
+            if raw.len() > MAX_PROXY_PASSWORD_BYTES
+                || raw.chars().any(|ch| matches!(ch, '\r' | '\n' | '\0'))
+            {
+                return Err(invalid());
+            }
+            Some(raw.to_string())
+        }
+    };
+    if custom.bypass.len() > MAX_PROXY_BYPASS_ENTRIES {
+        return Err(invalid());
+    }
+    let mut bypass = Vec::with_capacity(custom.bypass.len());
+    for entry in &custom.bypass {
+        let trimmed = entry.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if trimmed.len() > MAX_PROXY_BYPASS_ENTRY_BYTES
+            || trimmed.chars().any(|ch| ch.is_control() || ch.is_whitespace())
+        {
+            return Err(invalid());
+        }
+        bypass.push(trimmed.to_string());
+    }
+    Ok(CustomProxyUpdate {
+        protocol,
+        host: host.to_string(),
+        port: custom.port,
+        username,
+        password,
+        clear_password: custom.clear_password,
+        bypass,
+    })
+}
+
+pub(crate) fn validate_proxy_update(
+    update: &UiProxyConfigUpdate,
+) -> Result<ProxyConfigUpdate, UiError> {
+    let invalid = || {
+        UiError::invalid(
+            "proxy_invalid",
+            "请检查代理协议、地址、端口、认证信息和旁路规则。",
+        )
+    };
+    let mode = update.mode.trim().to_ascii_lowercase();
+    if !matches!(mode.as_str(), "system" | "direct" | "custom") {
+        return Err(invalid());
+    }
+    let custom = match &update.custom {
+        Some(custom) => Some(validate_custom_proxy_update(custom, update.clear_password)?),
+        None => {
+            if mode == "custom" && !update.clear_password {
+                return Err(invalid());
+            }
+            None
+        }
+    };
+    Ok(ProxyConfigUpdate {
+        mode,
+        custom,
+        clear_password: update.clear_password,
+    })
+}
+
+pub(crate) fn validate_test_proxy_request(
+    request: &UiTestProxyRequest,
+) -> Result<TestProxyRequest, UiError> {
+    let config = request
+        .config
+        .as_ref()
+        .map(validate_proxy_update)
+        .transpose()?;
+    let target = match request.target.as_deref() {
+        None => None,
+        Some(raw) => {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                if trimmed.len() > MAX_PROXY_TARGET_BYTES
+                    || trimmed.chars().any(|ch| ch.is_control() || ch.is_whitespace())
+                    || !trimmed.contains(':')
+                {
+                    return Err(UiError::invalid(
+                        "proxy_target_invalid",
+                        "测试目标格式应为 host:port。",
+                    ));
+                }
+                Some(trimmed.to_string())
+            }
+        }
+    };
+    let scheme = match request.scheme.as_deref() {
+        None => None,
+        Some(raw) => {
+            let trimmed = raw.trim().to_ascii_lowercase();
+            if trimmed.is_empty() {
+                None
+            } else if matches!(
+                trimmed.as_str(),
+                "imap" | "imaps" | "smtp" | "smtps" | "http" | "https" | "raw_tcp"
+            ) {
+                Some(trimmed)
+            } else {
+                return Err(UiError::invalid(
+                    "proxy_target_invalid",
+                    "测试目标格式应为 host:port。",
+                ));
+            }
+        }
+    };
+    Ok(TestProxyRequest {
+        config,
+        use_saved_password: request.use_saved_password,
+        target,
+        scheme,
+    })
+}
+
+/// 全局代理方法错误投影。绝不打印 `error.message`（防对端或参数回显敏感信息），只记录安全元信息。
+/// 老 daemon 不认识 `getProxyConfig` 时返回 `-32601` 或 fail-closed 的 `-32016`（新 daemon 上
+/// `getProxyConfig` 为 `Open`，故读时的 `-32016` 只可能来自老 daemon）。
+pub(crate) fn proxy_error(method: &str, error: maild_client::ClientError) -> UiError {
+    use maild_client::ErrorKind;
+    eprintln!(
+        "[maild-ui] {method} 失败: kind={}, code={:?}",
+        error.kind.as_str(),
+        error.rpc_code
+    );
+    let unsupported = match error.rpc_code {
+        Some(-32601) => true,
+        Some(-32016) => method == "getProxyConfig",
+        _ => false,
+    };
+    if unsupported {
+        return UiError {
+            code: UiErrorCode::Failed,
+            reason: "proxy_unsupported",
+            message: "后台版本不支持全局代理设置。".into(),
+        };
+    }
+    let (code, reason, message) = match (error.kind, error.rpc_code) {
+        (ErrorKind::Connection, _) => (
+            UiErrorCode::Offline,
+            "offline",
+            "后台连接不可用，正在自动重试。",
+        ),
+        (_, Some(-32016)) => (
+            UiErrorCode::Denied,
+            "denied",
+            "当前前端没有执行这项操作的授权。",
+        ),
+        (_, Some(-32001)) => (
+            UiErrorCode::Failed,
+            "proxy_not_persisted",
+            "代理配置文件无法写入，这次更改没有保存。",
+        ),
+        (_, Some(-32602)) => (
+            UiErrorCode::Invalid,
+            "proxy_invalid",
+            "请检查代理协议、地址、端口、认证信息和旁路规则。",
+        ),
+        _ => (UiErrorCode::Failed, "failed", "操作未完成，请稍后重试。"),
+    };
+    UiError {
+        code,
+        reason,
+        message: message.into(),
+    }
 }
 
 /// Never log server text here: probe responses and errors can contain credentials echoed by peers.
@@ -533,6 +993,43 @@ impl Bridge {
             .await?;
         Ok(())
     }
+
+    pub async fn proxy_config(&self) -> Result<UiProxyConfig, UiError> {
+        let result = self
+            .handle()
+            .proxy_config()
+            .await
+            .map_err(|error| proxy_error("getProxyConfig", error))?;
+        Ok(UiProxyConfig::from(result))
+    }
+
+    pub async fn set_proxy_config(
+        &self,
+        update: UiProxyConfigUpdate,
+    ) -> Result<UiProxyConfig, UiError> {
+        let wire = validate_proxy_update(&update)?;
+        self.guard("setProxyConfig")?;
+        let result = self
+            .handle()
+            .set_proxy_config(&wire)
+            .await
+            .map_err(|error| proxy_error("setProxyConfig", error))?;
+        Ok(UiProxyConfig::from(result))
+    }
+
+    pub async fn test_proxy(
+        &self,
+        request: UiTestProxyRequest,
+    ) -> Result<UiTestProxyResult, UiError> {
+        let wire = validate_test_proxy_request(&request)?;
+        self.guard("testProxy")?;
+        let result = self
+            .handle()
+            .test_proxy(&wire)
+            .await
+            .map_err(|error| proxy_error("testProxy", error))?;
+        Ok(UiTestProxyResult::from(result))
+    }
 }
 pub(crate) fn check_kind(kind: &str) -> Result<(), UiError> {
     if matches!(kind, "plugin" | "frontend") {
@@ -632,5 +1129,175 @@ mod tests {
                 "source": "preset"
             })
         );
+    }
+
+    #[test]
+    fn proxy_dtos_never_expose_passwords_and_redact_debug() {
+        let wire = ProxyConfigResult {
+            config: ProxyConfig {
+                mode: "custom".into(),
+                custom: Some(CustomProxyConfig {
+                    protocol: "socks5h".into(),
+                    host: "127.0.0.1".into(),
+                    port: 7890,
+                    username: Some("alice".into()),
+                    password: Some("top-secret-password".into()),
+                    bypass: vec!["*.internal".into()],
+                }),
+            },
+            has_password: true,
+            effective_system: SystemProxySnapshot {
+                http: Some(ProxyEndpointInfo {
+                    protocol: "http".into(),
+                    host: "127.0.0.1".into(),
+                    port: 8080,
+                    username: Some("sys".into()),
+                    password: Some("sys-secret-password".into()),
+                }),
+                source: "env".into(),
+                ..Default::default()
+            },
+            persisted: true,
+        };
+        let ui = UiProxyConfig::from(wire.clone());
+        let json_str = serde_json::to_string(&ui).unwrap();
+        assert!(!json_str.contains("top-secret-password"), "{json_str}");
+        assert!(!json_str.contains("sys-secret-password"), "{json_str}");
+        assert!(!json_str.contains("\"password\""), "{json_str}");
+        assert!(ui.has_password);
+
+        let event = UiProxyEvent::from(ProxyPreferenceChanged {
+            config: wire.config,
+            has_password: true,
+            effective_system: wire.effective_system,
+            persisted: true,
+            generation: 7,
+        });
+        let event_json = serde_json::to_string(&event).unwrap();
+        assert!(!event_json.contains("top-secret-password"), "{event_json}");
+        assert!(!event_json.contains("\"password\""), "{event_json}");
+        assert_eq!(event.generation, 7);
+
+        let upd = UiCustomProxyUpdate {
+            protocol: "socks5h".into(),
+            host: "127.0.0.1".into(),
+            port: 7890,
+            username: Some("alice".into()),
+            password: Some("super-secret-input".into()),
+            clear_password: false,
+            bypass: vec![],
+        };
+        let debug = format!("{upd:?}");
+        assert!(!debug.contains("super-secret-input"), "{debug}");
+        assert!(debug.contains("[REDACTED]"), "{debug}");
+    }
+
+    #[test]
+    fn proxy_errors_handle_old_daemon_and_unpersisted_config() {
+        let rpc = |code: i64| maild_client::ClientError {
+            kind: maild_client::ErrorKind::Rpc,
+            message: "secret-echo-never-shown".into(),
+            rpc_code: Some(code),
+            rpc_data: None,
+        };
+        for code in [-32601, -32016] {
+            let err = proxy_error("getProxyConfig", rpc(code));
+            assert_eq!((err.code, err.reason), (UiErrorCode::Failed, "proxy_unsupported"));
+        }
+        assert_eq!(
+            proxy_error("setProxyConfig", rpc(-32601)).reason,
+            "proxy_unsupported"
+        );
+        assert_eq!(
+            proxy_error("testProxy", rpc(-32601)).reason,
+            "proxy_unsupported"
+        );
+        let denied = proxy_error("setProxyConfig", rpc(-32016));
+        assert_eq!((denied.code, denied.reason), (UiErrorCode::Denied, "denied"));
+        let unpersisted = proxy_error("setProxyConfig", rpc(-32001));
+        assert_eq!(
+            (unpersisted.code, unpersisted.reason),
+            (UiErrorCode::Failed, "proxy_not_persisted")
+        );
+        let invalid = proxy_error("setProxyConfig", rpc(-32602));
+        assert_eq!(
+            (invalid.code, invalid.reason),
+            (UiErrorCode::Invalid, "proxy_invalid")
+        );
+        let offline = proxy_error(
+            "getProxyConfig",
+            maild_client::ClientError::connection("down"),
+        );
+        assert_eq!((offline.code, offline.reason), (UiErrorCode::Offline, "offline"));
+    }
+
+    #[test]
+    fn proxy_update_and_test_validation_reject_bad_inputs() {
+        assert!(validate_proxy_update(&UiProxyConfigUpdate {
+            mode: "system".into(),
+            custom: None,
+            clear_password: false,
+        })
+        .is_ok());
+        assert_eq!(
+            validate_proxy_update(&UiProxyConfigUpdate {
+                mode: "custom".into(),
+                custom: None,
+                clear_password: false,
+            })
+            .unwrap_err()
+            .reason,
+            "proxy_invalid"
+        );
+        assert_eq!(
+            validate_proxy_update(&UiProxyConfigUpdate {
+                mode: "custom".into(),
+                custom: Some(UiCustomProxyUpdate {
+                    protocol: "socks5h".into(),
+                    host: "127.0.0.1".into(),
+                    port: 0,
+                    username: None,
+                    password: None,
+                    clear_password: false,
+                    bypass: vec![],
+                }),
+                clear_password: false,
+            })
+            .unwrap_err()
+            .reason,
+            "proxy_invalid"
+        );
+        assert_eq!(
+            validate_proxy_update(&UiProxyConfigUpdate {
+                mode: "custom".into(),
+                custom: Some(UiCustomProxyUpdate {
+                    protocol: "socks5h".into(),
+                    host: "127.0.0.1".into(),
+                    port: 7890,
+                    username: None,
+                    password: Some("pw".into()),
+                    clear_password: true,
+                    bypass: vec![],
+                }),
+                clear_password: false,
+            })
+            .unwrap_err()
+            .reason,
+            "proxy_invalid"
+        );
+        assert_eq!(
+            validate_test_proxy_request(&UiTestProxyRequest {
+                target: Some("no-port".into()),
+                ..Default::default()
+            })
+            .unwrap_err()
+            .reason,
+            "proxy_target_invalid"
+        );
+        assert!(validate_test_proxy_request(&UiTestProxyRequest {
+            target: Some("imap.gmail.com:993".into()),
+            ..Default::default()
+        })
+        .is_ok());
     }
 }

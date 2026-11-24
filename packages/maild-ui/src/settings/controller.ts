@@ -1,4 +1,5 @@
 import { m } from "@featherpost/i18n/messages";
+import { BridgeError } from "../bridge/errors";
 import { accountLabel } from "./accountLabel";
 
 import type { UiSnapshot } from "../bridge/types";
@@ -17,9 +18,24 @@ import type {
   PackagePreview,
   Packages,
   Probe,
+  ProxyConfigResult,
+  ProxyPreferenceEvent,
   Rules,
   SettingsBridge,
+  SystemProxySnapshot,
+  TestProxyResult,
 } from "./types";
+import {
+  buildProxyUpdate,
+  buildTestProxyRequest,
+  defaultImapTarget,
+  draftFromProxyConfig,
+  parseProxyUrl,
+  serializeProxyDraft,
+  validateProxyDraft,
+  validateTestTarget,
+  type ProxyDraft,
+} from "./proxy";
 import {
   CREDENTIAL_LABEL,
   CUSTOM_PROVIDER,
@@ -117,6 +133,16 @@ export interface SettingsState {
   addressForm: AddressForm | null;
   choice: PackageChoice | null;
   rollback: PackagePreview | null;
+  proxyDraft: ProxyDraft | null;
+  proxyBaseline: string;
+  proxyHasPassword: boolean;
+  proxySystem: SystemProxySnapshot | null;
+  proxyPersisted: boolean | null;
+  proxyUnsupported: boolean;
+  proxyTestTarget: string;
+  proxyTestResult: TestProxyResult | null;
+  proxyTesting: boolean;
+  proxyUrlNotice: string | null;
   confirm: {
     title: string;
     body: string;
@@ -149,24 +175,56 @@ export class SettingsController {
     addressForm: null,
     choice: null,
     rollback: null,
+    proxyDraft: null,
+    proxyBaseline: "",
+    proxyHasPassword: false,
+    proxySystem: null,
+    proxyPersisted: null,
+    proxyUnsupported: false,
+    proxyTestTarget: "",
+    proxyTestResult: null,
+    proxyTesting: false,
+    proxyUrlNotice: null,
     confirm: null,
   });
   private epoch = -1;
   private generation = 0;
   private query = 0;
   private action = 0;
+  private proxyEventGeneration = 0;
+  private proxyTestSeq = 0;
+  private stopProxy: (() => void) | null = null;
+  private disposed = false;
   private confirmation: (() => void) | null = null;
   private confirmationCancel: (() => void) | null = null;
   private confirmationIsClose = false;
   constructor(
     readonly bridge: SettingsBridge,
     private readonly changed: () => void = () => {},
-  ) {}
+  ) {
+    if (bridge.onProxyChanged) {
+      void bridge
+        .onProxyChanged((event) => this.applyProxyEvent(event))
+        .then((stop) => {
+          if (this.disposed) stop();
+          else this.stopProxy = stop;
+        })
+        .catch(() => {});
+    }
+  }
+  get proxyDirty() {
+    const s = this.store.getSnapshot();
+    return !!(
+      s.proxyDraft &&
+      serializeProxyDraft(s.proxyDraft) !== s.proxyBaseline
+    );
+  }
   get dirty() {
     const s = this.store.getSnapshot();
     return !!(
       (s.editor && JSON.stringify(s.editor) !== s.editorBaseline) ||
       (s.rules && JSON.stringify(s.rules) !== s.rulesBaseline) ||
+      this.proxyDirty ||
       s.addressForm ||
       s.choice ||
       s.rollback
@@ -180,6 +238,7 @@ export class SettingsController {
     this.generation++;
     this.query++;
     this.action++;
+    this.proxyTestSeq++;
     this.cancelConfirmation();
     this.store.patch({
       online,
@@ -188,7 +247,13 @@ export class SettingsController {
       probe: null,
       choice: null,
       rollback: null,
+      proxyTesting: false,
+      proxyTestResult: null,
+      proxyUrlNotice: null,
       ...(s.editor ? { editor: { ...s.editor, secrets: {} } } : {}),
+      ...(s.proxyDraft && s.proxyDraft.password !== ""
+        ? { proxyDraft: { ...s.proxyDraft, password: "" } }
+        : {}),
       ...(s.busy
         ? {
             error: m.settings_error_connection_changed(),
@@ -279,6 +344,36 @@ export class SettingsController {
             this.store.patch({ profiles });
         } catch {
           /* 名单缺失时界面显示说明 */
+        }
+      } else if (section === "maild.settings.network") {
+        try {
+          const config = await this.bridge.proxyConfig();
+          if (query !== this.query || generation !== this.generation) return;
+          this.applyProxySnapshot(config);
+        } catch (e) {
+          if (query !== this.query || generation !== this.generation) return;
+          if (
+            e instanceof BridgeError &&
+            e.detail.reason === "proxy_unsupported"
+          ) {
+            this.store.patch({
+              proxyUnsupported: true,
+              proxyDraft: null,
+              proxyBaseline: "",
+              proxyTestResult: null,
+              proxyUrlNotice: null,
+              error: null,
+            });
+            return;
+          }
+          throw e;
+        }
+        try {
+          const profiles = await this.bridge.profiles();
+          if (query === this.query && generation === this.generation)
+            this.store.patch({ profiles });
+        } catch {
+          /* 账户名单不可用时仍允许手动输入测试目标 */
         }
       }
     } catch (e) {
@@ -604,6 +699,229 @@ export class SettingsController {
   setRules(rules: Rules) {
     if (!this.store.getSnapshot().busy && !this.store.getSnapshot().closeLocked)
       this.store.patch({ rules });
+  }
+  private applyProxySnapshot(result: ProxyConfigResult) {
+    const nextDraft = draftFromProxyConfig(result);
+    const nextBaseline = serializeProxyDraft(nextDraft);
+    const keepDraft = this.proxyDirty;
+    this.store.patch({
+      proxySystem: result.effective_system,
+      proxyPersisted: result.persisted,
+      proxyHasPassword: result.has_password,
+      proxyUnsupported: false,
+      proxyBaseline: nextBaseline,
+      ...(keepDraft ? {} : { proxyDraft: nextDraft, proxyUrlNotice: null }),
+    });
+  }
+  applyProxyEvent(event: ProxyPreferenceEvent) {
+    if (this.disposed) return;
+    if (event.generation > 0 && event.generation < this.proxyEventGeneration) {
+      return;
+    }
+    if (event.generation > this.proxyEventGeneration) {
+      this.proxyEventGeneration = event.generation;
+    }
+    this.applyProxySnapshot(event);
+  }
+  editProxy(patch: Partial<ProxyDraft>) {
+    const s = this.store.getSnapshot();
+    if (
+      !s.proxyDraft ||
+      s.busy ||
+      s.closeLocked ||
+      s.proxyUnsupported ||
+      s.proxyPersisted === false
+    )
+      return;
+    const next: ProxyDraft = { ...s.proxyDraft, ...patch };
+    if (patch.password !== undefined && patch.password.length > 0) {
+      next.clearPassword = false;
+    }
+    this.store.patch({
+      proxyDraft: next,
+      proxyTestResult: null,
+      proxyUrlNotice: null,
+      error: null,
+    });
+  }
+  setProxyHost(raw: string) {
+    const s = this.store.getSnapshot();
+    if (
+      !s.proxyDraft ||
+      s.busy ||
+      s.closeLocked ||
+      s.proxyUnsupported ||
+      s.proxyPersisted === false
+    )
+      return;
+    const parsed = parseProxyUrl(raw);
+    if (parsed) {
+      const next: ProxyDraft = {
+        ...s.proxyDraft,
+        protocol: parsed.protocol,
+        host: parsed.host,
+        port: parsed.port,
+        ...(parsed.username !== null || parsed.password !== null
+          ? {
+              authEnabled: true,
+              username: parsed.username ?? s.proxyDraft.username,
+              password: parsed.password ?? s.proxyDraft.password,
+              clearPassword: false,
+            }
+          : {}),
+      };
+      this.store.patch({
+        proxyDraft: next,
+        proxyTestResult: null,
+        proxyUrlNotice: m.settings_proxy_url_parsed(),
+        error: null,
+      });
+      return;
+    }
+    this.editProxy({ host: raw });
+  }
+  toggleProxyAuth(enabled: boolean) {
+    if (enabled) {
+      this.editProxy({ authEnabled: true });
+    } else {
+      this.editProxy({
+        authEnabled: false,
+        username: "",
+        password: "",
+        clearPassword: false,
+      });
+    }
+  }
+  clearSavedProxyPassword() {
+    this.editProxy({ password: "", clearPassword: true });
+  }
+  undoClearSavedProxyPassword() {
+    this.editProxy({ clearPassword: false });
+  }
+  setProxyTestTarget(target: string) {
+    if (this.store.getSnapshot().closeLocked) return;
+    this.store.patch({
+      proxyTestTarget: target,
+      proxyTestResult: null,
+      error: null,
+    });
+  }
+  async saveProxy() {
+    const s = this.store.getSnapshot();
+    const draft = s.proxyDraft;
+    if (
+      !draft ||
+      !s.online ||
+      s.busy ||
+      s.closeLocked ||
+      s.proxyUnsupported ||
+      s.proxyPersisted === false
+    )
+      return;
+    const validation = validateProxyDraft(draft);
+    if (validation) {
+      this.store.patch({ error: validation });
+      return;
+    }
+    const update = buildProxyUpdate(draft, s.proxyHasPassword);
+    const generation = this.generation;
+    const action = ++this.action;
+    this.query++;
+    this.store.patch({ busy: true, loading: false, error: null, notice: null });
+    try {
+      const res = await this.bridge.setProxyConfig(update);
+      if (generation !== this.generation || action !== this.action) return;
+      const nextDraft = draftFromProxyConfig(res);
+      this.store.patch({
+        proxyDraft: nextDraft,
+        proxyBaseline: serializeProxyDraft(nextDraft),
+        proxyHasPassword: res.has_password,
+        proxySystem: res.effective_system,
+        proxyPersisted: res.persisted,
+        proxyUnsupported: false,
+        proxyTestResult: null,
+        proxyUrlNotice: null,
+        notice: m.settings_proxy_saved(),
+      });
+      this.changed();
+    } catch (e) {
+      if (generation !== this.generation || action !== this.action) return;
+      const now = this.store.getSnapshot().proxyDraft;
+      const clearMemoryPassword =
+        now && now.password !== ""
+          ? { proxyDraft: { ...now, password: "" } }
+          : {};
+      if (e instanceof BridgeError && e.detail.reason === "proxy_unsupported") {
+        this.store.patch({
+          ...clearMemoryPassword,
+          proxyUnsupported: true,
+          error: null,
+        });
+      } else {
+        this.store.patch({
+          ...clearMemoryPassword,
+          error: failure(e),
+        });
+      }
+    } finally {
+      if (generation === this.generation && action === this.action)
+        this.store.patch({ busy: false });
+    }
+  }
+  async testProxy() {
+    const s = this.store.getSnapshot();
+    if (
+      !s.online ||
+      s.busy ||
+      s.proxyTesting ||
+      s.closeLocked ||
+      s.proxyUnsupported
+    )
+      return;
+    const dirty = this.proxyDirty;
+    if (dirty && s.proxyDraft) {
+      const validation = validateProxyDraft(s.proxyDraft);
+      if (validation) {
+        this.store.patch({ error: validation });
+        return;
+      }
+    }
+    const rawTarget = s.proxyTestTarget.trim();
+    const fallbackTarget = defaultImapTarget(s.profiles);
+    if (rawTarget) {
+      const targetErr = validateTestTarget(rawTarget);
+      if (targetErr) {
+        this.store.patch({ error: targetErr });
+        return;
+      }
+    } else if (!fallbackTarget) {
+      this.store.patch({ error: m.settings_proxy_error_target_required() });
+      return;
+    }
+    const request = buildTestProxyRequest(
+      s.proxyDraft,
+      dirty,
+      s.proxyHasPassword,
+      rawTarget || null,
+    );
+    const generation = this.generation;
+    const seq = ++this.proxyTestSeq;
+    this.store.patch({ proxyTesting: true, proxyTestResult: null, error: null });
+    try {
+      const result = await this.bridge.testProxy(request);
+      if (generation !== this.generation || seq !== this.proxyTestSeq) return;
+      this.store.patch({ proxyTestResult: result });
+    } catch (e) {
+      if (generation !== this.generation || seq !== this.proxyTestSeq) return;
+      if (e instanceof BridgeError && e.detail.reason === "proxy_unsupported") {
+        this.store.patch({ proxyUnsupported: true, error: null });
+      } else {
+        this.store.patch({ error: failure(e) });
+      }
+    } finally {
+      if (generation === this.generation && seq === this.proxyTestSeq)
+        this.store.patch({ proxyTesting: false });
+    }
   }
   private async write<T>(
     work: () => Promise<T>,
@@ -1089,6 +1407,15 @@ export class SettingsController {
   discard() {
     this.cancelPackage();
     const s = this.store.getSnapshot();
+    const restoredProxy = s.proxyBaseline
+      ? {
+          ...(JSON.parse(s.proxyBaseline) as ProxyDraft),
+          password: "",
+          clearPassword: false,
+        }
+      : s.proxyDraft
+        ? { ...s.proxyDraft, password: "", clearPassword: false }
+        : null;
     this.store.patch({
       editor: null,
       probe: null,
@@ -1097,6 +1424,9 @@ export class SettingsController {
       ...(s.rulesBaseline
         ? { rules: JSON.parse(s.rulesBaseline) as Rules }
         : {}),
+      ...(restoredProxy ? { proxyDraft: restoredProxy } : {}),
+      proxyTestResult: null,
+      proxyUrlNotice: null,
       error: null,
     });
   }
@@ -1104,8 +1434,12 @@ export class SettingsController {
     await this.load();
   }
   dispose() {
+    this.disposed = true;
+    this.stopProxy?.();
+    this.stopProxy = null;
     this.generation++;
     this.query++;
+    this.proxyTestSeq++;
     this.cancelConfirmation();
     this.discard();
   }

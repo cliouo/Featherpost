@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { SettingsController } from "./controller";
 import { Accounts } from "./Accounts";
 import { Addresses } from "./Addresses";
+import { NetworkProxy } from "./NetworkProxy";
 import { Notifications } from "./Notifications";
 import { Extensions as ManagedExtensions } from "./Extensions";
 import { Dialog } from "../mailbox/Dialog";
@@ -503,6 +504,14 @@ export function settingsModule(
         },
         order: 10,
         render: Appearance,
+      },
+      {
+        id: "maild.settings.network",
+        get title() {
+          return m.settings_section_network();
+        },
+        order: 80,
+        render: () => <NetworkProxy controller={controller} />,
       },
       {
         id: "maild.settings.connection",

@@ -207,6 +207,29 @@ pub(crate) async fn ui_set_locale_preference(
     crate::shell_locale::after_set(&app, result).await
 }
 
+#[tauri::command(rename_all = "snake_case")]
+pub(crate) async fn ui_proxy_config(
+    state: State<'_, AppState>,
+) -> Result<crate::settings::UiProxyConfig, UiError> {
+    state.bridge.proxy_config().await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub(crate) async fn ui_set_proxy_config(
+    state: State<'_, AppState>,
+    update: crate::settings::UiProxyConfigUpdate,
+) -> Result<crate::settings::UiProxyConfig, UiError> {
+    state.bridge.set_proxy_config(update).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub(crate) async fn ui_test_proxy(
+    state: State<'_, AppState>,
+    request: crate::settings::UiTestProxyRequest,
+) -> Result<crate::settings::UiTestProxyResult, UiError> {
+    state.bridge.test_proxy(request).await
+}
+
 // ADR-0036: compose commands. No generic RPC or local-path entry point is exposed.
 #[tauri::command]
 pub(crate) async fn ui_senders(

@@ -166,6 +166,71 @@ export type PackageAction =
   | { action: "remove"; kind: PackageKind; id: string }
   | { action: "open" | "default"; id: string }
   | { action: "refresh" | "recovery" };
+export type ProxyMode = "system" | "direct" | "custom";
+export type ProxyProtocol = "socks5h" | "socks5" | "http" | "https";
+export interface ProxyEndpointInfo {
+  protocol: string;
+  host: string;
+  port: number;
+  username?: string | null;
+}
+export interface CustomProxyConfig {
+  protocol: ProxyProtocol | string;
+  host: string;
+  port: number;
+  username?: string | null;
+  bypass: string[];
+}
+export interface ProxyConfig {
+  mode: ProxyMode | string;
+  custom?: CustomProxyConfig | null;
+}
+export interface SystemProxySnapshot {
+  http?: ProxyEndpointInfo | null;
+  https?: ProxyEndpointInfo | null;
+  socks5?: ProxyEndpointInfo | null;
+  bypass: string[];
+  exclude_simple_hostnames: boolean;
+  pac_url?: string | null;
+  source: string;
+}
+export interface ProxyConfigResult {
+  config: ProxyConfig;
+  has_password: boolean;
+  effective_system: SystemProxySnapshot;
+  persisted: boolean;
+}
+export interface ProxyPreferenceEvent extends ProxyConfigResult {
+  generation: number;
+}
+export interface CustomProxyUpdate {
+  protocol: ProxyProtocol;
+  host: string;
+  port: number;
+  username?: string | null;
+  password?: string | null;
+  clear_password?: boolean;
+  bypass: string[];
+}
+export interface ProxyConfigUpdate {
+  mode: ProxyMode;
+  custom?: CustomProxyUpdate | null;
+  clear_password?: boolean;
+}
+export interface TestProxyRequest {
+  config?: ProxyConfigUpdate | null;
+  use_saved_password?: boolean;
+  target?: string | null;
+  scheme?: string | null;
+}
+export interface TestProxyResult {
+  ok: boolean;
+  route: string;
+  stage: string;
+  latency_ms: number;
+  detail_code?: string | null;
+  detail: string;
+}
 export interface SettingsBridge {
   profiles(): Promise<AccountProfile[]>;
   probe(request: AccountEdit): Promise<Probe>;
@@ -185,6 +250,11 @@ export interface SettingsBridge {
   ): Promise<{ id: string; version: string; action: string }>;
   rollbackPreview(kind: PackageKind, id: string): Promise<PackagePreview>;
   rollback(preview: PackagePreview): Promise<void>;
+  proxyConfig(): Promise<ProxyConfigResult>;
+  setProxyConfig(update: ProxyConfigUpdate): Promise<ProxyConfigResult>;
+  testProxy(request: TestProxyRequest): Promise<TestProxyResult>;
+  /** 订阅 `maild://proxy` 推送（不含密码）；可选以兼容不推送的测试桩。 */
+  onProxyChanged?(handler: (event: ProxyPreferenceEvent) => void): Promise<() => void>;
   /** 可选：后端按域名发现收发服务器；未提供或失败时界面按惯例预填。 */
   discoverProvider?(address: string): Promise<DiscoveredServers | null>;
   /** 可选：经宿主安全打开服务商官方帮助页（仅 https）。 */

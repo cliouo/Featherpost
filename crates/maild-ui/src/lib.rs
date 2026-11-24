@@ -43,7 +43,7 @@ use tauri::{Emitter as _, Manager as _, Url, WindowEvent};
 use bridge::UiLink;
 pub use bridge::{
     Bridge, UiError, UiErrorCode, UiLocale, UiSnapshot, FRONTEND_ID, INTENT_EVENT, LINK_EVENT,
-    LOCALE_EVENT, STATE_EVENT,
+    LOCALE_EVENT, PROXY_EVENT, STATE_EVENT,
 };
 use documents::{
     document_response, navigation_verdict, not_found, part_response, route, DocumentStore,
@@ -70,6 +70,7 @@ pub fn run(bridge: Arc<Bridge>) -> Result<(), tauri::Error> {
     let documents = Arc::new(DocumentStore::new());
     let base = ProtocolBase::for_platform();
     let for_setup = bridge.clone();
+    let for_proxy = bridge.clone();
     let for_focus = bridge.clone();
     let for_exit = bridge.clone();
     let documents_for_window = documents.clone();
@@ -183,6 +184,9 @@ pub fn run(bridge: Arc<Bridge>) -> Result<(), tauri::Error> {
             commands::ui_locale,
             commands::ui_locale_preference,
             commands::ui_set_locale_preference,
+            commands::ui_proxy_config,
+            commands::ui_set_proxy_config,
+            commands::ui_test_proxy,
             commands::ui_sync_mailbox,
             commands::ui_sync_mailbox_scope,
             commands::ui_mailbox_sync_status,
@@ -205,6 +209,7 @@ pub fn run(bridge: Arc<Bridge>) -> Result<(), tauri::Error> {
             #[cfg(target_os = "macos")]
             macos_window::install_terminate_handler(app.handle().clone());
             spawn_state_pump(app.handle().clone(), for_setup);
+            spawn_proxy_pump(app.handle().clone(), for_proxy);
             Ok(())
         })
         .on_window_event(move |window, event| {
@@ -526,6 +531,33 @@ fn spawn_state_pump(app: tauri::AppHandle, bridge: Arc<Bridge>) {
                     }
                 }
                 () = bridge.compat_changed() => {}
+            }
+        }
+    });
+}
+
+/// 转发后台的 `preferences/proxy` 推送事件给 webview（不含任何密码）。
+fn spawn_proxy_pump(app: tauri::AppHandle, bridge: Arc<Bridge>) {
+    tauri::async_runtime::spawn(async move {
+        let mut events = bridge.subscribe_events();
+        loop {
+            match events.recv().await {
+                Ok(maild_app::AppEvent::Notification(
+                    maild_client::ServerNotification::ProxyPreference(event),
+                )) => {
+                    let payload = settings::UiProxyEvent::from(*event);
+                    if let Err(error) = app.emit(PROXY_EVENT, &payload) {
+                        eprintln!("[maild-ui] 推送代理偏好事件失败: {error}");
+                    }
+                }
+                Ok(_) => {}
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                    if let Ok(config) = bridge.proxy_config().await {
+                        let payload = settings::UiProxyEvent::from_config(config, 0);
+                        let _ = app.emit(PROXY_EVENT, &payload);
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
             }
         }
     });

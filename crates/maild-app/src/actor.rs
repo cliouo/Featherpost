@@ -649,9 +649,14 @@ impl Actor {
                     let _ = self.events.send(AppEvent::Notification(notification));
                     return Ok(None);
                 }
-                // 全局代理偏好变化不进快照缓冲，直接转发给前端/插件监听方。
-                if matches!(notification, ServerNotification::ProxyPreference(_)) {
-                    let _ = self.events.send(AppEvent::Notification(notification));
+                // 全局代理偏好变化不进快照缓冲，防卫性剥离任何密码后直接转发给前端/插件监听方。
+                if let ServerNotification::ProxyPreference(mut event) = notification {
+                    strip_proxy_event_secrets(&mut event);
+                    let _ = self
+                        .events
+                        .send(AppEvent::Notification(ServerNotification::ProxyPreference(
+                            event,
+                        )));
                     return Ok(None);
                 }
                 let synchronizing = snapshot.is_some();
@@ -1176,9 +1181,38 @@ fn notification_bytes(notification: &ServerNotification) -> usize {
         ServerNotification::LocalePreference { effective } => effective
             .iter()
             .fold(OVERHEAD, |total, tag| total.saturating_add(tag.len())),
-        ServerNotification::ProxyPreference(event) => OVERHEAD
-            .saturating_add(event.config.mode.len())
-            .saturating_add(event.effective_system.source.len()),
+        ServerNotification::ProxyPreference(event) => {
+            let mut total = OVERHEAD
+                .saturating_add(event.config.mode.len())
+                .saturating_add(event.effective_system.source.len())
+                .saturating_add(event.effective_system.pac_url.as_deref().map_or(0, str::len));
+            if let Some(custom) = &event.config.custom {
+                total = total
+                    .saturating_add(custom.protocol.len())
+                    .saturating_add(custom.host.len())
+                    .saturating_add(custom.username.as_deref().map_or(0, str::len));
+                for entry in &custom.bypass {
+                    total = total.saturating_add(entry.len());
+                }
+            }
+            for endpoint in [
+                event.effective_system.http.as_ref(),
+                event.effective_system.https.as_ref(),
+                event.effective_system.socks5.as_ref(),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                total = total
+                    .saturating_add(endpoint.protocol.len())
+                    .saturating_add(endpoint.host.len())
+                    .saturating_add(endpoint.username.as_deref().map_or(0, str::len));
+            }
+            for entry in &event.effective_system.bypass {
+                total = total.saturating_add(entry.len());
+            }
+            total
+        }
         ServerNotification::Unknown(value) => OVERHEAD
             .saturating_add(value.method.len())
             .saturating_add(value.params.to_string().len()),
@@ -1305,11 +1339,7 @@ fn validate_notification(notification: &ServerNotification) -> Result<(), Client
             MAX_NOTIFICATION_TEXT_BYTES,
         ),
         ServerNotification::LocalePreference { effective } => validate_locale(effective),
-        ServerNotification::ProxyPreference(event) => validate_text(
-            "preferences/proxy mode",
-            &event.config.mode,
-            MAX_NOTIFICATION_TEXT_BYTES,
-        ),
+        ServerNotification::ProxyPreference(event) => validate_proxy_preference(event),
         ServerNotification::AgentStopping | ServerNotification::Unknown(_) => Ok(()),
     }
 }
@@ -1329,6 +1359,111 @@ fn validate_locale(effective: &[String]) -> Result<(), ClientError> {
         validate_text("语言标签", tag, MAX_LOCALE_TAG_BYTES)?;
     }
     Ok(())
+}
+
+const MAX_PROXY_BYPASS_ENTRIES: usize = 512;
+
+fn validate_proxy_endpoint(
+    label: &str,
+    endpoint: &maild_client::ProxyEndpointInfo,
+) -> Result<(), ClientError> {
+    validate_text(label, &endpoint.protocol, MAX_NOTIFICATION_TEXT_BYTES)?;
+    validate_text(label, &endpoint.host, MAX_NOTIFICATION_TEXT_BYTES)?;
+    if let Some(username) = &endpoint.username {
+        validate_text(label, username, MAX_NOTIFICATION_TEXT_BYTES)?;
+    }
+    Ok(())
+}
+
+fn validate_proxy_preference(
+    event: &maild_client::ProxyPreferenceChanged,
+) -> Result<(), ClientError> {
+    validate_text(
+        "preferences/proxy mode",
+        &event.config.mode,
+        MAX_NOTIFICATION_TEXT_BYTES,
+    )?;
+    if let Some(custom) = &event.config.custom {
+        validate_text(
+            "preferences/proxy protocol",
+            &custom.protocol,
+            MAX_NOTIFICATION_TEXT_BYTES,
+        )?;
+        validate_text(
+            "preferences/proxy host",
+            &custom.host,
+            MAX_NOTIFICATION_TEXT_BYTES,
+        )?;
+        if let Some(username) = &custom.username {
+            validate_text(
+                "preferences/proxy username",
+                username,
+                MAX_NOTIFICATION_TEXT_BYTES,
+            )?;
+        }
+        if custom.bypass.len() > MAX_PROXY_BYPASS_ENTRIES {
+            return Err(ClientError::rpc(format!(
+                "preferences/proxy bypass 超过 {MAX_PROXY_BYPASS_ENTRIES} 条上限"
+            )));
+        }
+        for entry in &custom.bypass {
+            validate_text(
+                "preferences/proxy bypass",
+                entry,
+                MAX_NOTIFICATION_TEXT_BYTES,
+            )?;
+        }
+    }
+    validate_text(
+        "preferences/proxy source",
+        &event.effective_system.source,
+        MAX_NOTIFICATION_TEXT_BYTES,
+    )?;
+    if let Some(pac_url) = &event.effective_system.pac_url {
+        validate_text(
+            "preferences/proxy pac_url",
+            pac_url,
+            MAX_NOTIFICATION_TEXT_BYTES,
+        )?;
+    }
+    if let Some(http) = &event.effective_system.http {
+        validate_proxy_endpoint("preferences/proxy system.http", http)?;
+    }
+    if let Some(https) = &event.effective_system.https {
+        validate_proxy_endpoint("preferences/proxy system.https", https)?;
+    }
+    if let Some(socks5) = &event.effective_system.socks5 {
+        validate_proxy_endpoint("preferences/proxy system.socks5", socks5)?;
+    }
+    if event.effective_system.bypass.len() > MAX_PROXY_BYPASS_ENTRIES {
+        return Err(ClientError::rpc(format!(
+            "preferences/proxy system bypass 超过 {MAX_PROXY_BYPASS_ENTRIES} 条上限"
+        )));
+    }
+    for entry in &event.effective_system.bypass {
+        validate_text(
+            "preferences/proxy system bypass",
+            entry,
+            MAX_NOTIFICATION_TEXT_BYTES,
+        )?;
+    }
+    Ok(())
+}
+
+fn strip_proxy_event_secrets(event: &mut maild_client::ProxyPreferenceChanged) {
+    if let Some(custom) = &mut event.config.custom {
+        custom.password = None;
+    }
+    for endpoint in [
+        event.effective_system.http.as_mut(),
+        event.effective_system.https.as_mut(),
+        event.effective_system.socks5.as_mut(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        endpoint.password = None;
+    }
 }
 
 /// `getLocalePreference` 应答（ADR-0048）。只取 `effective`：偏好模式由设置页按需另取。
@@ -2799,6 +2934,95 @@ mod tests {
             bytes.extend_from_slice(&chunk[..read]);
         }
         serde_json::from_slice(&bytes[header_end..header_end + content_length]).unwrap()
+    }
+
+    #[test]
+    fn proxy_preference_push_strips_secrets_and_broadcasts_immediately() {
+        let (mut actor, _cmd_tx, _state_rx, mut events, _shutdown) = test_actor();
+        let mut pending = BTreeMap::new();
+        let mut snapshot = Some(SnapshotTracker::new());
+        let mut synchronized = false;
+
+        let notification = maild_client::Notification {
+            method: maild_client::PROXY_PREFERENCE_NOTIFICATION.into(),
+            params: json!({
+                "config": {
+                    "mode": "custom",
+                    "custom": {
+                        "protocol": "socks5h",
+                        "host": "127.0.0.1",
+                        "port": 7890,
+                        "username": "alice",
+                        "password": "must-never-leak-through-actor",
+                        "bypass": ["*.local"]
+                    }
+                },
+                "has_password": true,
+                "effective_system": {
+                    "http": {
+                        "protocol": "http",
+                        "host": "127.0.0.1",
+                        "port": 8080,
+                        "username": "sys",
+                        "password": "sys-secret-must-be-stripped"
+                    },
+                    "bypass": [],
+                    "exclude_simple_hostnames": false,
+                    "source": "env"
+                },
+                "persisted": true,
+                "generation": 4
+            }),
+        };
+
+        let follow_up = actor
+            .handle_incoming(
+                Incoming::Notification(notification),
+                &mut pending,
+                &mut snapshot,
+                &mut synchronized,
+                true,
+            )
+            .unwrap();
+        assert!(follow_up.is_none());
+        assert!(
+            snapshot.as_ref().unwrap().buffered.is_empty(),
+            "preferences/proxy 不应进入快照缓冲"
+        );
+
+        let AppEvent::Notification(ServerNotification::ProxyPreference(event)) =
+            events.try_recv().unwrap()
+        else {
+            panic!("expected ProxyPreference event");
+        };
+        assert_eq!(event.generation, 4);
+        assert!(event.has_password);
+        assert_eq!(event.config.custom.as_ref().unwrap().password, None);
+        assert_eq!(
+            event.effective_system.http.as_ref().unwrap().password,
+            None
+        );
+        let serialized = serde_json::to_string(&event).unwrap();
+        assert!(!serialized.contains("must-never-leak-through-actor"));
+        assert!(!serialized.contains("sys-secret-must-be-stripped"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn proxy_rpc_returns_method_not_found_on_old_daemon() {
+        let server = identity_server::start(identity_server::Mode::Honest).await;
+        let handle = ConnectionHandle::spawn(
+            Endpoint::Unix {
+                path: server.path.clone(),
+            },
+            shell_options(),
+        )
+        .unwrap();
+        let mut state = handle.subscribe_state();
+        wait_until(&mut state, |s| s.phase == ConnectionPhase::Online).await;
+        let err = handle.proxy_config().await.unwrap_err();
+        assert_eq!(err.rpc_code, Some(-32601));
+        handle.shutdown().await.unwrap();
     }
 
     async fn write_http_result(stream: &mut tokio::net::TcpStream, request: &Value, result: Value) {
