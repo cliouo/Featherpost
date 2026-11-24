@@ -208,6 +208,15 @@ impl Notification {
                         ))
                     })
             }
+            PROXY_PREFERENCE_NOTIFICATION => {
+                serde_json::from_value::<ProxyPreferenceChanged>(self.params)
+                    .map(|event| ServerNotification::ProxyPreference(Box::new(event)))
+                    .map_err(|error| {
+                        ClientError::rpc(format!(
+                            "{PROXY_PREFERENCE_NOTIFICATION} 通知参数无效: {error}"
+                        ))
+                    })
+            }
             _ => Ok(ServerNotification::Unknown(self)),
         }
     }
@@ -228,15 +237,47 @@ impl Notification {
                 })
         })
     }
+
+    /// `preferences/proxy` 的类型化解码。不是这条通知时返回 `None`。
+    pub fn proxy_preference_changed(
+        &self,
+    ) -> Option<Result<ProxyPreferenceChanged, ClientError>> {
+        (self.method == PROXY_PREFERENCE_NOTIFICATION).then(|| {
+            serde_json::from_value::<ProxyPreferenceChanged>(self.params.clone())
+                .map_err(|error| {
+                    ClientError::rpc(format!(
+                        "{PROXY_PREFERENCE_NOTIFICATION} 通知参数无效: {error}"
+                    ))
+                })
+        })
+    }
 }
 
 /// ADR-0048：语言偏好变化通知的 method 名。
 pub const LOCALE_PREFERENCE_NOTIFICATION: &str = "preferences/locale";
 
+/// 全局代理偏好变化通知的 method 名。
+pub const PROXY_PREFERENCE_NOTIFICATION: &str = "preferences/proxy";
+
 /// `preferences/locale` 的参数：新的解析后有序语言列表（永不为空）。未知字段忽略，便于 additive 扩展。
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 pub struct LocalePreferenceChanged {
     pub effective: Vec<String>,
+}
+
+/// `preferences/proxy` 的参数：非秘密代理摘要 + 单调递增 `generation`。
+#[derive(Clone, Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
+pub struct ProxyPreferenceChanged {
+    #[serde(default)]
+    pub config: ProxyConfig,
+    #[serde(default)]
+    pub has_password: bool,
+    #[serde(default)]
+    pub effective_system: SystemProxySnapshot,
+    #[serde(default)]
+    pub persisted: bool,
+    #[serde(default)]
+    pub generation: u64,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
@@ -511,6 +552,8 @@ pub enum ServerNotification {
     LocalePreference {
         effective: Vec<String>,
     },
+    /// 全局代理偏好或系统代理变化（非秘密摘要 + `generation`）。装箱避免撑大整个枚举。
+    ProxyPreference(Box<ProxyPreferenceChanged>),
     Unknown(Notification),
 }
 
@@ -1250,6 +1293,200 @@ impl LocalePreferenceUpdate {
             languages: Some(languages.into_iter().map(Into::into).collect()),
         }
     }
+}
+
+/// 单个代理服务器端点 DTO（Debug 脱敏，不输出密码）。
+#[derive(Clone, Default, Deserialize, Serialize, Eq, PartialEq)]
+pub struct ProxyEndpointInfo {
+    #[serde(default)]
+    pub protocol: String,
+    #[serde(default)]
+    pub host: String,
+    #[serde(default)]
+    pub port: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub password: Option<String>,
+}
+
+impl std::fmt::Debug for ProxyEndpointInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProxyEndpointInfo")
+            .field("protocol", &self.protocol)
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("username", &self.username)
+            .field("password", &self.password.as_ref().map(|_| "[REDACTED]"))
+            .finish()
+    }
+}
+
+/// 自定义代理配置 DTO（Debug 脱敏，不输出密码）。
+#[derive(Clone, Default, Deserialize, Serialize, Eq, PartialEq)]
+pub struct CustomProxyConfig {
+    #[serde(default)]
+    pub protocol: String,
+    #[serde(default)]
+    pub host: String,
+    #[serde(default)]
+    pub port: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub password: Option<String>,
+    #[serde(default)]
+    pub bypass: Vec<String>,
+}
+
+impl std::fmt::Debug for CustomProxyConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CustomProxyConfig")
+            .field("protocol", &self.protocol)
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("username", &self.username)
+            .field("password", &self.password.as_ref().map(|_| "[REDACTED]"))
+            .field("bypass", &self.bypass)
+            .finish()
+    }
+}
+
+/// 全局代理配置 DTO。
+#[derive(Clone, Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
+pub struct ProxyConfig {
+    #[serde(default)]
+    pub mode: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom: Option<CustomProxyConfig>,
+}
+
+/// 操作系统 / 环境变量检测到的有效系统代理快照。
+#[derive(Clone, Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
+pub struct SystemProxySnapshot {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub http: Option<ProxyEndpointInfo>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub https: Option<ProxyEndpointInfo>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub socks5: Option<ProxyEndpointInfo>,
+    #[serde(default)]
+    pub bypass: Vec<String>,
+    #[serde(default)]
+    pub exclude_simple_hostnames: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pac_url: Option<String>,
+    #[serde(default)]
+    pub source: String,
+}
+
+/// `getProxyConfig` / `setProxyConfig` 应答。
+#[derive(Clone, Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
+pub struct ProxyConfigResult {
+    #[serde(default)]
+    pub config: ProxyConfig,
+    #[serde(default)]
+    pub has_password: bool,
+    #[serde(default)]
+    pub effective_system: SystemProxySnapshot,
+    #[serde(default)]
+    pub persisted: bool,
+}
+
+/// `setProxyConfig` / `testProxy` 的自定义代理更新项。
+#[derive(Clone, Default, Serialize, Eq, PartialEq)]
+pub struct CustomProxyUpdate {
+    pub protocol: String,
+    pub host: String,
+    pub port: u16,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub password: Option<String>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub clear_password: bool,
+    #[serde(default)]
+    pub bypass: Vec<String>,
+}
+
+impl std::fmt::Debug for CustomProxyUpdate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CustomProxyUpdate")
+            .field("protocol", &self.protocol)
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("username", &self.username)
+            .field("password", &self.password.as_ref().map(|_| "[REDACTED]"))
+            .field("clear_password", &self.clear_password)
+            .field("bypass", &self.bypass)
+            .finish()
+    }
+}
+
+/// `setProxyConfig` 参数。
+#[derive(Clone, Debug, Serialize, Eq, PartialEq)]
+pub struct ProxyConfigUpdate {
+    pub mode: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub custom: Option<CustomProxyUpdate>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub clear_password: bool,
+}
+
+impl ProxyConfigUpdate {
+    pub fn system() -> Self {
+        Self {
+            mode: "system".into(),
+            custom: None,
+            clear_password: false,
+        }
+    }
+
+    pub fn direct() -> Self {
+        Self {
+            mode: "direct".into(),
+            custom: None,
+            clear_password: false,
+        }
+    }
+
+    pub fn custom(custom: CustomProxyUpdate) -> Self {
+        Self {
+            mode: "custom".into(),
+            custom: Some(custom),
+            clear_password: false,
+        }
+    }
+}
+
+/// `testProxy` 参数。
+#[derive(Clone, Debug, Default, Serialize, Eq, PartialEq)]
+pub struct TestProxyRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config: Option<ProxyConfigUpdate>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub use_saved_password: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scheme: Option<String>,
+}
+
+/// `testProxy` 应答。
+#[derive(Clone, Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
+pub struct TestProxyResult {
+    #[serde(default)]
+    pub ok: bool,
+    #[serde(default)]
+    pub route: String,
+    #[serde(default)]
+    pub stage: String,
+    #[serde(default)]
+    pub latency_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail_code: Option<String>,
+    #[serde(default)]
+    pub detail: String,
 }
 
 /// 按已收字节推进 `offset` 循环取块，拼成完整附件。两道护栏：应答 `size` 中途改变即报错；
@@ -2884,6 +3121,37 @@ impl RpcClient {
         let params = serde_json::to_value(update)
             .map_err(|error| ClientError::rpc(format!("语言偏好参数序列化失败: {error}")))?;
         self.call_typed("setLocalePreference", params).await
+    }
+
+    /// 读取全局代理配置（不含密码）及系统代理快照。
+    pub async fn proxy_config(&self) -> Result<ProxyConfigResult, ClientError> {
+        self.call_typed("getProxyConfig", json!({})).await
+    }
+
+    /// 读取全局代理配置并包含密码（仅允许本地流式 IPC 传输，HTTP 端点会拒绝）。
+    pub async fn proxy_config_with_secret(&self) -> Result<ProxyConfigResult, ClientError> {
+        self.call_typed("getProxyConfig", json!({ "include_secret": true }))
+            .await
+    }
+
+    /// 更新并持久化全局代理配置。
+    pub async fn set_proxy_config(
+        &self,
+        update: &ProxyConfigUpdate,
+    ) -> Result<ProxyConfigResult, ClientError> {
+        let params = serde_json::to_value(update)
+            .map_err(|error| ClientError::rpc(format!("代理配置参数序列化失败: {error}")))?;
+        self.call_typed("setProxyConfig", params).await
+    }
+
+    /// 测试当前活动代理或草稿配置的连通性。
+    pub async fn test_proxy(
+        &self,
+        request: &TestProxyRequest,
+    ) -> Result<TestProxyResult, ClientError> {
+        let params = serde_json::to_value(request)
+            .map_err(|error| ClientError::rpc(format!("代理测试参数序列化失败: {error}")))?;
+        self.call_typed("testProxy", params).await
     }
 
     /// 敲醒后台立即同步（ADR-0041 决策 4）。`account = None` = 全部启用账户。不等同步完成。
@@ -4782,6 +5050,38 @@ mod tests {
         }
         .locale_preference_changed()
         .is_none());
+    }
+
+    #[test]
+    fn proxy_preference_notification_and_dtos_match_wire_shape_and_redact_password() {
+        let frame = br#"{"jsonrpc":"2.0","method":"preferences/proxy","params":{"config":{"mode":"custom","custom":{"protocol":"socks5h","host":"127.0.0.1","port":7890,"bypass":["*.local"]}},"has_password":true,"effective_system":{"bypass":[],"exclude_simple_hostnames":false,"source":"env"},"persisted":true,"generation":3}}"#;
+        let Incoming::Notification(notification) = decode_incoming(frame).unwrap() else {
+            panic!("preferences/proxy 应解码为通知帧");
+        };
+        let parsed = notification.proxy_preference_changed().unwrap().unwrap();
+        assert_eq!(parsed.generation, 3);
+        assert!(parsed.has_password);
+        assert_eq!(parsed.config.mode, "custom");
+        assert_eq!(
+            notification.into_server_notification().unwrap(),
+            ServerNotification::ProxyPreference(Box::new(parsed))
+        );
+
+        let update = ProxyConfigUpdate::custom(CustomProxyUpdate {
+            protocol: "http".into(),
+            host: "127.0.0.1".into(),
+            port: 8080,
+            username: Some("alice".into()),
+            password: Some("do-not-print".into()),
+            clear_password: false,
+            bypass: vec![],
+        });
+        assert!(!format!("{update:?}").contains("do-not-print"));
+        assert!(format!("{update:?}").contains("[REDACTED]"));
+        assert_eq!(
+            serde_json::to_value(ProxyConfigUpdate::direct()).unwrap(),
+            json!({ "mode": "direct" })
+        );
     }
 
     #[test]

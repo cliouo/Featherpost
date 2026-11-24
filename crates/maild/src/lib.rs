@@ -45,6 +45,7 @@ pub mod plugin_state;
 pub mod plugin_transactions;
 pub mod probe;
 pub mod provider;
+pub mod proxy_preference;
 pub mod reading_policy;
 pub mod recovery;
 pub mod receive;

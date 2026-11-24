@@ -3445,6 +3445,7 @@ dependencies = [
  "maild-client",
  "maild-l10n",
  "maild-paths",
+ "maild-proxy",
  "mailparse",
  "native-tls",
  "objc2 0.6.4",
@@ -3576,6 +3577,30 @@ dependencies = [
  "tokio",
  "ttf-parser",
  "url",
+ "zeroize",
+]
+
+[[package]]
+name = "maild-proxy"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "core-foundation 0.10.1",
+ "core-foundation-sys",
+ "dispatch2",
+ "ipnet",
+ "libc",
+ "native-tls",
+ "percent-encoding",
+ "rcgen",
+ "reqwest",
+ "rustls",
+ "serde",
+ "tokio",
+ "tokio-native-tls",
+ "tokio-rustls",
+ "url",
+ "windows-sys 0.61.2",
  "zeroize",
 ]
 

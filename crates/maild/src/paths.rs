@@ -72,6 +72,13 @@ pub fn assemble_with_paths_from(
         ),
     ));
 
+    // 全局代理偏好：与活动配置同目录，任何模式都装配；文件损坏时 fail-closed 不覆盖。
+    let proxy_service = Arc::new(crate::proxy_preference::ProxyService::open(
+        crate::proxy_preference::preference_path_for(config_path),
+    ));
+    proxy_service.start_system_watcher(&effective);
+    effective.provide::<crate::proxy_preference::ProxyService>(proxy_service);
+
     // rules 侧车（ADR-0043）：与 `reading_policy.toml` 同目录、load 之前提供。只有
     // `[plugins.rules.config] persist = true` 时 `RulesPlugin` 才据此打开持久模式；
     // `setSettings` 的 `persist: true` 也只在这条路径存在时才能动态开启落盘。

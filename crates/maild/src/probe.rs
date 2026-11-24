@@ -9,6 +9,10 @@
 
 use std::time::Duration;
 
+use maild_proxy::{
+    ConnectOptions, ProxyConnector, ProxyErrorKind, ProxyStream, ProxyTarget, ResolvedRoute,
+    TargetScheme,
+};
 use serde::Serialize;
 use tokio::io::{AsyncWriteExt as _, BufReader};
 use tokio::net::TcpStream;
@@ -154,9 +158,18 @@ pub struct OutgoingProbe<'a> {
 
 /// IMAP 全链路探测。总 deadline 内未完成按当前阶段返回超时失败。
 pub async fn probe_incoming(probe: IncomingProbe<'_>, deadline: Duration) -> ProbeOutcome {
+    probe_incoming_with_proxy(probe, deadline, None).await
+}
+
+/// 经可选代理连接器的 IMAP 全链路探测。
+pub async fn probe_incoming_with_proxy(
+    probe: IncomingProbe<'_>,
+    deadline: Duration,
+    proxy: Option<&ProxyConnector>,
+) -> ProbeOutcome {
     let tracker = StageTracker::default();
     let (port, security) = (probe.port, probe.security);
-    match tokio::time::timeout(deadline, run_incoming(probe, &tracker)).await {
+    match tokio::time::timeout(deadline, run_incoming(probe, proxy, &tracker)).await {
         Ok(outcome) => outcome,
         Err(_) => timeout_outcome(tracker.current(), port, security),
     }
@@ -164,9 +177,18 @@ pub async fn probe_incoming(probe: IncomingProbe<'_>, deadline: Duration) -> Pro
 
 /// SMTP 探测：TLS 后 EHLO、可选 AUTH、QUIT；任何阶段都不投递邮件。
 pub async fn probe_outgoing(probe: OutgoingProbe<'_>, deadline: Duration) -> ProbeOutcome {
+    probe_outgoing_with_proxy(probe, deadline, None).await
+}
+
+/// 经可选代理连接器的 SMTP 探测。
+pub async fn probe_outgoing_with_proxy(
+    probe: OutgoingProbe<'_>,
+    deadline: Duration,
+    proxy: Option<&ProxyConnector>,
+) -> ProbeOutcome {
     let tracker = StageTracker::default();
     let (port, security) = (probe.port, probe.security);
-    match tokio::time::timeout(deadline, run_outgoing(probe, &tracker)).await {
+    match tokio::time::timeout(deadline, run_outgoing(probe, proxy, &tracker)).await {
         Ok(outcome) => outcome,
         Err(_) => timeout_outcome(tracker.current(), port, security),
     }
@@ -221,8 +243,48 @@ impl StageTracker {
 async fn resolve_and_connect(
     server: &str,
     port: u16,
+    scheme: TargetScheme,
+    proxy: Option<&ProxyConnector>,
     tracker: &StageTracker,
-) -> Result<TcpStream, ProbeOutcome> {
+) -> Result<ProxyStream, ProbeOutcome> {
+    if let Some(connector) = proxy {
+        let target = ProxyTarget::new(server, port, scheme);
+        if matches!(connector.resolve(&target), ResolvedRoute::Proxy(_)) {
+            tracker.set(ProbeStage::Connect);
+            let opts = ConnectOptions {
+                connect_per_addr: CONNECT_TIMEOUT_PER_ADDRESS,
+                connect_total: Duration::from_secs(10),
+                proxy_handshake: GREETING_TIMEOUT,
+                tcp_nodelay: true,
+                tcp_keepalive: false,
+            };
+            return connector
+                .connect(&target, opts)
+                .await
+                .map(|(stream, _route)| stream)
+                .map_err(|error| {
+                    let detail = match error.kind {
+                        ProxyErrorKind::AuthRequired => {
+                            "代理认证失败（请检查代理用户名与密码）"
+                        }
+                        ProxyErrorKind::ProxyConnectFailed | ProxyErrorKind::ProxyTimeout => {
+                            "无法连接代理服务器（请检查代理地址、端口与运行状态）"
+                        }
+                        ProxyErrorKind::TunnelFailed | ProxyErrorKind::InvalidConfig => {
+                            "代理隧道建立失败（代理无法连接到目标邮件服务器）"
+                        }
+                        ProxyErrorKind::DirectConnectTimeout => {
+                            "连接失败: 超时（请检查服务器地址与端口，以及网络/防火墙是否放行）"
+                        }
+                        ProxyErrorKind::DirectConnectFailed => {
+                            "连接失败（请检查服务器地址与端口，以及网络/防火墙是否放行）"
+                        }
+                    };
+                    ProbeOutcome::fail(ProbeStage::Connect, detail)
+                });
+        }
+    }
+
     tracker.set(ProbeStage::Dns);
     let addr = format!("{server}:{port}");
     let resolved = tokio::net::lookup_host(&addr)
@@ -237,7 +299,7 @@ async fn resolve_and_connect(
         )
         .await
         {
-            Ok(Ok(stream)) => return Ok(stream),
+            Ok(Ok(stream)) => return Ok(ProxyStream::Direct(stream)),
             Ok(Err(error)) => last_error = format!("连接失败: {}", error.kind()),
             Err(_) => last_error = "连接失败: 超时".to_string(),
         }
@@ -248,8 +310,16 @@ async fn resolve_and_connect(
     ))
 }
 
-async fn run_incoming(probe: IncomingProbe<'_>, tracker: &StageTracker) -> ProbeOutcome {
-    let stream = match resolve_and_connect(probe.server, probe.port, tracker).await {
+async fn run_incoming(
+    probe: IncomingProbe<'_>,
+    proxy: Option<&ProxyConnector>,
+    tracker: &StageTracker,
+) -> ProbeOutcome {
+    let scheme = match probe.security {
+        SecurityMode::Implicit => TargetScheme::Imaps,
+        SecurityMode::StartTls => TargetScheme::Imap,
+    };
+    let stream = match resolve_and_connect(probe.server, probe.port, scheme, proxy, tracker).await {
         Ok(stream) => stream,
         Err(outcome) => return outcome,
     };
@@ -302,8 +372,16 @@ async fn run_incoming(probe: IncomingProbe<'_>, tracker: &StageTracker) -> Probe
     ProbeOutcome::ok(ProbeStage::Ready)
 }
 
-async fn run_outgoing(probe: OutgoingProbe<'_>, tracker: &StageTracker) -> ProbeOutcome {
-    let stream = match resolve_and_connect(probe.server, probe.port, tracker).await {
+async fn run_outgoing(
+    probe: OutgoingProbe<'_>,
+    proxy: Option<&ProxyConnector>,
+    tracker: &StageTracker,
+) -> ProbeOutcome {
+    let scheme = match probe.security {
+        SecurityMode::Implicit => TargetScheme::Smtps,
+        SecurityMode::StartTls => TargetScheme::Smtp,
+    };
+    let stream = match resolve_and_connect(probe.server, probe.port, scheme, proxy, tracker).await {
         Ok(stream) => stream,
         Err(outcome) => return outcome,
     };
@@ -416,13 +494,13 @@ async fn run_outgoing(probe: OutgoingProbe<'_>, tracker: &StageTracker) -> Probe
 // —— TLS 建立：IMAP 与 SMTP 各自的 STARTTLS 明文协商 ——
 
 async fn establish_tls<S>(
-    stream: TcpStream,
+    stream: ProxyStream,
     server: &str,
     port: u16,
     security: SecurityMode,
     negotiation: S,
     _tracker: &StageTracker,
-) -> Result<tokio_native_tls::TlsStream<TcpStream>, ProbeOutcome>
+) -> Result<tokio_native_tls::TlsStream<ProxyStream>, ProbeOutcome>
 where
     S: StartTlsNegotiation,
 {
@@ -460,15 +538,15 @@ where
 trait StartTlsNegotiation: Send + Sync {
     fn negotiate(
         &self,
-        stream: TcpStream,
-    ) -> impl std::future::Future<Output = Result<TcpStream, ProbeOutcome>> + Send;
+        stream: ProxyStream,
+    ) -> impl std::future::Future<Output = Result<ProxyStream, ProbeOutcome>> + Send;
 }
 
 /// IMAP STARTTLS：greeting → `a0 STARTTLS` → OK（逐字节读，不预取握手字节）。
 struct ImapStartTls;
 
 impl StartTlsNegotiation for ImapStartTls {
-    async fn negotiate(&self, mut stream: TcpStream) -> Result<TcpStream, ProbeOutcome> {
+    async fn negotiate(&self, mut stream: ProxyStream) -> Result<ProxyStream, ProbeOutcome> {
         let fail =
             |detail: &str| ProbeOutcome::fail(ProbeStage::Tls, detail);
         let greeting = tokio::time::timeout(GREETING_TIMEOUT, read_line_exact(&mut stream))
@@ -496,7 +574,7 @@ impl StartTlsNegotiation for ImapStartTls {
 struct SmtpStartTls;
 
 impl StartTlsNegotiation for SmtpStartTls {
-    async fn negotiate(&self, mut stream: TcpStream) -> Result<TcpStream, ProbeOutcome> {
+    async fn negotiate(&self, mut stream: ProxyStream) -> Result<ProxyStream, ProbeOutcome> {
         let fail = |detail: &str| ProbeOutcome::fail(ProbeStage::Tls, detail);
         let capability_fail =
             |detail: &str| ProbeOutcome::fail(ProbeStage::Capability, detail);

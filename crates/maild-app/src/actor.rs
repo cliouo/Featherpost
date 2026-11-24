@@ -649,6 +649,11 @@ impl Actor {
                     let _ = self.events.send(AppEvent::Notification(notification));
                     return Ok(None);
                 }
+                // 全局代理偏好变化不进快照缓冲，直接转发给前端/插件监听方。
+                if matches!(notification, ServerNotification::ProxyPreference(_)) {
+                    let _ = self.events.send(AppEvent::Notification(notification));
+                    return Ok(None);
+                }
                 let synchronizing = snapshot.is_some();
                 if let Some(snapshot) = snapshot.as_mut() {
                     snapshot.buffer(notification.clone());
@@ -1171,6 +1176,9 @@ fn notification_bytes(notification: &ServerNotification) -> usize {
         ServerNotification::LocalePreference { effective } => effective
             .iter()
             .fold(OVERHEAD, |total, tag| total.saturating_add(tag.len())),
+        ServerNotification::ProxyPreference(event) => OVERHEAD
+            .saturating_add(event.config.mode.len())
+            .saturating_add(event.effective_system.source.len()),
         ServerNotification::Unknown(value) => OVERHEAD
             .saturating_add(value.method.len())
             .saturating_add(value.params.to_string().len()),
@@ -1297,6 +1305,11 @@ fn validate_notification(notification: &ServerNotification) -> Result<(), Client
             MAX_NOTIFICATION_TEXT_BYTES,
         ),
         ServerNotification::LocalePreference { effective } => validate_locale(effective),
+        ServerNotification::ProxyPreference(event) => validate_text(
+            "preferences/proxy mode",
+            &event.config.mode,
+            MAX_NOTIFICATION_TEXT_BYTES,
+        ),
         ServerNotification::AgentStopping | ServerNotification::Unknown(_) => Ok(()),
     }
 }
@@ -1447,6 +1460,7 @@ fn apply_notification(
         ServerNotification::FrontendIntent { .. }
         | ServerNotification::AgentStopping
         | ServerNotification::LocalePreference { .. }
+        | ServerNotification::ProxyPreference(_)
         | ServerNotification::Unknown(_) => false,
     }
 }

@@ -5,12 +5,13 @@ use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use clap::{Parser, Subcommand};
+use clap::{ArgGroup, Parser, Subcommand};
 use maild_client::{
     discover_endpoint, generate_token, validate_draft_input, AccountDraftInput, ClientError,
-    CompatVerdict, DiscoveryOptions, ErrorKind, IncomingInput, LocalePreferenceResult,
-    LocalePreferenceUpdate, OutgoingInput, PluginPackageKind, RpcClient, UpdatePatchInput,
-    PROTOCOL_VERSION,
+    CompatVerdict, CustomProxyUpdate, DiscoveryOptions, ErrorKind, IncomingInput,
+    LocalePreferenceResult, LocalePreferenceUpdate, OutgoingInput, PluginPackageKind,
+    ProxyConfigResult, ProxyConfigUpdate, RpcClient, TestProxyRequest, TestProxyResult,
+    UpdatePatchInput, PROTOCOL_VERSION,
 };
 use maild_l10n::{Ctl, Locale};
 use serde_json::{json, Value};
@@ -99,6 +100,12 @@ enum Command {
         /// Omit to show the current preference.
         #[command(subcommand)]
         command: Option<LocaleCommand>,
+    },
+    /// Show, configure, or test the global outbound proxy.
+    Proxy {
+        /// Omit to show the current proxy configuration.
+        #[command(subcommand)]
+        command: Option<ProxyCommand>,
     },
     /// Work with daemon-owned drafts (ADR-0034).
     Draft {
@@ -338,6 +345,48 @@ enum LocaleCommand {
         /// Follow the operating system's preferred languages.
         #[arg(long)]
         system: bool,
+    },
+}
+
+/// 全局代理子命令（`proxy show / set / test`）。
+#[derive(Subcommand)]
+enum ProxyCommand {
+    /// Show the active proxy configuration and detected OS proxy settings.
+    Show,
+    /// Configure the global proxy mode: `--system`, `--direct`, or `--custom <URL>`.
+    #[command(group(
+        ArgGroup::new("proxy_mode")
+            .required(true)
+            .args(["system", "direct", "custom"])
+    ))]
+    Set {
+        /// Follow the operating system's proxy settings.
+        #[arg(long)]
+        system: bool,
+        /// Connect directly, ignoring OS proxy settings and proxy environment variables.
+        #[arg(long)]
+        direct: bool,
+        /// Custom proxy URL (`http://`, `https://`, `socks5://`, `socks5h://`, e.g. `socks5h://127.0.0.1:7890`).
+        #[arg(long, value_name = "URL")]
+        custom: Option<String>,
+        /// Optional username override for `--custom` (prefer `--password-stdin` for passwords).
+        #[arg(long, value_name = "USER", requires = "custom")]
+        username: Option<String>,
+        /// Bypass rules (repeatable or comma-separated, e.g. `*.local,10.0.0.0/8`).
+        #[arg(long = "bypass", value_name = "RULE", requires = "custom")]
+        bypass: Vec<String>,
+        /// Read the proxy password from stdin (one line; recommended instead of embedding in URL).
+        #[arg(long, requires = "custom", conflicts_with = "clear_password")]
+        password_stdin: bool,
+        /// Clear any saved custom proxy password.
+        #[arg(long)]
+        clear_password: bool,
+    },
+    /// Test connectivity through the active proxy configuration.
+    Test {
+        /// Target `host:port` (defaults to the first enabled IMAP account when omitted).
+        #[arg(long, value_name = "HOST:PORT")]
+        target: Option<String>,
     },
 }
 
@@ -616,6 +665,9 @@ async fn run(cli: Cli) -> Result<(), AppError> {
     if let Command::Locale { command } = cli.command {
         return run_locale(client, command, cli.json).await;
     }
+    if let Command::Proxy { command } = cli.command {
+        return run_proxy(client, command, cli.json, m).await;
+    }
     if let Command::Account { command } = cli.command {
         return run_account(client, command, cli.json, m).await;
     }
@@ -707,6 +759,7 @@ async fn run(cli: Cli) -> Result<(), AppError> {
         }
         Command::Draft { .. } => unreachable!("draft commands handled before dispatch"),
         Command::Locale { .. } => unreachable!("locale commands handled before dispatch"),
+        Command::Proxy { .. } => unreachable!("proxy commands handled before dispatch"),
     };
 
     let result = client.call(method, params).await?;
@@ -1824,6 +1877,218 @@ fn locale_lines(result: &LocalePreferenceResult, m: &Ctl) -> Vec<String> {
     lines
 }
 
+async fn run_proxy(
+    client: RpcClient,
+    command: Option<ProxyCommand>,
+    json_output: bool,
+    m: &Ctl,
+) -> Result<(), AppError> {
+    match command.unwrap_or(ProxyCommand::Show) {
+        ProxyCommand::Show => {
+            let result = client.proxy_config().await?;
+            print_proxy_config(&result, json_output, m)?;
+            Ok(())
+        }
+        ProxyCommand::Set {
+            system,
+            direct,
+            custom,
+            username,
+            bypass,
+            password_stdin,
+            clear_password,
+        } => {
+            let update = if system {
+                ProxyConfigUpdate {
+                    clear_password,
+                    ..ProxyConfigUpdate::system()
+                }
+            } else if direct {
+                ProxyConfigUpdate {
+                    clear_password,
+                    ..ProxyConfigUpdate::direct()
+                }
+            } else {
+                let raw_url = custom.expect("clap ArgGroup requires one mode");
+                let parsed = maild_proxy::parse_proxy_url(&raw_url)
+                    .map_err(|reason| AppError::rpc(format!("代理 URL 无效: {reason}")))?;
+                if password_stdin && parsed.password.is_some() {
+                    return Err(AppError::rpc(
+                        "不能同时在 --custom URL 中包含密码和指定 --password-stdin",
+                    ));
+                }
+                let password = if password_stdin {
+                    Some(read_password_stdin()?)
+                } else {
+                    parsed.password
+                };
+                let effective_username = username.or(parsed.username);
+                let flat_bypass: Vec<String> = bypass
+                    .iter()
+                    .flat_map(|entry| entry.split(','))
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(ToOwned::to_owned)
+                    .collect();
+                ProxyConfigUpdate::custom(CustomProxyUpdate {
+                    protocol: parsed.protocol.as_str().to_string(),
+                    host: parsed.host,
+                    port: parsed.port,
+                    username: effective_username,
+                    password,
+                    clear_password,
+                    bypass: flat_bypass,
+                })
+            };
+            let result = client.set_proxy_config(&update).await?;
+            print_proxy_config(&result, json_output, m)?;
+            Ok(())
+        }
+        ProxyCommand::Test { target } => {
+            let result = client
+                .test_proxy(&TestProxyRequest {
+                    target,
+                    ..Default::default()
+                })
+                .await?;
+            if json_output {
+                let line = serde_json::to_string(&result)
+                    .map_err(|error| AppError::rpc(format!("JSON 输出失败: {error}")))?;
+                println!("{line}");
+            } else {
+                for line in proxy_test_lines(&result, m) {
+                    println!("{line}");
+                }
+            }
+            if !result.ok {
+                return Err(AppError::rpc(m.proxy_test_failed));
+            }
+            Ok(())
+        }
+    }
+}
+
+fn read_password_stdin() -> Result<String, AppError> {
+    let mut line = String::new();
+    std::io::stdin()
+        .read_line(&mut line)
+        .map_err(|e| AppError::connection(format!("从 stdin 读取代理密码失败: {e}")))?;
+    let trimmed = line.trim_end_matches(['\r', '\n']).to_string();
+    if trimmed.is_empty() {
+        return Err(AppError::connection("代理密码不能为空"));
+    }
+    Ok(trimmed)
+}
+
+fn print_proxy_config(
+    result: &ProxyConfigResult,
+    json_output: bool,
+    m: &Ctl,
+) -> Result<(), AppError> {
+    if json_output {
+        let line = serde_json::to_string(result)
+            .map_err(|error| AppError::rpc(format!("JSON 输出失败: {error}")))?;
+        println!("{line}");
+    } else {
+        for line in proxy_lines(result, m) {
+            println!("{line}");
+        }
+    }
+    Ok(())
+}
+
+fn format_endpoint_redacted(protocol: &str, host: &str, port: u16, username: Option<&str>) -> String {
+    let authority = maild_proxy::format_host_port(host, port);
+    match username.filter(|u| !u.is_empty()) {
+        Some(user) => format!("{protocol}://{user}@{authority}"),
+        None => format!("{protocol}://{authority}"),
+    }
+}
+
+fn proxy_lines(result: &ProxyConfigResult, m: &Ctl) -> Vec<String> {
+    let mut lines = vec![format!("mode: {}", terminal_text(&result.config.mode))];
+    if let Some(custom) = &result.config.custom {
+        let url = format_endpoint_redacted(
+            &custom.protocol,
+            &custom.host,
+            custom.port,
+            custom.username.as_deref(),
+        );
+        lines.push(format!("custom: {}", terminal_text(&url)));
+        if result.has_password {
+            lines.push("password: saved".to_string());
+        }
+        if !custom.bypass.is_empty() {
+            lines.push(format!(
+                "bypass: {}",
+                terminal_text(&custom.bypass.join(", "))
+            ));
+        }
+    }
+    let sys = &result.effective_system;
+    let mut sys_parts = Vec::new();
+    if let Some(ep) = &sys.http {
+        sys_parts.push(format!(
+            "http={}",
+            format_endpoint_redacted(&ep.protocol, &ep.host, ep.port, ep.username.as_deref())
+        ));
+    }
+    if let Some(ep) = &sys.https {
+        sys_parts.push(format!(
+            "https={}",
+            format_endpoint_redacted(&ep.protocol, &ep.host, ep.port, ep.username.as_deref())
+        ));
+    }
+    if let Some(ep) = &sys.socks5 {
+        sys_parts.push(format!(
+            "socks5={}",
+            format_endpoint_redacted(&ep.protocol, &ep.host, ep.port, ep.username.as_deref())
+        ));
+    }
+    if let Some(pac) = &sys.pac_url {
+        sys_parts.push(format!("pac={pac}"));
+    }
+    let sys_summary = if sys_parts.is_empty() {
+        "direct".to_string()
+    } else {
+        sys_parts.join(" ")
+    };
+    lines.push(format!(
+        "system: {} (source={})",
+        terminal_text(&sys_summary),
+        terminal_text(if sys.source.is_empty() {
+            "none"
+        } else {
+            &sys.source
+        })
+    ));
+    if !result.persisted {
+        lines.push(m.proxy_not_persisted.to_string());
+    }
+    lines
+}
+
+fn proxy_test_lines(result: &TestProxyResult, m: &Ctl) -> Vec<String> {
+    let mut lines = vec![
+        format!("ok: {}", result.ok),
+        format!("route: {}", terminal_text(&result.route)),
+        format!("stage: {}", terminal_text(&result.stage)),
+        format!("latency_ms: {}", result.latency_ms),
+    ];
+    if !result.ok {
+        let reason = account_reason(
+            &result.detail,
+            result.detail_code.as_deref(),
+            &result.detail,
+            m,
+        );
+        if !reason.is_empty() {
+            lines.push(format!("detail: {}", terminal_text(&reason)));
+        }
+    }
+    lines
+}
+
 fn plugin_id_params(id: &str, kind: Option<&str>) -> Value {
     match kind {
         Some(kind) => json!({ "id": id, "kind": kind }),
@@ -2687,6 +2952,105 @@ mod tests {
                 "persisted: false（偏好文件停摆：读到的是缺省值，写会被拒绝）",
             ]
         );
+    }
+
+    #[test]
+    fn proxy_cli_parsing_and_output_shapes() {
+        let cli = Cli::try_parse_from([maild_brand::CLI_CTL, "proxy", "show", "--json"]).unwrap();
+        assert!(cli.json);
+        assert!(matches!(
+            cli.command,
+            Command::Proxy {
+                command: Some(ProxyCommand::Show)
+            }
+        ));
+
+        let cli = Cli::try_parse_from([
+            maild_brand::CLI_CTL,
+            "proxy",
+            "set",
+            "--custom",
+            "socks5h://alice@127.0.0.1:7890",
+            "--bypass",
+            "*.local,10.0.0.0/8",
+            "--password-stdin",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Proxy {
+                command: Some(ProxyCommand::Set {
+                    system: false,
+                    direct: false,
+                    custom: Some(ref url),
+                    password_stdin: true,
+                    ..
+                })
+            } if url == "socks5h://alice@127.0.0.1:7890"
+        ));
+
+        let cli = Cli::try_parse_from([
+            maild_brand::CLI_CTL,
+            "proxy",
+            "test",
+            "--target",
+            "imap.gmail.com:993",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Proxy {
+                command: Some(ProxyCommand::Test {
+                    target: Some(ref t)
+                })
+            } if t == "imap.gmail.com:993"
+        ));
+
+        // Missing mode or conflicting modes must be rejected locally by clap.
+        assert!(Cli::try_parse_from([maild_brand::CLI_CTL, "proxy", "set"]).is_err());
+        assert!(
+            Cli::try_parse_from([maild_brand::CLI_CTL, "proxy", "set", "--system", "--direct"])
+                .is_err()
+        );
+
+        let result = ProxyConfigResult {
+            config: maild_client::ProxyConfig {
+                mode: "custom".into(),
+                custom: Some(maild_client::CustomProxyConfig {
+                    protocol: "socks5h".into(),
+                    host: "127.0.0.1".into(),
+                    port: 7890,
+                    username: Some("alice".into()),
+                    password: None,
+                    bypass: vec!["*.local".into()],
+                }),
+            },
+            has_password: true,
+            effective_system: maild_client::SystemProxySnapshot {
+                source: "macos_system_configuration".into(),
+                ..Default::default()
+            },
+            persisted: false,
+        };
+        let lines = proxy_lines(&result, &maild_l10n::EN.ctl);
+        assert_eq!(lines[0], "mode: custom");
+        assert_eq!(lines[1], "custom: socks5h://alice@127.0.0.1:7890");
+        assert_eq!(lines[2], "password: saved");
+        assert_eq!(lines[3], "bypass: *.local");
+        assert!(lines.last().unwrap().contains("persisted: false"));
+
+        let test_fail = TestProxyResult {
+            ok: false,
+            route: "socks5h://127.0.0.1:7890".into(),
+            stage: "proxy_auth".into(),
+            latency_ms: 12,
+            detail_code: Some("proxy_auth_failed".into()),
+            detail: "auth rejected".into(),
+        };
+        let test_lines = proxy_test_lines(&test_fail, &maild_l10n::EN.ctl);
+        assert_eq!(test_lines[0], "ok: false");
+        assert_eq!(test_lines[2], "stage: proxy_auth");
+        assert!(test_lines[4].contains("The proxy server rejected authentication"));
     }
 
     #[test]

@@ -299,12 +299,18 @@ pub enum AccountDetailCode {
     /// provider 应答了业务失败（`server_detail` 是插件给的消息）。
     ProviderFailed,
     ProviderResponseInvalid,
+    /// 无法连接代理服务器或代理握手超时。
+    ProxyConnectFailed,
+    /// 代理要求身份认证或凭据被拒（HTTP 407 / SOCKS5 RFC 1929）。
+    ProxyAuthFailed,
+    /// 通过代理建立到目标服务器的隧道失败（HTTP 非 2xx / SOCKS5 REP != 0x00）。
+    ProxyTunnelFailed,
     /// 装配缺失等内部错误。
     Internal,
 }
 
 impl AccountDetailCode {
-    pub const ALL: [AccountDetailCode; 19] = [
+    pub const ALL: [AccountDetailCode; 22] = [
         AccountDetailCode::CredentialUnavailable,
         AccountDetailCode::CredentialInvalid,
         AccountDetailCode::ConnectFailed,
@@ -323,6 +329,9 @@ impl AccountDetailCode {
         AccountDetailCode::ProviderTimeout,
         AccountDetailCode::ProviderFailed,
         AccountDetailCode::ProviderResponseInvalid,
+        AccountDetailCode::ProxyConnectFailed,
+        AccountDetailCode::ProxyAuthFailed,
+        AccountDetailCode::ProxyTunnelFailed,
         AccountDetailCode::Internal,
     ];
 
@@ -346,6 +355,9 @@ impl AccountDetailCode {
             AccountDetailCode::ProviderTimeout => "provider_timeout",
             AccountDetailCode::ProviderFailed => "provider_failed",
             AccountDetailCode::ProviderResponseInvalid => "provider_response_invalid",
+            AccountDetailCode::ProxyConnectFailed => "proxy_connect_failed",
+            AccountDetailCode::ProxyAuthFailed => "proxy_auth_failed",
+            AccountDetailCode::ProxyTunnelFailed => "proxy_tunnel_failed",
             AccountDetailCode::Internal => "internal",
         }
     }
@@ -453,4 +465,21 @@ pub struct LocalePreferenceChanged;
 
 impl EmitEvent for LocalePreferenceChanged {
     type Args = Vec<String>;
+}
+
+/// `preferences/proxy` 推送载荷：非秘密代理摘要 + 单调递增 `generation`。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProxyPreferenceEvent {
+    pub config: maild_proxy::ProxyConfig,
+    pub has_password: bool,
+    pub effective_system: maild_proxy::SystemProxySnapshot,
+    pub persisted: bool,
+    pub generation: u64,
+}
+
+/// `preferences/proxy`：代理偏好或系统代理变化时向所有流式连接推送非秘密摘要。
+pub struct ProxyPreferenceChanged;
+
+impl EmitEvent for ProxyPreferenceChanged {
+    type Args = ProxyPreferenceEvent;
 }

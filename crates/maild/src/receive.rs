@@ -23,10 +23,13 @@ use futures::StreamExt;
 use maild_client::{
     TransportReceiveRequest, TransportReceiveResponse,
 };
+use maild_proxy::{
+    ConnectOptions, ProxyConnector, ProxyError, ProxyErrorKind, ProxyStream, ProxyTarget,
+    TargetScheme,
+};
 use mailparse::{parse_mail, MailHeaderMap};
 use serde::Deserialize;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::config::Merge;
@@ -383,9 +386,7 @@ const IDLE_INIT_TIMEOUT: Duration = Duration::from_secs(15);
 const IDLE_DONE_TIMEOUT: Duration = Duration::from_secs(10);
 /// 单次 IDLE 的最长等待：RFC 2177 建议 ≤29 分钟续期，留余量取 25 分钟。
 const IDLE_RENEW_INTERVAL: Duration = Duration::from_secs(25 * 60);
-/// TCP keepalive 空闲探测起点（秒）。
-#[cfg(unix)]
-const TCP_KEEPALIVE_IDLE_SECS: libc::c_int = 120;
+/// TCP keepalive 空闲探测起点已迁入 `maild-proxy::tunnel`（ADR-0041 决策 3）。
 /// 断线退避上限与指数封顶。
 const RECONNECT_BACKOFF_MAX: Duration = Duration::from_secs(300);
 const RECONNECT_BACKOFF_MAX_EXPONENT: u32 = 6;
@@ -673,23 +674,69 @@ impl Receive {
             Err(_) => Err("按需拉取超时".into()),
         }
     }
+}
 
-    /// 断线退避睡眠：到期、`trigger_sync` 或关断任一发生即返回。返回 false = 已关断。
+/// 断线退避睡眠结束原因。
+enum BackoffWake {
+    /// 到期或手动同步唤醒。
+    Retry,
+    /// 代理配置或系统代理变化：应清零退避计数并立刻按新代理重连。
+    ProxyChanged,
+    /// 收到关断信号。
+    Shutdown,
+}
+
+/// 一次 IMAP 会话的正常退出原因。
+#[derive(Debug)]
+enum ServeExit {
+    Shutdown,
+    ProxyChanged,
+}
+
+async fn wait_proxy_changed(proxy_rx: &mut Option<watch::Receiver<u64>>) {
+    match proxy_rx.as_mut() {
+        Some(rx) => {
+            if rx.changed().await.is_err() {
+                std::future::pending::<()>().await;
+            }
+        }
+        None => std::future::pending::<()>().await,
+    }
+}
+
+/// 断线退避睡眠（可被关断、手动同步或代理变化立即打断）。
+impl Receive {
     async fn backoff_sleep(&self, delay: Duration) -> bool {
+        !matches!(
+            self.backoff_sleep_with_proxy(delay, &mut None).await,
+            BackoffWake::Shutdown
+        )
+    }
+
+    async fn backoff_sleep_with_proxy(
+        &self,
+        delay: Duration,
+        proxy_rx: &mut Option<watch::Receiver<u64>>,
+    ) -> BackoffWake {
         let mut shutdown_rx = self.shutdown_rx();
         let mut sync_rx = self.sync_rx();
         if self.is_shutdown() {
-            return false;
+            return BackoffWake::Shutdown;
         }
         if self.has_queued_manual_sync() {
-            return true;
+            return BackoffWake::Retry;
         }
-        tokio::select! {
-            _ = tokio::time::sleep(delay) => {}
-            _ = sync_rx.changed() => {}
-            _ = shutdown_rx.changed() => {}
+        let woke = tokio::select! {
+            _ = tokio::time::sleep(delay) => BackoffWake::Retry,
+            _ = sync_rx.changed() => BackoffWake::Retry,
+            _ = wait_proxy_changed(proxy_rx) => BackoffWake::ProxyChanged,
+            _ = shutdown_rx.changed() => BackoffWake::Shutdown,
+        };
+        if self.is_shutdown() {
+            BackoffWake::Shutdown
+        } else {
+            woke
         }
-        !self.is_shutdown()
     }
 
     fn is_shutdown(&self) -> bool {
@@ -759,6 +806,9 @@ async fn run_loop(
     let mut first = true;
     // 连续未能进入 Online 的次数；驱动指数退避（ADR-0041 决策 3）。
     let mut consecutive_failures: u32 = 0;
+    let mut proxy_rx = ctx
+        .get::<crate::proxy_preference::ProxyService>()
+        .map(|service| service.subscribe_generation());
     loop {
         if receive.is_shutdown() {
             return;
@@ -770,6 +820,11 @@ async fn run_loop(
         };
         receive.set_state(&ctx, state);
         first = false;
+
+        // 在每次尝试建立连接前消费当前代理代号，确保连接期间若代理变更能立即唤醒重连。
+        if let Some(rx) = proxy_rx.as_mut() {
+            rx.borrow_and_update();
+        }
 
         // 钥匙串读取是同步阻塞的系统调用：`SecItemCopyMatching` 要等 securityd，
         // 钥匙串锁定或 Agent 签名变更时还会弹授权窗。守护进程跑在 tokio
@@ -797,15 +852,23 @@ async fn run_loop(
                 receive.set_online(false);
                 let delay = reconnect_backoff(cfg.reconnect_secs, consecutive_failures);
                 consecutive_failures = consecutive_failures.saturating_add(1);
-                if !receive.backoff_sleep(delay).await {
-                    return;
+                match receive.backoff_sleep_with_proxy(delay, &mut proxy_rx).await {
+                    BackoffWake::Shutdown => return,
+                    BackoffWake::ProxyChanged => consecutive_failures = 0,
+                    BackoffWake::Retry => {}
                 }
                 continue;
             }
         };
 
-        match serve(&cfg, &ctx, &receive, scheduler.as_ref(), secret).await {
-            Ok(()) => return, // 正常关断
+        match serve(&cfg, &ctx, &receive, scheduler.as_ref(), secret, &mut proxy_rx).await {
+            Ok(ServeExit::Shutdown) => return, // 正常关断
+            Ok(ServeExit::ProxyChanged) => {
+                // 代理偏好或系统代理变化：优雅断开旧连接后立刻重连，不退避。
+                consecutive_failures = 0;
+                receive.set_online(false);
+                continue;
+            }
             Err(e) => {
                 // 这次会话曾经上线 = 网络本身可用，断线是偶发的：退避从头计。
                 if receive.is_online() {
@@ -816,8 +879,10 @@ async fn run_loop(
                 eprintln!("[maild/receive] 账户 {}: {e}", cfg.account);
                 let delay = reconnect_backoff(cfg.reconnect_secs, consecutive_failures);
                 consecutive_failures = consecutive_failures.saturating_add(1);
-                if !receive.backoff_sleep(delay).await {
-                    return;
+                match receive.backoff_sleep_with_proxy(delay, &mut proxy_rx).await {
+                    BackoffWake::Shutdown => return,
+                    BackoffWake::ProxyChanged => consecutive_failures = 0,
+                    BackoffWake::Retry => {}
                 }
             }
         }
@@ -886,8 +951,13 @@ async fn serve(
     receive: &Receive,
     scheduler: Option<&Scheduler>,
     secret: SecretBuffer,
-) -> Result<(), ReceiveError> {
-    let client = connect_client(cfg).await?;
+    proxy_rx: &mut Option<watch::Receiver<u64>>,
+) -> Result<ServeExit, ReceiveError> {
+    let connector = ctx
+        .get::<crate::proxy_preference::ProxyService>()
+        .map(|service| service.connector())
+        .unwrap_or_else(ProxyConnector::direct_only);
+    let client = connect_client_with_proxy(cfg, &connector).await?;
     let password = std::str::from_utf8(secret.expose()).map_err(fixed(
         AccountDetailCode::CredentialInvalid,
         "账户密码不是有效的 UTF-8 文本",
@@ -960,7 +1030,7 @@ async fn serve(
         loop {
             if receive.is_shutdown() {
                 let _ = session.logout().await;
-                return Ok(());
+                return Ok(ServeExit::Shutdown);
             }
             sync.sync_folder(&mut session, &targets[0]).await?;
             if tokio::time::Instant::now() >= next_sweep {
@@ -1045,11 +1115,18 @@ async fn serve(
                         sync.serve_fetch_by_uid(&mut session, &targets, request).await;
                     }
                 }
+                _ = wait_proxy_changed(proxy_rx) => {
+                    drop(stop);
+                    if let Ok(mut session) = finish_idle(idle).await {
+                        let _ = tokio::time::timeout(Duration::from_secs(2), session.logout()).await;
+                    }
+                    return Ok(ServeExit::ProxyChanged);
+                }
                 _ = shutdown_rx.changed() => {
                     drop(stop);
                     session = finish_idle(idle).await?;
                     let _ = session.logout().await;
-                    return Ok(());
+                    return Ok(ServeExit::Shutdown);
                 }
             }
         }
@@ -1144,9 +1221,13 @@ async fn serve(
                     }
                     false
                 }
+                _ = wait_proxy_changed(proxy_rx) => {
+                    let _ = tokio::time::timeout(Duration::from_secs(2), session.logout()).await;
+                    return Ok(ServeExit::ProxyChanged);
+                }
                 _ = shutdown_rx.changed() => {
                     let _ = session.logout().await;
-                    return Ok(());
+                    return Ok(ServeExit::Shutdown);
                 }
             };
             if !full_round {
@@ -1564,90 +1645,90 @@ async fn drain_expunge(
 /// - none：明文
 /// - starttls：手动协商（greeting → `a0 STARTTLS` → OK → 就地 TLS 握手）
 /// - implicit：直接 TLS 握手（993）
+#[cfg(test)]
 async fn connect_client(cfg: &ReceiveConfig) -> Result<Client<Conn>, ReceiveError> {
-    let stream = connect_tcp(&cfg.server, cfg.port).await?;
+    connect_client_with_proxy(cfg, &ProxyConnector::direct_only()).await
+}
+
+async fn connect_client_with_proxy(
+    cfg: &ReceiveConfig,
+    connector: &ProxyConnector,
+) -> Result<Client<Conn>, ReceiveError> {
+    let stream = connect_via_proxy(cfg, connector).await?;
     // 握手阶段同样可能撞上半开连接：整体设上限（ADR-0041 决策 3）。
     tokio::time::timeout(stage_timeouts().handshake, negotiate(cfg, stream))
         .await
         .map_err(fixed(AccountDetailCode::TlsTimeout, "TLS / STARTTLS 握手超时"))?
 }
 
-/// 解析全部地址并逐个尝试：单地址 10s、总计 20s（ADR-0041 决策 3）。
-///
-/// 双栈环境里第一个地址（常见是 IPv6）不通时，`TcpStream::connect` 会在它上面耗满
-/// 系统默认的 75s；这里给每个地址独立预算，后面的地址还有机会。
-async fn connect_tcp(server: &str, port: u16) -> Result<TcpStream, ReceiveError> {
+/// 经 [`ProxyConnector`] 建立直连或代理隧道（单地址 10s、总计 20s，含 TCP keepalive）。
+async fn connect_via_proxy(
+    cfg: &ReceiveConfig,
+    connector: &ProxyConnector,
+) -> Result<ProxyStream, ReceiveError> {
     let timeouts = stage_timeouts();
-    let prefix = format!("连接 {server}:{port} 失败");
-    // 超时与「没有地址」是我们的判断（`connect_timeout` / `connect_failed`，无原文）；
-    // DNS 与套接字报错是系统原文。
-    let ours = |code, reason: String| ReceiveError::new(code, format!("{prefix}: {reason}"));
-    let deadline = tokio::time::Instant::now() + timeouts.connect_total;
-    let addrs: Vec<std::net::SocketAddr> =
-        tokio::time::timeout(timeouts.connect_total, tokio::net::lookup_host((server, port)))
-            .await
-            .map_err(|_| ours(AccountDetailCode::ConnectTimeout, "DNS 解析超时".into()))?
-            .map_err(stage(AccountDetailCode::ConnectFailed, &prefix))?
-            .collect();
-    let mut last_error = ours(AccountDetailCode::ConnectFailed, "没有可用地址".into());
-    for addr in addrs {
-        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-        if remaining.is_zero() {
-            last_error = ours(AccountDetailCode::ConnectTimeout, "连接超时".into());
-            break;
-        }
-        match tokio::time::timeout(timeouts.connect_per_addr.min(remaining), TcpStream::connect(addr))
-            .await
-        {
-            Ok(Ok(stream)) => {
-                tune_socket(&stream);
-                return Ok(stream);
-            }
-            Ok(Err(error)) => {
-                last_error = ReceiveError::with_detail(AccountDetailCode::ConnectFailed, &prefix, error)
-            }
-            Err(_) => {
-                last_error = ours(AccountDetailCode::ConnectTimeout, format!("{addr} 连接超时"))
-            }
-        }
-    }
-    Err(last_error)
+    let prefix = format!("连接 {}:{} 失败", cfg.server, cfg.port);
+    let scheme = if cfg.tls == "implicit" {
+        TargetScheme::Imaps
+    } else {
+        TargetScheme::Imap
+    };
+    let target = ProxyTarget::new(&cfg.server, cfg.port, scheme);
+    let opts = ConnectOptions {
+        connect_per_addr: timeouts.connect_per_addr,
+        connect_total: timeouts.connect_total,
+        proxy_handshake: timeouts.handshake,
+        tcp_nodelay: true,
+        tcp_keepalive: true,
+    };
+    connector
+        .connect(&target, opts)
+        .await
+        .map(|(stream, _route)| stream)
+        .map_err(|error| map_proxy_error(&prefix, error))
 }
 
-/// 关 Nagle（IMAP 是小命令往返），开低开销 TCP keepalive：笔电盒盖休眠后，半开连接会被
-/// 内核探测出来并以错误返回，而不是让 IDLE 永远挂着（ADR-0041 决策 3）。尽力而为。
-fn tune_socket(stream: &TcpStream) {
-    let _ = stream.set_nodelay(true);
-    #[cfg(unix)]
-    {
-        use std::os::fd::AsRawFd;
-        let fd = stream.as_raw_fd();
-        let set = |level: libc::c_int, name: libc::c_int, value: libc::c_int| {
-            // SAFETY: fd 在 stream 存活期间有效；value 是栈上的 c_int，长度如实传入。
-            unsafe {
-                libc::setsockopt(
-                    fd,
-                    level,
-                    name,
-                    &value as *const libc::c_int as *const libc::c_void,
-                    std::mem::size_of::<libc::c_int>() as libc::socklen_t,
-                );
+fn map_proxy_error(prefix: &str, error: ProxyError) -> ReceiveError {
+    match error.kind {
+        ProxyErrorKind::DirectConnectFailed => match error.detail {
+            Some(detail) if !detail.is_empty() => {
+                ReceiveError::with_detail(AccountDetailCode::ConnectFailed, prefix, detail)
             }
-        };
-        set(libc::SOL_SOCKET, libc::SO_KEEPALIVE, 1);
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
-        set(libc::IPPROTO_TCP, libc::TCP_KEEPALIVE, TCP_KEEPALIVE_IDLE_SECS);
-        #[cfg(any(target_os = "linux", target_os = "android"))]
-        set(libc::IPPROTO_TCP, libc::TCP_KEEPIDLE, TCP_KEEPALIVE_IDLE_SECS);
-        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux", target_os = "android"))]
-        {
-            set(libc::IPPROTO_TCP, libc::TCP_KEEPINTVL, 30);
-            set(libc::IPPROTO_TCP, libc::TCP_KEEPCNT, 4);
-        }
+            _ => ReceiveError::new(
+                AccountDetailCode::ConnectFailed,
+                format!("{prefix}: {}", error.message),
+            ),
+        },
+        ProxyErrorKind::DirectConnectTimeout => ReceiveError::new(
+            AccountDetailCode::ConnectTimeout,
+            format!("{prefix}: {}", error.message),
+        ),
+        ProxyErrorKind::ProxyConnectFailed | ProxyErrorKind::ProxyTimeout => match error.detail {
+            Some(detail) if !detail.is_empty() => {
+                ReceiveError::with_detail(AccountDetailCode::ProxyConnectFailed, prefix, detail)
+            }
+            _ => ReceiveError::new(
+                AccountDetailCode::ProxyConnectFailed,
+                format!("{prefix}: {}", error.message),
+            ),
+        },
+        ProxyErrorKind::AuthRequired => ReceiveError::new(
+            AccountDetailCode::ProxyAuthFailed,
+            format!("{prefix}: {}", error.message),
+        ),
+        ProxyErrorKind::TunnelFailed | ProxyErrorKind::InvalidConfig => match error.detail {
+            Some(detail) if !detail.is_empty() => {
+                ReceiveError::with_detail(AccountDetailCode::ProxyTunnelFailed, prefix, detail)
+            }
+            _ => ReceiveError::new(
+                AccountDetailCode::ProxyTunnelFailed,
+                format!("{prefix}: {}", error.message),
+            ),
+        },
     }
 }
 
-async fn negotiate(cfg: &ReceiveConfig, stream: TcpStream) -> Result<Client<Conn>, ReceiveError> {
+async fn negotiate(cfg: &ReceiveConfig, stream: ProxyStream) -> Result<Client<Conn>, ReceiveError> {
     match cfg.tls.as_str() {
         "implicit" => {
             let conn = build_tls_connector(cfg)?;
@@ -1711,7 +1792,10 @@ fn build_tls_connector(cfg: &ReceiveConfig) -> Result<tokio_native_tls::TlsConne
 
 /// 逐字节读一行（到 `\n` 为止，剥离 `\r`）。STARTTLS 协商专用：
 /// 不预读任何多余字节（不缓冲），保证 TLS 握手字节完整。
-pub(crate) async fn read_line_exact(stream: &mut TcpStream) -> Result<String, tokio::io::Error> {
+pub(crate) async fn read_line_exact<S>(stream: &mut S) -> Result<String, tokio::io::Error>
+where
+    S: AsyncRead + Unpin,
+{
     let mut line = Vec::new();
     let mut byte = [0u8; 1];
     loop {
@@ -3159,9 +3243,17 @@ mod tests {
     async fn serve_once(cfg: &ReceiveConfig, secret: &[u8]) -> ReceiveError {
         let ctx = Context::new();
         let receive = Receive::new(&cfg.account);
+        let mut no_proxy = None;
         let outcome = tokio::time::timeout(
             Duration::from_secs(10),
-            serve(cfg, &ctx, &receive, None, SecretBuffer::new(secret.to_vec())),
+            serve(
+                cfg,
+                &ctx,
+                &receive,
+                None,
+                SecretBuffer::new(secret.to_vec()),
+                &mut no_proxy,
+            ),
         )
         .await
         .expect("serve 必须在时限内失败");
