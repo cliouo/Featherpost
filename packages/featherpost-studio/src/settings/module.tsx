@@ -393,6 +393,13 @@ export function settingsModule(
     controller.connection(host.state.getSnapshot().snapshot),
   );
   controller.connection(host.state.getSnapshot().snapshot);
+  const stopContext = host.registerContextProvider("settings", () => {
+    const s = controller.store.getSnapshot();
+    return {
+      section: s.section,
+      dirty: controller.dirty,
+    };
+  });
   const stopGuard = host.beforeNavigate((_id, next, cancel) =>
     host.state.getSnapshot().activeViewId === SETTINGS_VIEW
       ? controller.requestLeave(next, cancel)
@@ -484,6 +491,7 @@ export function settingsModule(
       },
     ],
     dispose: () => {
+      stopContext();
       stopIntent();
       stopGuard();
       stopState();

@@ -1,6 +1,7 @@
 import { m } from '@featherpost/i18n/messages';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
+import { StudioDialog } from '../app/Dialog';
 import type { MailBridge, UiAttachment, UiLink, UiMessage } from '../bridge/types';
 import { errorCode } from '../bridge/errors';
 import type { Host } from '../host/host';
@@ -192,13 +193,7 @@ export function OtpBar({ code, notify }: { code: string; notify: (text: string) 
 /** 链接确认面板（决策 6）：先看见真实目标，再决定。 */
 export function LinkSheet({ link, documents, notify, compose }: SheetProps) {
   useUiLocale();
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') documents.dismissLink();
-    };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [documents]);
+  const cancelRef = useRef<HTMLButtonElement>(null);
 
   const web = link.kind === 'http' || link.kind === 'https';
   const copy = async (text: string, copied: () => string) => {
@@ -206,44 +201,51 @@ export function LinkSheet({ link, documents, notify, compose }: SheetProps) {
   };
   const title = web ? m.mailbox_link_title_web() : link.kind === 'mailto' ? m.mailbox_link_title_mailto() : m.mailbox_link_title_other();
   const scheme = link.href.split(':')[0]?.toLowerCase() ?? '';
+  const lead = web ? (
+    <>
+      {m.mailbox_link_web_lead()}<span className="link-host">{link.host || m.mailbox_link_unknown_host()}</span>
+      {link.kind === 'http' && <span className="tag warn">{m.mailbox_link_http_tag()}</span>}
+    </>
+  ) : link.kind === 'mailto' ? (
+    m.mailbox_link_mailto_lead()
+  ) : (
+    <>
+      {m.mailbox_link_other_lead_before()}<code>{scheme || link.host}</code>{m.mailbox_link_other_lead_after()}
+      {m.mailbox_link_other_policy({ product: BRAND.productName })}
+    </>
+  );
 
   return (
-    <div className="sheet-backdrop" onMouseDown={() => documents.dismissLink()}>
-      <div className="sheet" role="dialog" aria-modal="true" aria-labelledby="link-sheet-title" onMouseDown={(event) => event.stopPropagation()}>
-        <h2 id="link-sheet-title">{title}</h2>
+    <StudioDialog
+      variant="sheet"
+      role="dialog"
+      title={title}
+      description={lead}
+      descriptionClassName="sheet-lead"
+      dismissOnOutsideClick
+      showCloseButton={false}
+      initialFocusRef={cancelRef}
+      onClose={() => documents.dismissLink()}
+    >
+      <code className="link-target" aria-label={m.mailbox_link_target_label()}>{link.href}</code>
+      <div className="sheet-actions">
+        <button ref={cancelRef} type="button" className="text-button" onClick={() => documents.dismissLink()}>
+          {web ? m.mailbox_action_cancel() : m.mailbox_dialog_close()}
+        </button>
+        <button type="button" className="text-button" onClick={() => void copy(link.kind === 'mailto' ? link.host || link.href : link.href, link.kind === 'mailto' ? m.mailbox_link_copied_address : m.mailbox_link_copied_link)}>
+          {link.kind === 'mailto' ? m.mailbox_link_copy_address() : m.mailbox_link_copy_link()}
+        </button>
+        {link.kind === 'mailto' && compose && <button type="button" className="primary-button" onClick={()=>{try { const address=decodeURIComponent(link.href.slice(7).split('?')[0]!); compose(address); } catch { notify(m.mailbox_link_mailto_invalid()); }}}>{m.mailbox_link_compose()}</button>}
         {web && (
-          <p className="sheet-lead">
-            {m.mailbox_link_web_lead()}<span className="link-host">{link.host || m.mailbox_link_unknown_host()}</span>
-            {link.kind === 'http' && <span className="tag warn">{m.mailbox_link_http_tag()}</span>}
-          </p>
-        )}
-        {link.kind === 'mailto' && <p className="sheet-lead">{m.mailbox_link_mailto_lead()}</p>}
-        {link.kind === 'other' && (
-          <p className="sheet-lead">
-            {m.mailbox_link_other_lead_before()}<code>{scheme || link.host}</code>{m.mailbox_link_other_lead_after()}
-            {m.mailbox_link_other_policy({ product: BRAND.productName })}
-          </p>
-        )}
-        <code className="link-target" aria-label={m.mailbox_link_target_label()}>{link.href}</code>
-        <div className="sheet-actions">
-          <button type="button" className="text-button" onClick={() => documents.dismissLink()}>
-            {web ? m.mailbox_action_cancel() : m.mailbox_dialog_close()}
+          <button
+            type="button"
+            className="primary-button"
+            onClick={() => void documents.openPendingLink().then((ok) => { if (!ok) notify(m.mailbox_link_open_failed()); })}
+          >
+            {m.mailbox_link_open()}
           </button>
-          <button type="button" className="text-button" onClick={() => void copy(link.kind === 'mailto' ? link.host || link.href : link.href, link.kind === 'mailto' ? m.mailbox_link_copied_address : m.mailbox_link_copied_link)}>
-            {link.kind === 'mailto' ? m.mailbox_link_copy_address() : m.mailbox_link_copy_link()}
-          </button>
-          {link.kind === 'mailto' && compose && <button type="button" className="primary-button" onClick={()=>{try { const address=decodeURIComponent(link.href.slice(7).split('?')[0]!); compose(address); } catch { notify(m.mailbox_link_mailto_invalid()); }}}>{m.mailbox_link_compose()}</button>}
-          {web && (
-            <button
-              type="button"
-              className="primary-button"
-              onClick={() => void documents.openPendingLink().then((ok) => { if (!ok) notify(m.mailbox_link_open_failed()); })}
-            >
-              {m.mailbox_link_open()}
-            </button>
-          )}
-        </div>
+        )}
       </div>
-    </div>
+    </StudioDialog>
   );
 }

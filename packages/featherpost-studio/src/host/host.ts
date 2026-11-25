@@ -7,7 +7,102 @@ import type { Preferences } from '../preferences';
 import { preferenceStorage, readPreferences, savePreferences } from '../preferences';
 import { ContributionRegistry, copyContribution } from './registry';
 import { Store } from './store';
-import type { Bundle, CommandContext, EnabledWhen, View } from './types';
+import type {
+  Bundle,
+  CommandContext,
+  EnabledWhen,
+  HostComposeContext,
+  HostContextProviders,
+  HostContextSnapshot,
+  HostMailboxContext,
+  HostScopeSummary,
+  HostSettingsContext,
+  View,
+} from './types';
+
+const VALID_SCOPE_KINDS = new Set<HostScopeSummary['kind']>(['smart', 'folder', 'unread', 'search']);
+const VALID_SMART_FOLDERS = new Set<NonNullable<HostScopeSummary['smartFolder']>>([
+  'inbox',
+  'all',
+  'unread',
+  'starred',
+]);
+const VALID_SEND_STATES = new Set<NonNullable<HostComposeContext['sendState']>>([
+  'editing',
+  'failed',
+  'sending',
+  'unknown',
+  'sent',
+]);
+
+function sanitizeIdentity(value: MessageIdentity | null | undefined): Readonly<MessageIdentity> | null {
+  if (!value || typeof value.account !== 'string' || typeof value.folder !== 'string' || typeof value.uid !== 'string') {
+    return null;
+  }
+  return Object.freeze({
+    account: value.account,
+    folder: value.folder,
+    uid: value.uid,
+  });
+}
+
+function sanitizeScope(scope: HostScopeSummary | null | undefined): Readonly<HostScopeSummary> | null {
+  if (!scope || !VALID_SCOPE_KINDS.has(scope.kind)) return null;
+  const clean: HostScopeSummary = { kind: scope.kind };
+  if (typeof scope.account === 'string' && scope.account) clean.account = scope.account;
+  if (Array.isArray(scope.accounts)) {
+    clean.accounts = Object.freeze(scope.accounts.filter((id): id is string => typeof id === 'string'));
+  }
+  if (typeof scope.folder === 'string' && scope.folder) clean.folder = scope.folder;
+  if (scope.smartFolder && VALID_SMART_FOLDERS.has(scope.smartFolder)) clean.smartFolder = scope.smartFolder;
+  if (typeof scope.groupId === 'string' && scope.groupId) clean.groupId = scope.groupId;
+  if (typeof scope.groupName === 'string' && scope.groupName) clean.groupName = scope.groupName;
+  if (typeof scope.unreadOnly === 'boolean') clean.unreadOnly = scope.unreadOnly;
+  if (typeof scope.searchQuery === 'string' && scope.searchQuery) clean.searchQuery = scope.searchQuery;
+  return Object.freeze(clean);
+}
+
+function sanitizeMailboxContext(raw: HostMailboxContext | null | undefined): Readonly<HostMailboxContext> | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const checked = Array.isArray(raw.checkedMessages)
+    ? raw.checkedMessages
+        .map((item) => sanitizeIdentity(item))
+        .filter((item): item is Readonly<MessageIdentity> => item !== null)
+    : [];
+  const selectedThreadId =
+    typeof raw.selectedThreadId === 'number' && Number.isInteger(raw.selectedThreadId) && raw.selectedThreadId > 0
+      ? raw.selectedThreadId
+      : null;
+  return Object.freeze({
+    scope: sanitizeScope(raw.scope),
+    selectedMessage: sanitizeIdentity(raw.selectedMessage),
+    selectedThreadId,
+    checkedMessages: Object.freeze(checked),
+    threadOpen: Boolean(raw.threadOpen),
+    totalMessages: typeof raw.totalMessages === 'number' && Number.isFinite(raw.totalMessages) ? Math.max(0, Math.trunc(raw.totalMessages)) : 0,
+  });
+}
+
+function sanitizeComposeContext(raw: HostComposeContext | null | undefined): Readonly<HostComposeContext> | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const draftId = typeof raw.draftId === 'string' && raw.draftId ? raw.draftId : null;
+  const sendState = raw.sendState && VALID_SEND_STATES.has(raw.sendState) ? raw.sendState : null;
+  return Object.freeze({
+    draftId,
+    sendState,
+    inline: Boolean(raw.inline),
+    collapsed: Boolean(raw.collapsed),
+    dirty: Boolean(raw.dirty),
+  });
+}
+
+function sanitizeSettingsContext(raw: HostSettingsContext | null | undefined): Readonly<HostSettingsContext> | null {
+  if (!raw || typeof raw !== 'object') return null;
+  return Object.freeze({
+    section: typeof raw.section === 'string' && raw.section ? raw.section : null,
+    dirty: Boolean(raw.dirty),
+  });
+}
 
 export interface HostState {
   activeViewId: string;
@@ -66,6 +161,7 @@ export class Host {
   private navigationGuards = new Set<(id:string, next:()=>void,cancel:()=>void)=>boolean>();
   private unsubscribe: Array<() => void> = [];
   private intentHandlers = new Set<(intent: OpenIntent) => void>();
+  private contextProviders = new Map<keyof HostContextProviders, () => unknown>();
 
   constructor(readonly bridge: MailBridge) {}
 
@@ -189,6 +285,66 @@ export class Host {
 
   setSelection(selection: HostState['selection']) {
     this.state.patch({ selection });
+  }
+
+  /** 注册非秘密只读上下文提供者（邮箱范围/选中线程、草稿 ID、设置分区），返回注销函数。 */
+  registerContextProvider<K extends keyof HostContextProviders>(
+    key: K,
+    provider: () => HostContextProviders[K] | null,
+  ): () => void {
+    this.contextProviders.set(key, provider);
+    return () => {
+      if (this.contextProviders.get(key) === provider) {
+        this.contextProviders.delete(key);
+      }
+    };
+  }
+
+  /**
+   * 返回只读、经过白名单净化的 UI 上下文快照。
+   * 绝不包含任何凭据、密码、令牌、身份主体、邮件正文或原始 HTML。
+   */
+  getContextSnapshot(): HostContextSnapshot {
+    const state = this.state.getSnapshot();
+    const readProvider = <K extends keyof HostContextProviders>(key: K): HostContextProviders[K] | null => {
+      const provider = this.contextProviders.get(key);
+      if (!provider) return null;
+      try {
+        return (provider() as HostContextProviders[K] | null | undefined) ?? null;
+      } catch {
+        return null;
+      }
+    };
+
+    const mailbox = sanitizeMailboxContext(readProvider('mailbox'));
+    const compose = sanitizeComposeContext(readProvider('compose'));
+    const settings = sanitizeSettingsContext(readProvider('settings'));
+    const selectedMessage = mailbox?.selectedMessage ?? sanitizeIdentity(state.selection?.identity);
+    const checkedMessages = mailbox?.checkedMessages ?? Object.freeze([]);
+    const accountIds = Object.freeze(
+      state.snapshot.accounts
+        .map((item) => item.account)
+        .filter((account): account is string => typeof account === 'string'),
+    );
+
+    return Object.freeze({
+      activeViewId: state.activeViewId,
+      online: state.snapshot.phase === 'online',
+      phase: state.snapshot.phase,
+      compat: state.snapshot.compat,
+      accountIds,
+      selectedMessage,
+      selectedThreadId: mailbox?.selectedThreadId ?? null,
+      checkedMessages,
+      scope: mailbox?.scope ?? null,
+      activeDraftId: compose?.draftId ?? null,
+      activeSettingsSection: settings?.section ?? null,
+      theme: state.preferences.theme,
+      density: state.preferences.density,
+      mailbox,
+      compose,
+      settings,
+    });
   }
 
   notify(text: string) {

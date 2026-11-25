@@ -27,6 +27,17 @@ export function copyContribution<T extends object>(value: T, overrides: Partial<
 
 const MODULE_ID = /^[a-z][a-z0-9]*(?:\.[a-z][a-z0-9-]*)+$/;
 const CONTRIBUTION_SUFFIX = /^[a-z][a-z0-9.-]*$/;
+const VALID_COMMAND_RISKS = new Set(['read', 'stage', 'write', 'destructive']);
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
+function cloneSchema(schema: Record<string, unknown>): Record<string, unknown> {
+  return structuredClone(schema);
+}
 
 /**
  * 可信、编译期模块的贡献注册表（ADR-0031 决策 5）。第三方经 E02 的独立 broker 进入，不直接
@@ -89,9 +100,16 @@ export class ContributionRegistry<View> {
     const token = Symbol(bundle.moduleId);
     // 复制描述符：调用方事后改自己的对象不能绕过校验。访问器原样保留（见 copyContribution）。
     const stored: Contributions<View> = copyContribution(bundle, {
-      commands: bundle.commands?.map((command) =>
-        copyContribution(command, { locations: [...command.locations] }),
-      ),
+      commands: bundle.commands?.map((command) => {
+        const schemaDescriptor = Object.getOwnPropertyDescriptor(command, 'inputSchema');
+        const overrides: Partial<CommandContribution> = {
+          locations: [...command.locations],
+        };
+        if (schemaDescriptor && 'value' in schemaDescriptor && isPlainRecord(schemaDescriptor.value)) {
+          overrides.inputSchema = cloneSchema(schemaDescriptor.value);
+        }
+        return copyContribution(command, overrides);
+      }),
       views: bundle.views?.map((view) => copyContribution(view)),
       settings: bundle.settings?.map((section) => copyContribution(section)),
     });
@@ -139,6 +157,12 @@ export class ContributionRegistry<View> {
       for (const command of bundle.commands ?? []) {
         if (command.locations.length === 0)
           throw new Error(m.extensions_registry_command_location({ id: command.id }));
+        if (command.risk !== undefined && !VALID_COMMAND_RISKS.has(command.risk))
+          throw new Error(`Invalid command risk for ${command.id}: ${String(command.risk)}`);
+        if (command.description !== undefined && typeof command.description !== 'string')
+          throw new Error(`Invalid command description for ${command.id}`);
+        if (command.inputSchema !== undefined && !isPlainRecord(command.inputSchema))
+          throw new Error(`Invalid command inputSchema for ${command.id}`);
       }
       for (const view of bundle.views ?? []) {
         if (view.role && roles.has(view.role))

@@ -1,7 +1,8 @@
 import { m } from "@featherpost/i18n/messages";
 import type { Host } from "./host/host";
-import type { Bundle } from "./host/types";
+import type { Bundle, HostScopeSummary } from "./host/types";
 import { MailboxController } from "./mailbox/controller";
+import type { Scope } from "./mailbox/types";
 import { DocumentController } from "./mailbox/document";
 import { ActivityController } from "./mailbox/activityController";
 import { Activity } from "./Activity";
@@ -13,6 +14,48 @@ import { MAIL, ACTIVITY } from "./views";
 import { groupedBridge } from "./groupQuery";
 export { MAIL, ACTIVITY } from "./views";
 
+function summarizeScope(scope: Scope): HostScopeSummary {
+  if (scope.kind === "unread") {
+    const base = summarizeScope(scope.base);
+    return {
+      ...base,
+      kind: "unread",
+      unreadOnly: true,
+    };
+  }
+  if (scope.kind === "folder") {
+    return {
+      kind: "folder",
+      account: scope.account,
+      folder: scope.folder,
+      unreadOnly: false,
+    };
+  }
+  if (scope.kind === "search") {
+    return {
+      kind: "search",
+      ...(scope.query.account ? { account: scope.query.account } : {}),
+      ...(scope.query.accounts ? { accounts: [...scope.query.accounts] } : {}),
+      ...(scope.query.folder ? { folder: scope.query.folder } : {}),
+      ...(scope.query.query?.trim()
+        ? { searchQuery: scope.query.query.trim() }
+        : {}),
+    };
+  }
+  return {
+    kind: "smart",
+    smartFolder: scope.name,
+    ...(scope.group
+      ? {
+          groupId: scope.group.id,
+          groupName: scope.group.name,
+          accounts: [...scope.group.accounts],
+        }
+      : {}),
+    unreadOnly: scope.name === "unread",
+  };
+}
+
 export function studioMailbox(
   host: Host,
   composer: ComposeController,
@@ -22,6 +65,31 @@ export function studioMailbox(
     groupedBridge(host.bridge),
     (selection) => host.setSelection(selection),
   );
+  const stopContext = host.registerContextProvider("mailbox", () => {
+    const s = controller.store.getSnapshot();
+    const threadId =
+      s.detail?.thread_id ??
+      s.selectedRow?.thread_id ??
+      (s.threadOpen && s.threadId > 0 ? s.threadId : null);
+    return {
+      scope: summarizeScope(s.scope),
+      selectedMessage: s.selected
+        ? {
+            account: s.selected.account,
+            folder: s.selected.folder,
+            uid: s.selected.uid,
+          }
+        : null,
+      selectedThreadId: threadId && threadId > 0 ? threadId : null,
+      checkedMessages: s.checked.map(({ account, folder, uid }) => ({
+        account,
+        folder,
+        uid,
+      })),
+      threadOpen: s.threadOpen,
+      totalMessages: s.total,
+    };
+  });
   const documents = new DocumentController(host.bridge);
   const activity = new ActivityController(host.bridge.mailbox);
   const stopDocuments = documents.bindTo(controller.store);
@@ -117,6 +185,7 @@ export function studioMailbox(
       },
     ],
     dispose: () => {
+      stopContext();
       stopState();
       stopIntent();
       stopDocuments();

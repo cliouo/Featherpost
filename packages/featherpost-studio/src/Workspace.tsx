@@ -21,7 +21,7 @@ import { messageMenu, type MailMenuDeps } from "./menus";
 import { useStudioActions } from "./studioActions";
 
 const SHORTCUT_BLOCKED_SELECTOR =
-  'input,textarea,select,summary,[contenteditable="true"],[data-shortcuts-off],[role="combobox"],[role="listbox"],[role="option"]';
+  'input,textarea,select,summary,[contenteditable="true"],[data-shortcuts-off],[role="combobox"],[role="listbox"],[role="option"],[role="menu"],[role="menuitem"]';
 
 export function isShortcutBlockedTarget(
   target: { closest?(selector: string): unknown } | null | undefined,

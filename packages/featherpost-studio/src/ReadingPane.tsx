@@ -1,6 +1,9 @@
 import { m } from "@featherpost/i18n/messages";
-import { useRef, useState } from "react";
-import { PopoverMenu } from "./app/PopoverMenu";
+import { useState } from "react";
+import {
+  StudioDropdownMenu,
+  StudioDropdownMenuItem,
+} from "./app/DropdownMenu";
 import type { Host } from "./host/host";
 import { useDarkShell } from "./app/theme";
 import { readingDocumentUrl } from "./readingTheme";
@@ -39,7 +42,7 @@ import { addressMenu, messageMenu } from "./menus";
 import { useStudioActions } from "./studioActions";
 import { useMailMenu } from "./Workspace";
 
-function ReaderMoreMenu({
+export function ReaderMoreMenu({
   seen,
   threadOpen,
   canToggleSeen,
@@ -54,44 +57,32 @@ function ReaderMoreMenu({
   onToggleSeen(): void;
   onOpenThread(): void;
 }) {
-  const [open, setOpen] = useState(false);
-  const openRef = useRef(open);
-  openRef.current = open;
-  const run = (action: () => void) => {
-    if (openRef.current) setOpen(false);
-    action();
-  };
+  useUiLocale();
   return (
-    <PopoverMenu
+    <StudioDropdownMenu
       className="reader-menu"
-      triggerClassName="icon-button"
-      panelClassName="reader-menu-panel"
-      panelRole="menu"
-      open={open}
-      onOpenChange={setOpen}
-      triggerLabel={m.studio_reader_more()}
-      triggerTitle={m.studio_reader_more()}
-      trigger={<Icon name="more" />}
+      contentClassName="reader-menu-panel"
+      align="start"
+      trigger={
+        <button
+          type="button"
+          className="icon-button"
+          aria-label={m.studio_reader_more()}
+          title={m.studio_reader_more()}
+        >
+          <Icon name="more" />
+        </button>
+      }
     >
-      <button
-        type="button"
-        role="menuitem"
-        disabled={!canToggleSeen}
-        onClick={() => run(onToggleSeen)}
-      >
+      <StudioDropdownMenuItem disabled={!canToggleSeen} onSelect={onToggleSeen}>
         {seen ? m.studio_reader_mark_unread() : m.studio_reader_mark_read()}
-      </button>
-      <button
-        type="button"
-        role="menuitem"
-        disabled={!canOpenThread}
-        onClick={() => run(onOpenThread)}
-      >
+      </StudioDropdownMenuItem>
+      <StudioDropdownMenuItem disabled={!canOpenThread} onSelect={onOpenThread}>
         {threadOpen
           ? m.studio_reader_thread_hide()
           : m.studio_reader_thread_show()}
-      </button>
-    </PopoverMenu>
+      </StudioDropdownMenuItem>
+    </StudioDropdownMenu>
   );
 }
 

@@ -27,6 +27,16 @@ export function composeModule(
   const stop = host.state.subscribe(() =>
     controller.setOnline(host.state.getSnapshot().snapshot.phase === "online"),
   );
+  const stopContext = host.registerContextProvider("compose", () => {
+    const s = controller.store.getSnapshot();
+    return {
+      draftId: s.draft?.id ?? null,
+      sendState: s.draft?.send_state ?? null,
+      inline: s.inline,
+      collapsed: s.collapsed,
+      dirty: s.revision !== s.savedRevision,
+    };
+  });
   const intent = host.onIntent((i) => {
     if (i.route === "compose") void controller.create();
   });
@@ -130,6 +140,11 @@ export function composeModule(
     );
   }
   const onKey = (e: KeyboardEvent) => {
+    if (
+      typeof document !== "undefined" &&
+      document.querySelector('dialog[open], [aria-modal="true"]')
+    )
+      return;
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "n") {
       e.preventDefault();
       void controller.create();
@@ -167,6 +182,7 @@ export function composeModule(
         get title() {
           return m.compose_command_new();
         },
+        risk: "stage",
         icon: "drafts",
         locations: ["navigation"],
         order: 0,
@@ -180,6 +196,7 @@ export function composeModule(
         get title() {
           return m.compose_drafts_title();
         },
+        risk: "read",
         icon: "drafts",
         locations: ["navigation"],
         order: 10,
@@ -190,6 +207,7 @@ export function composeModule(
         get title() {
           return REPLY_TITLE[mode]();
         },
+        risk: "stage" as const,
         icon: mode === "forward" ? ("forward" as const) : ("reply" as const),
         locations: ["toolbar", "menu"] as const,
         order: 10 + index,
@@ -202,6 +220,7 @@ export function composeModule(
       })),
     ],
     dispose: () => {
+      stopContext();
       stop();
       intent();
       controller.stop();

@@ -209,16 +209,10 @@ body[data-studio-settings] .studio > .studio-workspace {
 .studio-settings summary::-webkit-details-marker { display: none; }
 .studio-settings .account-more > button .icon { width: 13px; height: 13px; }
 .studio-settings .account-row .account-more > button { font-size: 0; gap: 0; padding: 4px; }
-.studio-settings .account-more > div { position: absolute; right: 0; top: calc(100% + 5px); z-index: 4; min-width: 150px; padding: 6px; border: 1px solid var(--studio-border); border-radius: 6px; background: var(--studio-surface); box-shadow: 0 6px 24px #00000012; transform-origin: top right; animation: fp-pop-in var(--motion-fast) var(--ease-standard); }
-.studio-settings .account-more > div[data-side="top"] { top: auto; bottom: calc(100% + 5px); transform-origin: bottom right; }
-.studio-settings .account-more > div button { width: 100%; padding: 9px; text-align: left; font-size: 12px; border-radius: 4px; }
 @media (hover: hover) {
   .studio-settings .account-more > button:hover:not(:disabled) { background: var(--hover-bg); color: var(--studio-text); }
   .studio-settings .account-more > button[aria-expanded="true"]:hover:not(:disabled) { background: var(--hover-bg-strong); }
-  .studio-settings .account-more > div button:not(.danger):hover:not(:disabled) { background: var(--hover-bg); color: var(--studio-text); }
-  .studio-settings .account-more > div button.danger:hover:not(:disabled) { background: var(--hover-danger-bg); color: var(--hover-danger-ink); }
 }
-.studio-settings .account-more small { display: block; font-size: 10px; padding: 5px 9px; }
 .studio-settings .account-editor { border: 0; border-top: 1px solid var(--studio-border); border-radius: 0; margin: 0; padding: 20px 26px 0; background: var(--studio-surface); animation: fp-reveal-down var(--motion-base) var(--ease-standard); }
 .studio-editor-label { font-size: 11px; color: var(--studio-muted); margin-bottom: 16px; }
 .studio-settings .studio-account-identity { grid-template-columns: 1fr 1.25fr; gap: 22px; margin-bottom: 20px; }
@@ -315,11 +309,21 @@ body[data-studio-settings] .studio > .studio-workspace {
 .comfortable .studio-density-lines i { height: 39px; align-items: flex-start; padding-top: 6px; }
 .comfortable .studio-density-lines i::after { position: absolute; top: 16px; left: 0; width: 88%; }
 .studio-appearance-note { font-size: 10px; color: var(--studio-muted); line-height: 1.8; margin-top: 25px; padding-top: 20px; border-top: 1px solid var(--studio-soft-border); }
-.studio-settings dialog.mail-dialog { border: 1px solid var(--studio-border); background: var(--studio-surface); color: var(--studio-text); border-radius: 10px; padding: 26px calc(26px - var(--scrollbar-size, 10px)) 26px 26px; max-width: min(520px,calc(100vw - 40px)); box-shadow: 0 16px 70px #00000025; }
-.studio-settings dialog.mail-dialog::backdrop { background: #11111866; }
-.studio-settings dialog .settings-confirm-copy { font-size: 13px; color: var(--studio-secondary); line-height: 1.9; margin-top: 18px; }
-.studio-settings dialog .settings-actions { justify-content: flex-end; }
-.studio-settings dialog.mail-dialog > header { border-bottom: 1px solid var(--studio-border); padding-bottom: 16px; }
+body[data-studio-settings] .mail-dialog { border: 1px solid var(--studio-border); background: var(--studio-surface); color: var(--studio-text); border-radius: 10px; padding: 26px calc(26px - var(--scrollbar-size, 10px)) 26px 26px; max-width: min(520px,calc(100vw - 40px)); box-shadow: 0 16px 70px #00000025; }
+body[data-studio-settings] .dialog-overlay { background: #11111866; }
+body[data-studio-settings] .mail-dialog .settings-confirm-copy { font-size: 13px; color: var(--studio-secondary); line-height: 1.9; margin-top: 18px; }
+body[data-studio-settings] .mail-dialog .settings-actions { justify-content: flex-end; }
+body[data-studio-settings] .mail-dialog > header { border-bottom: 1px solid var(--studio-border); padding-bottom: 16px; }
+body[data-studio-settings] .mail-dialog .primary,
+body[data-studio-settings] .mail-dialog .secondary { min-height: 32px; padding: 7px 13px; border-radius: 5px; font-size: 12px; font-weight: 450; }
+body[data-studio-settings] .mail-dialog .primary { background: var(--studio-primary); color: var(--studio-on-primary); border: 0; }
+body[data-studio-settings] .mail-dialog .secondary { background: var(--studio-surface); border: 0; box-shadow: inset 0 0 0 1px var(--studio-border); color: var(--studio-text); }
+body[data-studio-settings] .mail-dialog .danger { color: var(--studio-danger); }
+@media (hover: hover) {
+  body[data-studio-settings] .mail-dialog .primary:hover:not(:disabled) { background: var(--hover-accent); }
+  body[data-studio-settings] .mail-dialog .secondary:hover:not(:disabled) { background: var(--hover-surface); box-shadow: inset 0 0 0 1px var(--hover-border); }
+  body[data-studio-settings] .mail-dialog .secondary.danger:hover:not(:disabled) { background: var(--hover-danger-bg); box-shadow: inset 0 0 0 1px var(--hover-danger-border); color: var(--hover-danger-ink); }
+}
 @media (min-width: 1450px) { .studio-settings .settings-content .page-column { padding-right: calc(64px - var(--scrollbar-size, 10px)); padding-left: 64px; } }
 @media (max-width: 1040px) {
   .studio-settings .settings-layout { grid-template-columns: 196px minmax(0,1fr); }
