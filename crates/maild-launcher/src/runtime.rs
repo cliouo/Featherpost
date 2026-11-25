@@ -223,24 +223,27 @@ impl NativeController {
         }
     }
 
-    /// Whether this complete app bundle can host the bundled frontend (`STUDIO_FRONTEND_ID` or
-    /// `BUNDLED_FRONTEND_ID`) itself. The catalog entry already proves the managed frontend exists,
-    /// is a valid package and is protocol compatible; the installed executable must also be intact
-    /// against the same-version bundled `recovery.sha256`, so damage keeps routing to native
-    /// recovery (ADR-0039/0040). For Studio, a different installed standalone version falls back
-    /// to `InPlace::Unavailable` so the Agent activates that managed Studio bundle instead.
+    /// Whether this complete app bundle can host the bundled frontend (`BUNDLED_FRONTEND_ID`)
+    /// itself. The catalog entry already proves the managed frontend exists, is a valid package
+    /// and is protocol compatible; the installed executable must also be intact against the
+    /// same-version bundled `recovery.sha256`, so damage keeps routing to native recovery
+    /// (ADR-0039/0040). A different installed standalone version falls back to
+    /// `InPlace::Unavailable` so the Agent activates that managed bundle instead.
     fn in_place_ui(&self, frontend_id: &str) -> (InPlace, Option<PathBuf>) {
+        if frontend_id != maild::recovery::BUNDLED_FRONTEND_ID {
+            return (InPlace::Unavailable, None);
+        }
         let Some(layout) = self.layout.as_ref().filter(|_| !self.overrides) else {
             return (InPlace::Unavailable, None);
         };
-        let Ok(Some(exe)) = layout.frontend_ui_executable(frontend_id) else {
+        let Ok(exe) = layout.ui_executable() else {
             return (InPlace::Unavailable, None);
         };
         let Ok(paths) = maild_paths::AppPaths::discover() else {
             return (InPlace::Unavailable, None);
         };
         let installed = paths.frontend_dir.join(frontend_id);
-        let payload = layout.bundled_frontend_payload_for(frontend_id);
+        let payload = layout.bundled_frontend_payload();
         let mut check =
             maild::frontend::inspect_installed_frontend(frontend_id, &installed, &payload);
         if matches!(check, Ok(maild::frontend::InstalledFrontendMatch::Stale))
@@ -248,7 +251,7 @@ impl NativeController {
         {
             check = maild::frontend::inspect_installed_frontend(frontend_id, &installed, &payload);
         }
-        in_place_from_check(frontend_id, check, exe)
+        in_place_from_check(check, exe)
     }
 
     /// Same version, different build: this app was rebuilt or reinstalled while an Agent kept
@@ -322,11 +325,10 @@ enum LaunchRoute {
 }
 
 fn is_in_place_candidate(id: &str) -> bool {
-    id == maild::recovery::STUDIO_FRONTEND_ID || id == maild::recovery::BUNDLED_FRONTEND_ID
+    id == maild::recovery::BUNDLED_FRONTEND_ID
 }
 
 fn in_place_from_check(
-    frontend_id: &str,
     check: Result<maild::frontend::InstalledFrontendMatch, String>,
     exe: PathBuf,
 ) -> (InPlace, Option<PathBuf>) {
@@ -334,11 +336,7 @@ fn in_place_from_check(
     match check {
         Ok(InstalledFrontendMatch::MatchesBundled) => (InPlace::Ready, Some(exe)),
         Ok(InstalledFrontendMatch::DifferentVersion | InstalledFrontendMatch::Unreferenced) => {
-            if frontend_id == maild::recovery::STUDIO_FRONTEND_ID {
-                (InPlace::Unavailable, None)
-            } else {
-                (InPlace::Ready, Some(exe))
-            }
+            (InPlace::Unavailable, None)
         }
         Ok(InstalledFrontendMatch::Stale) => {
             eprintln!(
@@ -361,9 +359,8 @@ fn resync_response_confirmed(response: &Value, frontend_id: &str) -> bool {
     response["id"].as_str() == Some(frontend_id)
 }
 
-/// Pure routing of a `listFrontends` catalog (ADR-0044). `in_place` is only consulted when the
-/// catalogued, inbox-capable default is a bundled frontend (`STUDIO_FRONTEND_ID` or
-/// `BUNDLED_FRONTEND_ID`).
+/// Pure routing of a `listFrontends` catalog (ADR-0044 / ADR-0049). `in_place` is only consulted
+/// when the catalogued, inbox-capable default is the bundled frontend (`BUNDLED_FRONTEND_ID`).
 fn launch_route(catalog: &Value, in_place: impl FnOnce(&str) -> InPlace) -> LaunchRoute {
     let Some(target) = mailbox_target(catalog) else {
         return LaunchRoute::Recovery;
@@ -436,10 +433,7 @@ fn mailbox_response(
 }
 
 fn repair_response_confirmed(response: &Value) -> bool {
-    matches!(
-        response["id"].as_str(),
-        Some(maild::recovery::STUDIO_FRONTEND_ID | maild::recovery::BUNDLED_FRONTEND_ID)
-    )
+    response["id"].as_str() == Some(maild::recovery::BUNDLED_FRONTEND_ID)
 }
 
 impl Controller for NativeController {
@@ -573,21 +567,13 @@ mod tests {
     use super::*;
     #[test]
     fn recovery_hands_off_healthy_bundled_ui_without_workspace_activation() {
-        let exe = PathBuf::from("/app/Contents/MacOS/ui");
-        let studio_exe = PathBuf::from("/app/Contents/MacOS/featherpost-studio");
+        let exe = PathBuf::from("/app/Contents/MacOS/featherpost-studio");
         assert_eq!(
             recovery_mailbox_host(&catalog(maild_brand::BUNDLED_FRONTEND_ID), false, |id| {
                 assert_eq!(id, maild_brand::BUNDLED_FRONTEND_ID);
                 (InPlace::Ready, Some(exe.clone()))
             }),
             Ok(Some(exe))
-        );
-        assert_eq!(
-            recovery_mailbox_host(&catalog(maild::recovery::STUDIO_FRONTEND_ID), false, |id| {
-                assert_eq!(id, maild::recovery::STUDIO_FRONTEND_ID);
-                (InPlace::Ready, Some(studio_exe.clone()))
-            }),
-            Ok(Some(studio_exe))
         );
         assert_eq!(
             recovery_mailbox_host(&catalog("org.example.reader"), false, |_| panic!("third-party")),
@@ -599,17 +585,8 @@ mod tests {
             }),
             Ok(None)
         );
-        assert_eq!(
-            recovery_mailbox_host(&catalog(maild::recovery::STUDIO_FRONTEND_ID), false, |_| {
-                (InPlace::Unavailable, None)
-            }),
-            Ok(None)
-        );
         assert!(recovery_mailbox_host(&json!({}), false, |_| panic!("no default")).is_err());
         assert!(recovery_mailbox_host(&catalog(maild_brand::BUNDLED_FRONTEND_ID), false, |_| {
-            (InPlace::Damaged, None)
-        }).is_err());
-        assert!(recovery_mailbox_host(&catalog(maild::recovery::STUDIO_FRONTEND_ID), false, |_| {
             (InPlace::Damaged, None)
         }).is_err());
     }
@@ -618,12 +595,6 @@ mod tests {
     fn recovery_uses_inbox_activation_for_an_existing_main_window() {
         assert_eq!(
             recovery_mailbox_host(&catalog(maild_brand::BUNDLED_FRONTEND_ID), true, |_| {
-                (InPlace::Ready, Some(PathBuf::from("/app/Contents/MacOS/ui")))
-            }),
-            Ok(None)
-        );
-        assert_eq!(
-            recovery_mailbox_host(&catalog(maild::recovery::STUDIO_FRONTEND_ID), true, |_| {
                 (
                     InPlace::Ready,
                     Some(PathBuf::from("/app/Contents/MacOS/featherpost-studio")),
@@ -706,31 +677,22 @@ mod tests {
     fn catalog(default: &str) -> Value {
         json!({"default":default,"frontends":[
             {"id":"builtin-repair","capabilities":["background"]},
-            {"id":maild_brand::BUNDLED_FRONTEND_ID,"version":"0.1.0","capabilities":["inbox","message","compose","settings","background"],"lifecycle":"on_demand"},
-            {"id":maild::recovery::STUDIO_FRONTEND_ID,"version":"0.3.4","capabilities":["inbox","message","compose","settings","background"],"lifecycle":"on_demand"},
+            {"id":maild_brand::BUNDLED_FRONTEND_ID,"version":"0.4.0","capabilities":["inbox","message","compose","settings","background"],"lifecycle":"on_demand"},
             {"id":"org.example.reader","capabilities":["inbox"],"lifecycle":"on_demand"},
         ]})
     }
     #[test]
-    fn healthy_bundled_and_studio_defaults_are_hosted_in_place_with_actual_target() {
+    fn healthy_bundled_default_is_hosted_in_place_with_actual_target() {
         let route = launch_route(&catalog(maild_brand::BUNDLED_FRONTEND_ID), |id| {
             assert_eq!(id, maild_brand::BUNDLED_FRONTEND_ID);
             InPlace::Ready
         });
         assert!(matches!(route, LaunchRoute::InPlace(target) if target.id == maild_brand::BUNDLED_FRONTEND_ID));
-
-        let studio = launch_route(&catalog(maild::recovery::STUDIO_FRONTEND_ID), |id| {
-            assert_eq!(id, maild::recovery::STUDIO_FRONTEND_ID);
-            InPlace::Ready
-        });
-        assert!(matches!(studio, LaunchRoute::InPlace(target) if target.id == maild::recovery::STUDIO_FRONTEND_ID));
     }
     #[test]
-    fn bundled_or_studio_default_without_in_place_ui_still_asks_the_agent() {
+    fn bundled_default_without_in_place_ui_still_asks_the_agent() {
         let route = launch_route(&catalog(maild_brand::BUNDLED_FRONTEND_ID), |_| InPlace::Unavailable);
         assert!(matches!(route, LaunchRoute::Frontend(target) if target.id == maild_brand::BUNDLED_FRONTEND_ID));
-        let studio = launch_route(&catalog(maild::recovery::STUDIO_FRONTEND_ID), |_| InPlace::Unavailable);
-        assert!(matches!(studio, LaunchRoute::Frontend(target) if target.id == maild::recovery::STUDIO_FRONTEND_ID));
     }
     #[test]
     fn third_party_default_uses_open_frontend_without_in_place_checks() {
@@ -740,7 +702,7 @@ mod tests {
         assert!(matches!(route, LaunchRoute::Frontend(target) if target.id == "org.example.reader"));
     }
     #[test]
-    fn missing_or_damaged_bundled_or_studio_frontend_shows_recovery() {
+    fn missing_or_damaged_bundled_frontend_shows_recovery() {
         // Removed/unloadable bundled frontend: the daemon reports the native repair default.
         let route = launch_route(&catalog("builtin-repair"), |_| panic!("no window to host"));
         assert!(matches!(route, LaunchRoute::Recovery));
@@ -753,99 +715,60 @@ mod tests {
         // Same-version bytes differ from the bundled checksum.
         let route = launch_route(&catalog(maild_brand::BUNDLED_FRONTEND_ID), |_| InPlace::Damaged);
         assert!(matches!(route, LaunchRoute::Recovery));
-        let studio = launch_route(&catalog(maild::recovery::STUDIO_FRONTEND_ID), |_| InPlace::Damaged);
-        assert!(matches!(studio, LaunchRoute::Recovery));
     }
 
     #[test]
-    fn studio_different_standalone_version_falls_back_to_managed_bundle() {
+    fn different_standalone_version_falls_back_to_managed_bundle() {
         use maild::frontend::InstalledFrontendMatch;
         let exe = PathBuf::from("/app/Contents/MacOS/featherpost-studio");
         assert_eq!(
-            in_place_from_check(
-                maild::recovery::STUDIO_FRONTEND_ID,
-                Ok(InstalledFrontendMatch::MatchesBundled),
-                exe.clone()
-            ),
+            in_place_from_check(Ok(InstalledFrontendMatch::MatchesBundled), exe.clone()),
             (InPlace::Ready, Some(exe.clone()))
         );
         assert_eq!(
-            in_place_from_check(
-                maild::recovery::STUDIO_FRONTEND_ID,
-                Ok(InstalledFrontendMatch::DifferentVersion),
-                exe.clone()
-            ),
+            in_place_from_check(Ok(InstalledFrontendMatch::DifferentVersion), exe.clone()),
             (InPlace::Unavailable, None)
         );
         assert_eq!(
-            in_place_from_check(
-                maild::recovery::STUDIO_FRONTEND_ID,
-                Ok(InstalledFrontendMatch::Unreferenced),
-                exe.clone()
-            ),
+            in_place_from_check(Ok(InstalledFrontendMatch::Unreferenced), exe.clone()),
             (InPlace::Unavailable, None)
         );
         assert_eq!(
-            in_place_from_check(
-                maild::recovery::STUDIO_FRONTEND_ID,
-                Ok(InstalledFrontendMatch::Stale),
-                exe.clone()
-            ),
+            in_place_from_check(Ok(InstalledFrontendMatch::Stale), exe.clone()),
             (InPlace::Damaged, None)
         );
         assert_eq!(
-            in_place_from_check(
-                maild::recovery::STUDIO_FRONTEND_ID,
-                Err("damaged".into()),
-                exe.clone()
-            ),
+            in_place_from_check(Err("damaged".into()), exe),
             (InPlace::Damaged, None)
-        );
-        // Legacy bundled UI keeps existing behavior for DifferentVersion / Unreferenced.
-        let ui_exe = PathBuf::from("/app/Contents/MacOS/featherpost-ui");
-        assert_eq!(
-            in_place_from_check(
-                maild::recovery::BUNDLED_FRONTEND_ID,
-                Ok(InstalledFrontendMatch::DifferentVersion),
-                ui_exe.clone()
-            ),
-            (InPlace::Ready, Some(ui_exe))
         );
     }
 
     #[test]
-    fn resync_confirmation_supports_multi_id_and_legacy_responses() {
+    fn resync_confirmation_supports_multi_id_and_single_id_responses() {
         let modern = json!({
             "id": maild::recovery::BUNDLED_FRONTEND_ID,
-            "ids": [maild::recovery::BUNDLED_FRONTEND_ID, maild::recovery::STUDIO_FRONTEND_ID],
+            "ids": [maild::recovery::BUNDLED_FRONTEND_ID],
             "replaced": true,
-            "replaced_ids": [maild::recovery::STUDIO_FRONTEND_ID],
+            "replaced_ids": [maild::recovery::BUNDLED_FRONTEND_ID],
         });
-        assert!(resync_response_confirmed(&modern, maild::recovery::STUDIO_FRONTEND_ID));
         assert!(resync_response_confirmed(&modern, maild::recovery::BUNDLED_FRONTEND_ID));
         assert!(!resync_response_confirmed(&modern, "org.example.reader"));
 
-        // Older Agent predating multi-id resync only covers BUNDLED_FRONTEND_ID.
-        let older_agent = json!({
+        let single = json!({
             "id": maild::recovery::BUNDLED_FRONTEND_ID,
             "replaced": false,
         });
-        assert!(resync_response_confirmed(&older_agent, maild::recovery::BUNDLED_FRONTEND_ID));
-        assert!(!resync_response_confirmed(&older_agent, maild::recovery::STUDIO_FRONTEND_ID));
-
-        // Repair fallback response returning Studio confirms Studio.
-        let repair_studio = json!({ "id": maild::recovery::STUDIO_FRONTEND_ID });
-        assert!(resync_response_confirmed(&repair_studio, maild::recovery::STUDIO_FRONTEND_ID));
-        assert!(!resync_response_confirmed(&repair_studio, maild::recovery::BUNDLED_FRONTEND_ID));
+        assert!(resync_response_confirmed(&single, maild::recovery::BUNDLED_FRONTEND_ID));
+        assert!(!resync_response_confirmed(&single, maild_client::LEGACY_UI_FRONTEND));
     }
 
     #[test]
-    fn repair_confirmation_accepts_studio_and_legacy_bundled_frontends_only() {
-        assert!(repair_response_confirmed(&json!({
-            "id": maild::recovery::STUDIO_FRONTEND_ID
-        })));
+    fn repair_confirmation_accepts_bundled_frontend_only() {
         assert!(repair_response_confirmed(&json!({
             "id": maild::recovery::BUNDLED_FRONTEND_ID
+        })));
+        assert!(!repair_response_confirmed(&json!({
+            "id": maild_client::LEGACY_UI_FRONTEND
         })));
         assert!(!repair_response_confirmed(&json!({
             "id": "org.example.third-party"

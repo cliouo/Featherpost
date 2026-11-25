@@ -68,16 +68,18 @@ jobs:
           packaging/macos/tests/test_bundle.sh
           packaging/macos/tests/test_release.sh
           packaging/macos/tests/test_lifecycle.sh
-      - name: Prepare pnpm and test Tauri UI webview package
+      - name: Prepare pnpm and test Tauri UI webview packages
         shell: bash
         run: |
           set -euo pipefail
           # Versions come from mise.toml (installed by mise-action above).
           node --version
           pnpm --version
-          pnpm --dir packages/maild-ui install --frozen-lockfile
-          pnpm --dir packages/maild-ui exec tsc --noEmit -p tsconfig.json
+          pnpm install --frozen-lockfile
+          pnpm --dir packages/maild-ui typecheck
           pnpm --dir packages/maild-ui test
+          pnpm --dir packages/featherpost-studio typecheck
+          pnpm --dir packages/featherpost-studio build
       - name: Build universal2 release candidate
         shell: bash
         run: |

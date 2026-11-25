@@ -90,8 +90,8 @@ done
 [ "$(plutil -extract CFBundleIdentifier raw \
     "$default_bundle/$payload_rel/$BRAND_UI_BUNDLE/Contents/Info.plist")" = "$BRAND_UI_BUNDLE_ID" ] ||
     fail 'default UI bundle identifier drifted'
-[ "$(plutil -extract CFBundleShortVersionString raw "$default_bundle/Contents/Info.plist")" = 0.1.0 ] ||
-    fail 'default short version is not 0.1.0'
+[ "$(plutil -extract CFBundleShortVersionString raw "$default_bundle/Contents/Info.plist")" = 0.4.0 ] ||
+    fail 'default short version is not 0.4.0'
 
 # Legacy MAILD_BUNDLE_* is still honoured as a fallback; the branded name wins when both are set.
 legacy_bundle="$work/output/legacy/$BRAND_APP_BUNDLE"
@@ -150,6 +150,8 @@ host_ui="$bundle/Contents/MacOS/$ui_name"
 app_icon="$bundle/Contents/Resources/$BRAND_ICON_NAME.icns"
 agent_plist="$bundle/$agent_rel/Contents/Info.plist"
 agent_icon="$bundle/$agent_rel/Contents/Resources/$BRAND_ICON_NAME.icns"
+ui_plist="$payload/$BRAND_UI_BUNDLE/Contents/Info.plist"
+ui_icon="$payload/$BRAND_UI_BUNDLE/Contents/Resources/$BRAND_ICON_NAME.icns"
 cmp -s "$work/bin/$ui_name" "$host_ui" ||
     fail 'single-host UI executable was not copied byte-for-byte'
 [ "$(stat -f '%Lp' "$host_ui")" = 755 ] || fail 'single-host UI executable is not 0755'
@@ -162,6 +164,12 @@ cmp -s "$app_icon" "$agent_icon" || fail 'Agent icon differs from the applicatio
 [ "$(stat -f '%Lp' "$agent_icon")" = 644 ] || fail 'Agent icon is not 0644'
 [ "$(plutil -extract CFBundleIconFile raw "$agent_plist")" = "$BRAND_ICON_NAME" ] ||
     fail "Agent CFBundleIconFile is not $BRAND_ICON_NAME"
+cmp -s "$app_icon" "$ui_icon" || fail 'UI icon differs from the application icon'
+[ "$(stat -f '%Lp' "$ui_icon")" = 644 ] || fail 'UI icon is not 0644'
+[ "$(plutil -extract CFBundleIconFile raw "$ui_plist")" = "$BRAND_ICON_NAME" ] ||
+    fail "UI CFBundleIconFile is not $BRAND_ICON_NAME"
+[ "$(plutil -extract CFBundleDisplayName raw "$ui_plist")" = "${BRAND_UI_BUNDLE%.app}" ] ||
+    fail "UI CFBundleDisplayName is not ${BRAND_UI_BUNDLE%.app}"
 
 [ -z "$(find "$work/home" -mindepth 1 -print -quit)" ] ||
     fail 'bundle scripts wrote under HOME'
@@ -543,7 +551,8 @@ for path in \
     "Contents/Library/LoginItems/Quill & Ink Agent.app/Contents/MacOS/quill-agent" \
     "Contents/Library/LoginItems/Quill & Ink Agent.app/Contents/Resources/Quill Ink.icns" \
     "Contents/Library/Helpers/Quill & Ink Menu.app/Contents/MacOS/quill-menu" \
-    "Contents/Resources/frontends/org.example.quill.ui/Quill & Ink UI.app/Contents/MacOS/quill-ui"; do
+    "Contents/Resources/frontends/org.example.quill.ui/Quill & Ink UI.app/Contents/MacOS/quill-ui" \
+    "Contents/Resources/frontends/org.example.quill.ui/Quill & Ink UI.app/Contents/Resources/Quill Ink.icns"; do
     [ -f "$rebrand_bundle/$path" ] || fail "alternate brand bundle is missing $path"
 done
 [ "$(plutil -extract CFBundleDisplayName raw "$rebrand_bundle/Contents/Info.plist")" = 'Quill & Ink' ] ||
@@ -575,88 +584,29 @@ fi
 grep -F 'agent-bundle-id.txt differs from brand.env' "$work/rebrand-drift.stderr" >/dev/null ||
     fail 'identity manifest drift failed at the wrong gate'
 
-# Product bundles carry both managed frontends. Neither binary can impersonate the other.
-studio_bundle="$work/output/studio/$BRAND_APP_BUNDLE"
-fixture "$work/bin/featherpost-studio" 'maild-ui-embedded:dev.featherpost.studio'
-"${unset_versions[@]}" "$packaging_dir/build-bundle.sh" \
-    --launcher-bin "$work/bin/$launcher_name" --agent-bin "$work/bin/$agent_name" \
-    --studio-bin "$work/bin/featherpost-studio" --output "$studio_bundle" >/dev/null
-"${unset_versions[@]}" "$packaging_dir/verify-bundle.sh" "$studio_bundle" >/dev/null
-studio_payload="$studio_bundle/Contents/Resources/frontends/dev.featherpost.studio"
-studio_exe="$studio_payload/Featherpost Studio.app/Contents/MacOS/featherpost-studio"
-host_studio="$studio_bundle/Contents/MacOS/featherpost-studio"
-[ -f "$studio_bundle/$payload_rel/frontend.toml" ] || fail 'Studio displaced legacy recovery'
-cmp "$work/bin/featherpost-studio" "$studio_exe" || fail 'Studio executable changed during unsigned packaging'
-cmp "$work/bin/featherpost-studio" "$host_studio" || fail 'single-host Studio executable was not copied byte-for-byte'
-[ "$(stat -f '%Lp' "$host_studio")" = 755 ] || fail 'single-host Studio executable is not 0755'
-# A bundle without a Studio payload must not carry a stray single-host Studio executable.
-cp -X -- "$work/bin/featherpost-studio" "$bundle/Contents/MacOS/featherpost-studio"
-chmod 0755 "$bundle/Contents/MacOS/featherpost-studio"
+# Retired legacy UI binary cannot impersonate the sole built-in frontend.
+fixture "$work/bin/retired-legacy-ui" 'maild-ui-embedded:dev.featherpost.ui'
+if "${unset_versions[@]}" "$packaging_dir/build-bundle.sh" \
+    --launcher-bin "$work/bin/$launcher_name" \
+    --agent-bin "$work/bin/$agent_name" \
+    --ui-bin "$work/bin/retired-legacy-ui" \
+    --output "$work/output/retired-ui/$BRAND_APP_BUNDLE" >/dev/null 2>&1; then
+    fail 'builder accepted a retired dev.featherpost.ui binary as the built-in UI'
+fi
+[ ! -e "$work/output/retired-ui/$BRAND_APP_BUNDLE" ] ||
+    fail 'retired UI build left an artifact'
+cp -X -- "$work/bin/retired-legacy-ui" "$host_ui"
+chmod 0755 "$host_ui"
 if "$packaging_dir/verify-bundle.sh" "$bundle" >/dev/null 2>&1; then
-    fail 'verifier accepted a stray Contents/MacOS/featherpost-studio without Studio payload'
+    fail "verifier accepted a retired dev.featherpost.ui binary at Contents/MacOS/$ui_name"
 fi
-rm -- "$bundle/Contents/MacOS/featherpost-studio"
-# Single-host Studio: missing, symlinked, non-executable, wrong-identity or dev-form binaries are rejected.
-cp -X -- "$host_studio" "$work/host-studio-original"
-rm -- "$host_studio"
-if "${unset_versions[@]}" "$packaging_dir/verify-bundle.sh" "$studio_bundle" >/dev/null 2>&1; then
-    fail 'verifier accepted a Studio bundle without Contents/MacOS/featherpost-studio'
-fi
-cp -X -- "$work/bin/$ui_name" "$host_studio"
-chmod 0755 "$host_studio"
-if "${unset_versions[@]}" "$packaging_dir/verify-bundle.sh" "$studio_bundle" >/dev/null 2>&1; then
-    fail 'verifier accepted legacy UI binary at Contents/MacOS/featherpost-studio'
-fi
-cp -X -- "$work/bin/$ui_name-dev-form" "$host_studio"
-chmod 0755 "$host_studio"
-if "${unset_versions[@]}" "$packaging_dir/verify-bundle.sh" "$studio_bundle" >/dev/null 2>"$work/host-studio-dev.stderr"; then
-    fail 'verifier accepted non-embedded Contents/MacOS/featherpost-studio'
-fi
-grep -F 'Studio (host)' "$work/host-studio-dev.stderr" >/dev/null ||
-    fail 'non-embedded host Studio failed at the wrong gate'
-rm -- "$host_studio"
-ln -s -- "../Resources/frontends/dev.featherpost.studio/Featherpost Studio.app/Contents/MacOS/featherpost-studio" "$host_studio"
-if "${unset_versions[@]}" "$packaging_dir/verify-bundle.sh" "$studio_bundle" >/dev/null 2>&1; then
-    fail 'verifier accepted a symlinked Contents/MacOS/featherpost-studio'
-fi
-rm -- "$host_studio"
-cp -X -- "$work/host-studio-original" "$host_studio"
-chmod 0644 "$host_studio"
-if "${unset_versions[@]}" "$packaging_dir/verify-bundle.sh" "$studio_bundle" >/dev/null 2>&1; then
-    fail 'verifier accepted a non-executable Contents/MacOS/featherpost-studio'
-fi
-chmod 0755 "$host_studio"
-"${unset_versions[@]}" "$packaging_dir/verify-bundle.sh" "$studio_bundle" >/dev/null
-if "${unset_versions[@]}" "$packaging_dir/build-bundle.sh" \
-    --launcher-bin "$work/bin/$launcher_name" --agent-bin "$work/bin/$agent_name" \
-    --studio-bin "$work/bin/$ui_name" --output "$work/output/wrong-studio/$BRAND_APP_BUNDLE" \
-    >/dev/null 2>&1; then fail 'legacy binary accepted as Studio'; fi
-if "${unset_versions[@]}" "$packaging_dir/build-bundle.sh" \
-    --launcher-bin "$work/bin/$launcher_name" --agent-bin "$work/bin/$agent_name" \
-    --ui-bin "$work/bin/featherpost-studio" --output "$work/output/wrong-legacy/$BRAND_APP_BUNDLE" \
-    >/dev/null 2>&1; then fail 'Studio binary accepted as legacy'; fi
-printf 'tamper' >>"$studio_exe"
-if "${unset_versions[@]}" "$packaging_dir/verify-bundle.sh" "$studio_bundle" >/dev/null 2>&1; then
-    fail 'Studio checksum corruption accepted'
-fi
-cp -X "$work/bin/featherpost-studio" "$studio_exe"
-printf 'unexpected' >"$studio_payload/unexpected"
-if "${unset_versions[@]}" "$packaging_dir/verify-bundle.sh" "$studio_bundle" >/dev/null 2>&1; then
-    fail 'unexpected Studio payload file accepted'
-fi
-rm "$studio_payload/unexpected"
-studio_plist="$studio_payload/Featherpost Studio.app/Contents/Info.plist"
-[ "$(plutil -extract CFBundleLocalizations json -o - "$studio_plist")" = '["en","zh-Hans"]' ] ||
-    fail 'Studio bundle does not declare en and zh-Hans'
-plutil -replace CFBundleLocalizations -json '["zh-Hans"]' "$studio_plist"
-if "${unset_versions[@]}" "$packaging_dir/verify-bundle.sh" "$studio_bundle" >/dev/null 2>&1; then
-    fail 'verifier accepted a Studio bundle without the en localization'
-fi
-plutil -replace CFBundleLocalizations -json '["en","zh-Hans"]' "$studio_plist"
-"${unset_versions[@]}" "$packaging_dir/verify-bundle.sh" "$studio_bundle" >/dev/null
-"${unset_versions[@]}" "$packaging_dir/build-preview-dmg.sh" --app "$studio_bundle" \
-    --output "$work/output/studio-preview.dmg" >/dev/null
-hdiutil verify "$work/output/studio-preview.dmg" >/dev/null
+cp -X -- "$work/host-ui-original" "$host_ui"
+chmod 0755 "$host_ui"
+"$packaging_dir/verify-bundle.sh" "$bundle" >/dev/null
+
+"${unset_versions[@]}" "$packaging_dir/build-preview-dmg.sh" --app "$default_bundle" \
+    --output "$work/output/preview.dmg" >/dev/null
+hdiutil verify "$work/output/preview.dmg" >/dev/null
 
 "$packaging_dir/dry-run.sh" >/dev/null
 printf 'test_bundle: PASS\n'

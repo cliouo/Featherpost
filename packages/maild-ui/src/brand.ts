@@ -5,7 +5,7 @@ export const BRAND = {
   slug: "featherpost",
   cliDaemon: "featherpostd",
   cliCtl: "featherpostctl",
-  bundledFrontendId: "dev.featherpost.ui",
+  bundledFrontendId: "dev.featherpost.studio",
   appBundleName: "Featherpost.app",
   uriScheme: "featherpost-mail",
 } as const;

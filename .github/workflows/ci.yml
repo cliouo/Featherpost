@@ -38,12 +38,13 @@ jobs:
         run: cargo test --workspace --all-targets --locked
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
-      - name: Test Tauri UI webview package
+      - name: Test Tauri UI webview packages
         if: runner.os == 'macOS'
         run: |
-          pnpm --dir packages/maild-ui install --frozen-lockfile
-          pnpm --dir packages/maild-ui exec tsc --noEmit -p tsconfig.json
+          pnpm install --frozen-lockfile
+          pnpm --dir packages/maild-ui typecheck
           pnpm --dir packages/maild-ui test
+          pnpm --dir packages/featherpost-studio typecheck
           pnpm --dir packages/featherpost-studio build
       # ADR-0048 decision 8: message catalogs, m.<key> references, CJK-literal allowlist, and the type fixture.
       - name: Lint default-frontend i18n

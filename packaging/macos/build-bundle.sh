@@ -17,7 +17,6 @@ Options:
   --agent-bin PATH    Built $BRAND_AGENT_BIN executable.
   --menu-bin PATH     Built $BRAND_MENU_BIN executable.
   --ui-bin PATH       Built embedded $BRAND_UI_BIN executable (\`--features embedded\`).
-  --studio-bin PATH   Also bundle the embedded Studio frontend (product builds supply this).
   --output PATH       Destination; its final component must be $BRAND_APP_BUNDLE.
   -h, --help          Show this help.
 
@@ -28,11 +27,9 @@ Defaults use target/release binaries and dist/macos/$BRAND_APP_BUNDLE. When only
 The embedded $BRAND_UI_BIN is installed twice: as the single-host main window at
 Contents/MacOS/$BRAND_UI_BIN (exec'd in place by $BRAND_LAUNCHER_BIN) and as the
 recovery copy at Contents/Resources/frontends/$BRAND_UI_BUNDLE_ID with a rendered
-manifest and recovery.sha256. When --studio-bin is supplied, the embedded Studio
-binary is likewise installed both at Contents/MacOS/featherpost-studio (for
-single-Dock in-place hosting) and under Contents/Resources/frontends/dev.featherpost.studio.
-assets/AppIcon.icns becomes
-Contents/Resources/$BRAND_ICON_NAME.icns. Versions come from
+manifest and recovery.sha256. assets/AppIcon.icns becomes
+Contents/Resources/$BRAND_ICON_NAME.icns in the top-level app, Agent, and recovery
+UI bundles. Versions come from
 ${BRAND_ENV_PREFIX}_BUNDLE_SHORT_VERSION / ${BRAND_ENV_PREFIX}_BUNDLE_BUILD_VERSION (legacy
 MAILD_BUNDLE_* is still read as a fallback). The command never overwrites an
 existing destination, signs code, registers a login item, launches any
@@ -100,9 +97,10 @@ render_template() {
     text=$(cat -- "$template") || die "cannot read template: $template"
     for key in PRODUCT_NAME LAUNCHER_BIN AGENT_BIN MENU_BIN UI_BIN ICON_NAME \
         APP_BUNDLE_ID AGENT_BUNDLE_ID MENU_BUNDLE_ID UI_BUNDLE_ID \
-        APP_BUNDLE AGENT_BUNDLE MENU_BUNDLE UI_BUNDLE \
+        APP_BUNDLE AGENT_BUNDLE MENU_BUNDLE UI_BUNDLE UI_DISPLAY_NAME \
         BUNDLE_SHORT_VERSION BUNDLE_BUILD_VERSION; do
         case "$key" in
+            UI_DISPLAY_NAME) value=${BRAND_UI_BUNDLE%.app} ;;
             BUNDLE_SHORT_VERSION) value=$short_version ;;
             BUNDLE_BUILD_VERSION) value=$build_version ;;
             *) name="BRAND_$key"; value=${!name} ;;
@@ -261,7 +259,6 @@ menu_bin="$repo_root/target/release/$BRAND_MENU_BIN"
 ui_bin="$repo_root/target/release/$BRAND_UI_BIN"
 menu_bin_explicit=false
 ui_bin_explicit=false
-studio_bin=
 output="$repo_root/dist/macos/$BRAND_APP_BUNDLE"
 
 while [ "$#" -gt 0 ]; do
@@ -275,11 +272,6 @@ while [ "$#" -gt 0 ]; do
             [ "$#" -ge 2 ] || die '--ui-bin requires a path'
             ui_bin=$2
             ui_bin_explicit=true
-            shift 2
-            ;;
-        --studio-bin)
-            [ "$#" -ge 2 ] || die '--studio-bin requires a path'
-            studio_bin=$2
             shift 2
             ;;
         --agent-bin)
@@ -331,7 +323,7 @@ for manifest_pair in "app:$app_bundle_id" "agent:$agent_bundle_id" "menu:$menu_b
 done
 short_version_env="${BRAND_ENV_PREFIX}_BUNDLE_SHORT_VERSION"
 build_version_env="${BRAND_ENV_PREFIX}_BUNDLE_BUILD_VERSION"
-short_version=$(brand_env_value BUNDLE_SHORT_VERSION 0.1.0)
+short_version=$(brand_env_value BUNDLE_SHORT_VERSION 0.4.0)
 build_version=$(brand_env_value BUNDLE_BUILD_VERSION 1)
 
 validate_bundle_id BRAND_APP_BUNDLE_ID "$app_bundle_id"
@@ -363,13 +355,6 @@ require_compiled_identity "$BRAND_AGENT_BIN" "$agent_bin" "$agent_contract_prefi
 require_compiled_identity "$BRAND_MENU_BIN" "$menu_bin" "$menu_contract_prefix" "$menu_bundle_id"
 # Only `--features embedded` serves bundled assets; a default build would load devUrl.
 require_compiled_identity "$BRAND_UI_BIN" "$ui_bin" "$ui_contract_prefix" "$ui_bundle_id"
-. "$script_dir/studio-payload.sh"
-if [ -n "$studio_bin" ]; then
-    require_regular_executable Studio "$studio_bin"
-    require_compiled_identity Studio "$studio_bin" "$ui_contract_prefix" "$STUDIO_FRONTEND_ID"
-    [ "$(binary_architectures Studio "$studio_bin")" = "$(binary_architectures launcher "$launcher_bin")" ] ||
-        die 'Studio binary architectures differ from the launcher'
-fi
 launcher_architectures=$(binary_architectures "$BRAND_LAUNCHER_BIN" "$launcher_bin")
 for pair in "$BRAND_AGENT_BIN:$agent_bin" "$BRAND_MENU_BIN:$menu_bin" "$BRAND_UI_BIN:$ui_bin"; do
     label=${pair%%:*}
@@ -414,11 +399,6 @@ cp -X -- "$ui_bin" "$bundle/Contents/MacOS/$BRAND_UI_BIN"
 cp -X -- "$agent_bin" "$agent_bundle/Contents/MacOS/$BRAND_AGENT_BIN"
 cp -X -- "$menu_bin" "$menu_bundle/Contents/MacOS/$BRAND_MENU_BIN"
 cp -X -- "$ui_bin" "$ui_bundle/Contents/MacOS/$BRAND_UI_BIN"
-if [ -n "$studio_bin" ]; then
-    cp -X -- "$studio_bin" "$(studio_host_path "$bundle")"
-    chmod 0755 "$(studio_host_path "$bundle")"
-    copy_studio_payload "$bundle" "$studio_bin"
-fi
 chmod 0755 \
     "$bundle/Contents/MacOS/$BRAND_LAUNCHER_BIN" \
     "$bundle/Contents/MacOS/$BRAND_UI_BIN" \
@@ -426,11 +406,13 @@ chmod 0755 \
     "$menu_bundle/Contents/MacOS/$BRAND_MENU_BIN" \
     "$ui_bundle/Contents/MacOS/$BRAND_UI_BIN"
 
-mkdir -p -- "$bundle/Contents/Resources" "$agent_bundle/Contents/Resources"
+mkdir -p -- "$bundle/Contents/Resources" "$agent_bundle/Contents/Resources" "$ui_bundle/Contents/Resources"
 cp -X -- "$icon_source" "$bundle/Contents/Resources/$BRAND_ICON_NAME.icns"
 cp -X -- "$icon_source" "$agent_bundle/Contents/Resources/$BRAND_ICON_NAME.icns"
+cp -X -- "$icon_source" "$ui_bundle/Contents/Resources/$BRAND_ICON_NAME.icns"
 chmod 0644 "$bundle/Contents/Resources/$BRAND_ICON_NAME.icns" \
-    "$agent_bundle/Contents/Resources/$BRAND_ICON_NAME.icns"
+    "$agent_bundle/Contents/Resources/$BRAND_ICON_NAME.icns" \
+    "$ui_bundle/Contents/Resources/$BRAND_ICON_NAME.icns"
 render_template "$script_dir/templates/App.Info.plist.in" xml >"$bundle/Contents/Info.plist"
 render_template "$script_dir/templates/Agent.Info.plist.in" xml >"$agent_bundle/Contents/Info.plist"
 render_template "$script_dir/templates/Menu.Info.plist.in" xml >"$menu_bundle/Contents/Info.plist"

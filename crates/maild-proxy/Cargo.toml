@@ -1,6 +1,6 @@
 [package]
 name = "maild-proxy"
-version = "0.1.0"
+version = "0.4.0"
 edition = "2021"
 description = "Featherpost shared proxy core: model, bypass matcher, OS system proxy detection, HTTP CONNECT / HTTPS / SOCKS5(h) tunnel connector, and optional reqwest adapter"
 license.workspace = true

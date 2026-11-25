@@ -76,7 +76,7 @@ listen = "@SOCKET@"
 # idle = true
 "#;
 
-const STUDIO_FRONTEND_ID: &str = maild::recovery::STUDIO_FRONTEND_ID;
+const LEGACY_UI_FRONTEND: &str = maild_client::LEGACY_UI_FRONTEND;
 
 /// The `follow_system_timezone = true` line in [`FIRST_RUN_CONFIG_TEMPLATE`].
 /// Templates generated before commit `bd8359c` omitted this line.
@@ -89,7 +89,7 @@ const OTP_PATTERN_LINE: &str = "pattern = \"\\\\d{6}\"\n";
 const LEGACY_OTP_TITLE_LINE: &str = "title = \"验证码\"\n";
 
 fn first_run_config() -> String {
-    first_run_config_for(STUDIO_FRONTEND_ID)
+    first_run_config_for(maild_brand::BUNDLED_FRONTEND_ID)
 }
 
 fn first_run_config_for(frontend: &str) -> String {
@@ -118,8 +118,8 @@ fn pre_timezone_legacy_first_run_config_for(frontend: &str) -> String {
 }
 
 fn is_untouched_legacy_default_config(original: &str) -> bool {
-    original == legacy_first_run_config_for(maild_brand::BUNDLED_FRONTEND_ID)
-        || original == pre_timezone_legacy_first_run_config_for(maild_brand::BUNDLED_FRONTEND_ID)
+    original == legacy_first_run_config_for(LEGACY_UI_FRONTEND)
+        || original == pre_timezone_legacy_first_run_config_for(LEGACY_UI_FRONTEND)
 }
 
 /// Only the complete installed app bundle (`maild_brand::APP_BUNDLE_NAME`) without connection overrides prepares platform config.
@@ -334,7 +334,10 @@ mod tests {
             maild_brand::DATABASE_FILE_NAME
         )));
         assert!(text.contains(&format!("listen = \"{}\"", maild_brand::SOCKET_FILE_NAME)));
-        assert!(text.contains(&format!("default = \"{}\"", STUDIO_FRONTEND_ID)));
+        assert!(text.contains(&format!(
+            "default = \"{}\"",
+            maild_brand::BUNDLED_FRONTEND_ID
+        )));
         assert!(text.contains(maild_brand::APP_BUNDLE_NAME));
 
         #[cfg(unix)]
@@ -423,11 +426,11 @@ mod tests {
 
         // The pre-l10n template differs only by the pinned title, which the daemon also treats
         // as not customised.
-        let legacy = legacy_first_run_config_for(maild_brand::BUNDLED_FRONTEND_ID);
+        let legacy = legacy_first_run_config_for(LEGACY_UI_FRONTEND);
         assert!(legacy.contains("pattern = \"\\\\d{6}\"\ntitle = \"验证码\"\n\n[plugins.frontend]"));
         assert_eq!(
             legacy.replacen(LEGACY_OTP_TITLE_LINE, "", 1),
-            first_run_config_for(maild_brand::BUNDLED_FRONTEND_ID)
+            first_run_config_for(LEGACY_UI_FRONTEND)
         );
         let legacy_otp = otp_config_of(&legacy);
         assert_eq!(legacy_otp.title.as_deref(), Some("验证码"));
@@ -435,7 +438,7 @@ mod tests {
     }
 
     #[test]
-    fn generated_config_selects_studio() {
+    fn generated_config_selects_bundled_studio() {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join(maild_brand::SLUG);
         let paths = maild_paths::AppPaths::from_roots(
@@ -447,8 +450,12 @@ mod tests {
         );
         assert!(bootstrap_config(&paths).unwrap());
         let text = fs::read_to_string(&paths.config_file).unwrap();
-        assert!(text.contains(&format!("default = \"{}\"", STUDIO_FRONTEND_ID)));
+        assert!(text.contains(&format!(
+            "default = \"{}\"",
+            maild_brand::BUNDLED_FRONTEND_ID
+        )));
         assert!(!text.contains(maild_client::LEGACY_EGUI_FRONTEND));
+        assert!(!text.contains(LEGACY_UI_FRONTEND));
     }
 
     fn migration_paths(root: &Path) -> maild_paths::AppPaths {
@@ -459,20 +466,17 @@ mod tests {
     #[test]
     fn only_exact_untouched_generated_legacy_config_migrates_once() {
         let templates = [
-            (
-                "post-bd8359c",
-                legacy_first_run_config_for(maild_brand::BUNDLED_FRONTEND_ID),
-            ),
+            ("post-bd8359c", legacy_first_run_config_for(LEGACY_UI_FRONTEND)),
             (
                 "pre-bd8359c",
-                pre_timezone_legacy_first_run_config_for(maild_brand::BUNDLED_FRONTEND_ID),
+                pre_timezone_legacy_first_run_config_for(LEGACY_UI_FRONTEND),
             ),
         ];
         assert!(templates[0].1.contains(FOLLOW_SYSTEM_TIMEZONE_LINE));
         assert!(!templates[1].1.contains(FOLLOW_SYSTEM_TIMEZONE_LINE));
         for (label, template) in templates {
             assert!(
-                template.contains(&format!("default = \"{}\"", maild_brand::BUNDLED_FRONTEND_ID)),
+                template.contains(&format!("default = \"{}\"", LEGACY_UI_FRONTEND)),
                 "{label}"
             );
             let dir = tempfile::tempdir().unwrap();
@@ -502,8 +506,8 @@ mod tests {
     #[test]
     fn saved_choices_corruption_and_edited_configs_are_never_migrated() {
         for base in [
-            legacy_first_run_config_for(maild_brand::BUNDLED_FRONTEND_ID),
-            pre_timezone_legacy_first_run_config_for(maild_brand::BUNDLED_FRONTEND_ID),
+            legacy_first_run_config_for(LEGACY_UI_FRONTEND),
+            pre_timezone_legacy_first_run_config_for(LEGACY_UI_FRONTEND),
         ] {
             for (edited, state) in [
                 (

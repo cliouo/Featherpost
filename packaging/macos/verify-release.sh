@@ -189,41 +189,20 @@ expected_architectures='arm64 x86_64'
 [ "$(normalize_architectures "$menu_executable")" = "$expected_architectures" ] ||
     die "$BRAND_MENU_BIN release must contain exactly arm64 and x86_64"
 
-. "$script_dir/studio-payload.sh"
-studio_payload=$(studio_payload_path "$app")
-if [ -d "$studio_payload" ]; then
-    [ "$(normalize_architectures "$studio_payload/$STUDIO_APP/Contents/MacOS/$STUDIO_BIN")" = "$expected_architectures" ] ||
-        die "$STUDIO_BIN release must contain exactly arm64 and x86_64"
-    [ "$(normalize_architectures "$(studio_host_path "$app")")" = "$expected_architectures" ] ||
-        die "host $STUDIO_BIN release must contain exactly arm64 and x86_64"
-fi
-
 team_id=$(read_trusted_team_id)
 # Check structural signature invariants (validity, signing identifier, hardened runtime, and
 # forbidden entitlements) across all components before verifying Developer ID trust, so any
 # missing explicit single-host signature is caught by component name.
 validate_signed_structure "$BRAND_PRODUCT_NAME host UI" "$host_ui_executable" "$BRAND_UI_BUNDLE_ID"
-if [ -d "$studio_payload" ]; then
-    validate_signed_structure "$BRAND_PRODUCT_NAME host Studio" "$(studio_host_path "$app")" "$STUDIO_FRONTEND_ID"
-fi
 validate_signed_structure "$BRAND_PRODUCT_NAME Agent" "$agent" "$agent_id"
 validate_signed_structure "$BRAND_PRODUCT_NAME Menu" "$menu" "$menu_id"
 validate_signed_structure "$BRAND_PRODUCT_NAME UI" "$ui" "$BRAND_UI_BUNDLE_ID"
-if [ -d "$studio_payload" ]; then
-    validate_signed_structure Studio "$studio_payload/$STUDIO_APP" "$STUDIO_FRONTEND_ID"
-fi
 validate_signed_structure "$BRAND_PRODUCT_NAME" "$app" "$app_id"
 
 validate_release_authority "$BRAND_PRODUCT_NAME host UI" "$host_ui_executable"
-if [ -d "$studio_payload" ]; then
-    validate_release_authority "$BRAND_PRODUCT_NAME host Studio" "$(studio_host_path "$app")"
-fi
 validate_release_authority "$BRAND_PRODUCT_NAME Agent" "$agent"
 validate_release_authority "$BRAND_PRODUCT_NAME Menu" "$menu"
 validate_release_authority "$BRAND_PRODUCT_NAME UI" "$ui"
-if [ -d "$studio_payload" ]; then
-    validate_release_authority Studio "$studio_payload/$STUDIO_APP"
-fi
 validate_release_authority "$BRAND_PRODUCT_NAME" "$app"
 /usr/bin/codesign --verify --deep --strict=all --verbose=4 "$app" >/dev/null 2>&1 ||
     die 'nested code signature verification failed'

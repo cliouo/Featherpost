@@ -535,22 +535,21 @@ mod tests {
         assert!(!is_standalone_app_bundle(&Path::new("/Applications")
             .join(maild_brand::APP_BUNDLE_NAME)
             .join("Contents/MacOS")
-            .join(maild_client::STUDIO_BIN)));
+            .join(maild_brand::UI_BIN)));
     }
 
     #[test]
     fn default_frontend_filter_allows_match_or_undetermined_and_blocks_mismatch() {
-        assert!(should_handoff_for_default(None, maild_client::STUDIO_FRONTEND_ID));
         assert!(should_handoff_for_default(
-            Some(maild_client::STUDIO_FRONTEND_ID),
-            maild_client::STUDIO_FRONTEND_ID
+            None,
+            maild_brand::BUNDLED_FRONTEND_ID
+        ));
+        assert!(should_handoff_for_default(
+            Some(maild_brand::BUNDLED_FRONTEND_ID),
+            maild_brand::BUNDLED_FRONTEND_ID
         ));
         assert!(!should_handoff_for_default(
-            Some(maild_brand::BUNDLED_FRONTEND_ID),
-            maild_client::STUDIO_FRONTEND_ID
-        ));
-        assert!(should_handoff_for_default(
-            Some(maild_brand::BUNDLED_FRONTEND_ID),
+            Some("org.example.other"),
             maild_brand::BUNDLED_FRONTEND_ID
         ));
     }
@@ -666,8 +665,8 @@ mod tests {
             in_place_layout: false,
             current_exe: Some(&standalone_exe),
             socket_online: false,
-            configured_default: Some(maild_client::STUDIO_FRONTEND_ID),
-            self_frontend_id: maild_client::STUDIO_FRONTEND_ID,
+            configured_default: Some(maild_brand::BUNDLED_FRONTEND_ID),
+            self_frontend_id: maild_brand::BUNDLED_FRONTEND_ID,
             env_guard_set: false,
             guard_dir: Some(&guard_dir),
             now_ms: 5_000_000,
@@ -690,7 +689,7 @@ mod tests {
 
         // Different default frontend -> no handoff.
         let mut ctx = base_ctx();
-        ctx.configured_default = Some(maild_brand::BUNDLED_FRONTEND_ID);
+        ctx.configured_default = Some("org.example.other");
         assert!(!run_handoff_decision(&ctx, || panic!("should not lookup"), |_| Ok(())));
 
         // Env guard set -> no handoff.

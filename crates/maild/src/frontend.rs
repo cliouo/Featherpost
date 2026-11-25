@@ -29,6 +29,7 @@ use crate::plugin_identity::{IdentitySeam, PluginKind};
 
 pub use maild_client::{
     is_builtin_frontend, BUILTIN_RECOVERY_FRONTEND, DEFAULT_FRONTEND, LEGACY_EGUI_FRONTEND,
+    LEGACY_UI_FRONTEND,
 };
 
 const MANIFEST_FILE: &str = "frontend.toml";
@@ -66,10 +67,11 @@ fn default_frontend() -> String {
     DEFAULT_FRONTEND.into()
 }
 
-/// Read-time migration of the removed egui shell (ADR-0039). User TOML and selection files are
-/// never rewritten; an explicit choice persisted later simply replaces the legacy value.
+/// Read-time migration of retired built-in frontends (`builtin-egui` per ADR-0039 and
+/// `dev.featherpost.ui` per ADR-0049). User TOML and selection files are never rewritten; an
+/// explicit choice persisted later simply replaces the legacy value.
 pub(crate) fn migrate_default(id: &str) -> &str {
-    if id == LEGACY_EGUI_FRONTEND {
+    if matches!(id, LEGACY_EGUI_FRONTEND | LEGACY_UI_FRONTEND) {
         DEFAULT_FRONTEND
     } else {
         id
@@ -363,12 +365,12 @@ impl FrontendLauncher for PlatformLauncher {
 }
 
 fn is_single_dock_hostable(id: &str) -> bool {
-    id == crate::recovery::BUNDLED_FRONTEND_ID || id == crate::recovery::STUDIO_FRONTEND_ID
+    id == crate::recovery::BUNDLED_FRONTEND_ID
 }
 
-/// ADR-0044: a bundled frontend (`BUNDLED_FRONTEND_ID` or `STUDIO_FRONTEND_ID`) is hosted in place
-/// by the top-level app bundle (one Dock identity) ONLY when it is the current default frontend;
-/// explicit requests for a non-default frontend or any third-party frontend activate their own app.
+/// ADR-0044/0049: the bundled frontend (`BUNDLED_FRONTEND_ID`) is hosted in place by the top-level
+/// app bundle (one Dock identity) ONLY when it is the current default frontend; explicit requests
+/// for a non-default frontend or any third-party frontend activate their own app.
 fn single_dock_host(
     id: &str,
     is_default: bool,
@@ -380,35 +382,29 @@ fn single_dock_host(
 }
 
 /// `Some(<APP_BUNDLE_NAME>)` only for a real user session Agent inside a complete app bundle that
-/// carries the matching in-place UI binary (`Contents/MacOS/<UI_BIN>` or
-/// `Contents/MacOS/featherpost-studio`), with no connection overrides, and whose installed app
-/// still passes basic checks. For Studio, the installed package version must also match the
-/// bundled payload (exact match or same-version stale build that the launcher will resync); a
-/// different standalone Studio version activates its own installed `.app` directly so the launcher
-/// and Agent never loop.
+/// carries the matching in-place UI binary (`Contents/MacOS/<UI_BIN>`), with no connection
+/// overrides, and whose installed app still passes basic checks and matches the bundled version
+/// (exact match or same-version stale build that the launcher will resync). A different standalone
+/// version activates its own installed `.app` directly so the launcher and Agent never loop.
 #[cfg(target_os = "macos")]
 fn platform_single_dock_host(id: &str, installed: &Path) -> Option<PathBuf> {
     use maild_client::NativeAppLayout;
-    if NativeAppLayout::has_custom_connection() || !maild_client::system_home() {
+    if id != crate::recovery::BUNDLED_FRONTEND_ID
+        || NativeAppLayout::has_custom_connection()
+        || !maild_client::system_home()
+    {
         return None;
     }
     let layout = NativeAppLayout::discover().ok()??;
-    if id == crate::recovery::STUDIO_FRONTEND_ID {
-        layout.studio_ui_executable().ok()?;
-        macos::validate_installed(installed).ok()?;
-        let installed_package = installed.parent()?;
-        let payload = layout.studio_frontend_payload();
-        match inspect_installed_frontend(id, installed_package, &payload).ok()? {
-            InstalledFrontendMatch::MatchesBundled | InstalledFrontendMatch::Stale => {}
-            InstalledFrontendMatch::DifferentVersion | InstalledFrontendMatch::Unreferenced => {
-                return None;
-            }
+    layout.ui_executable().ok()?;
+    macos::validate_installed(installed).ok()?;
+    let installed_package = installed.parent()?;
+    let payload = layout.bundled_frontend_payload();
+    match inspect_installed_frontend(id, installed_package, &payload).ok()? {
+        InstalledFrontendMatch::MatchesBundled | InstalledFrontendMatch::Stale => {}
+        InstalledFrontendMatch::DifferentVersion | InstalledFrontendMatch::Unreferenced => {
+            return None;
         }
-    } else if id == crate::recovery::BUNDLED_FRONTEND_ID {
-        layout.ui_executable().ok()?;
-        macos::validate_installed(installed).ok()?;
-    } else {
-        return None;
     }
     Some(layout.app_bundle().to_path_buf())
 }
@@ -566,12 +562,13 @@ impl FrontendBroker {
         intent: OpenIntent,
     ) -> Result<bool, &'static str> {
         validate_intent(&intent).map_err(|_| "open intent is invalid")?;
-        // A legacy egui request is an alias, not an explicit choice: it degrades to background.
-        let explicit = requested.is_some_and(|id| id != LEGACY_EGUI_FRONTEND);
+        // Retired built-in ids are aliases, not explicit choices: they degrade to background.
+        let explicit = requested
+            .is_some_and(|id| !matches!(id, LEGACY_EGUI_FRONTEND | LEGACY_UI_FRONTEND));
         let default = self.default_frontend();
-        // The removed egui shell's id stays reserved; old callers reach native recovery.
+        // Retired built-in frontend ids stay reserved; old callers reach native recovery.
         let requested = match requested {
-            Some(LEGACY_EGUI_FRONTEND) => BUILTIN_RECOVERY_FRONTEND,
+            Some(LEGACY_EGUI_FRONTEND | LEGACY_UI_FRONTEND) => BUILTIN_RECOVERY_FRONTEND,
             Some(id) => id,
             None => &default,
         };
@@ -753,12 +750,16 @@ pub(crate) fn inspect_staged_frontend(package: &Path) -> Result<InspectedStagedF
 /// values (`1..=max_protocol_version`) are eligible to be upgraded to the current bundled payload,
 /// while damaged packages or future protocol generations (`> max_protocol_version`, e.g. after an
 /// app rollback) are rejected so `refresh` leaves them untouched.
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) fn inspect_installed_for_upgrade(
     package: &Path,
     max_protocol_version: u32,
 ) -> Result<String, String> {
-    inspect_installed_payload_for_upgrade(package, max_protocol_version, crate::recovery::LEGACY_PAYLOAD)
+    inspect_installed_payload_for_upgrade(
+        package,
+        max_protocol_version,
+        crate::recovery::BUNDLED_PAYLOAD,
+    )
 }
 
 pub(crate) fn inspect_installed_payload_for_upgrade(
@@ -936,21 +937,18 @@ pub enum InstalledFrontendMatch {
     Unreferenced,
 }
 
-/// Inspect an installed bundled frontend (`BUNDLED_FRONTEND_ID` or `STUDIO_FRONTEND_ID`) against
-/// its packaged recovery payload.
+/// Inspect the installed bundled frontend (`BUNDLED_FRONTEND_ID`) against its packaged recovery
+/// payload.
 pub fn inspect_installed_frontend(
     id: &str,
     installed: &Path,
     bundled: &Path,
 ) -> Result<InstalledFrontendMatch, String> {
-    let identity = if id == crate::recovery::BUNDLED_FRONTEND_ID {
-        crate::recovery::LEGACY_PAYLOAD
-    } else if id == crate::recovery::STUDIO_FRONTEND_ID {
-        crate::recovery::STUDIO_PAYLOAD
+    if id == crate::recovery::BUNDLED_FRONTEND_ID {
+        inspect_installed_payload(installed, bundled, crate::recovery::BUNDLED_PAYLOAD)
     } else {
-        return Err("不支持的内置前端标识".into());
-    };
-    inspect_installed_payload(installed, bundled, identity)
+        Err("不支持的内置前端标识".into())
+    }
 }
 
 /// ADR-0044: before the app bundle hosts its own `Contents/MacOS/<UI_BIN>` in place, the managed
@@ -1395,24 +1393,6 @@ impl Plugin for FrontendPlugin {
                         Err(_) => eprintln!("[maild/frontend] 内置前端升级未完成，继续使用已安装版本"),
                     }
                 }
-                // Studio is bundled alongside the legacy UI and becomes the native repair target
-                // when present; preinstall and refresh still respect removal and never write defaults.
-                if let (Some(_), Some(root), Some(source)) =
-                    (&lease, &root, ctx.get::<crate::recovery::BundledFrontend>())
-                {
-                    match source.studio() {
-                        Ok(Some(studio)) => {
-                            if studio.preinstall(&root.0).is_err() {
-                                eprintln!("[maild/frontend] Studio 预装未完成，保留现有前端");
-                            }
-                            if studio.refresh(&root.0).is_err() {
-                                eprintln!("[maild/frontend] Studio 升级未完成，保留现有前端");
-                            }
-                        }
-                        Ok(None) => {}
-                        Err(_) => eprintln!("[maild/frontend] Studio 随包副本不可用"),
-                    }
-                }
                 (lease, FrontendBroker::with_install_root(
                     &config, root.as_ref().map(|root| root.0.as_path()))?)
             }
@@ -1559,39 +1539,64 @@ mod tests {
         assert_eq!(broker.claim(DEFAULT_FRONTEND).unwrap(), Some(OpenIntent::Inbox { account: None }));
     }
 
-    /// ADR-0039：旧 egui 默认在读取时迁移为 Tauri 默认，不改写用户文件；显式请求旧 id
-    /// 走原生恢复别名，只携带 background。
+    /// ADR-0039/0049：旧 `builtin-egui` 与已退役的 `dev.featherpost.ui` 默认在读取时迁移为
+    /// `DEFAULT_FRONTEND`（`dev.featherpost.studio`），不改写用户文件；显式请求旧 id 走原生
+    /// 恢复别名，只携带 background；磁盘上残留的旧包目录被目录扫描静默忽略而不删除。
     #[cfg(unix)]
     #[test]
-    fn legacy_egui_default_migrates_and_explicit_requests_reach_recovery() {
-        let root = install_root();
-        write_independent(root.path(), DEFAULT_FRONTEND, "\"inbox\", \"message\"");
-        let legacy = FrontendConfig { default: LEGACY_EGUI_FRONTEND.into() };
-        assert!(validate_config(&legacy).is_ok());
-        let broker = FrontendBroker::with_install_root(&legacy, Some(root.path())).unwrap();
-        assert_eq!(broker.default_frontend(), DEFAULT_FRONTEND);
-        assert_eq!(broker.frontends(None).default, DEFAULT_FRONTEND);
+    fn retired_builtin_defaults_migrate_and_explicit_requests_reach_recovery() {
+        for retired in [LEGACY_EGUI_FRONTEND, LEGACY_UI_FRONTEND] {
+            let root = install_root();
+            write_independent(root.path(), DEFAULT_FRONTEND, "\"inbox\", \"message\"");
+            // Stale retired package on disk is skipped by catalog load without deletion.
+            write_independent(root.path(), retired, "\"inbox\", \"message\"");
+            let legacy = FrontendConfig {
+                default: retired.into(),
+            };
+            assert!(validate_config(&legacy).is_ok());
+            let broker = FrontendBroker::with_install_root(&legacy, Some(root.path())).unwrap();
+            assert_eq!(broker.default_frontend(), DEFAULT_FRONTEND, "{retired}");
+            assert_eq!(broker.frontends(None).default, DEFAULT_FRONTEND, "{retired}");
+            assert!(
+                !broker.frontend_ids().contains(&retired.to_owned()),
+                "retired package {retired} must be skipped by catalog load"
+            );
+            assert!(
+                root.path().join(retired).is_dir(),
+                "stale package {retired} on disk must not be silently deleted"
+            );
+            assert_eq!(broker.api_capabilities_of(retired), None, "{retired}");
 
-        let state = root.path().join(".default.json");
-        let legacy_state = b"{\"version\":1,\"default\":\"builtin-egui\"}";
-        fs::write(&state, legacy_state).unwrap();
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            fs::set_permissions(&state, fs::Permissions::from_mode(0o600)).unwrap();
+            let state = root.path().join(".default.json");
+            let legacy_state = format!(r#"{{"version":1,"default":"{retired}"}}"#).into_bytes();
+            fs::write(&state, &legacy_state).unwrap();
+            {
+                use std::os::unix::fs::PermissionsExt as _;
+                fs::set_permissions(&state, fs::Permissions::from_mode(0o600)).unwrap();
+            }
+            let launcher = Arc::new(MockLauncher(AtomicUsize::new(0)));
+            let broker = FrontendBroker::with_install_root(
+                &FrontendConfig {
+                    default: "org.example.other".into(),
+                },
+                Some(root.path()),
+            )
+            .unwrap();
+            assert_eq!(broker.default_frontend(), DEFAULT_FRONTEND, "{retired}");
+            assert_eq!(fs::read(&state).unwrap(), legacy_state, "迁移只发生在读取时");
+
+            let broker = broker_with(root.path(), &legacy, launcher.clone());
+            assert!(broker
+                .open_for(Some(retired), OpenIntent::Inbox { account: None })
+                .unwrap());
+            assert_eq!(launcher.0.load(Ordering::Relaxed), 1);
+            assert_eq!(
+                broker.claim(BUILTIN_RECOVERY_FRONTEND).unwrap(),
+                Some(OpenIntent::Background)
+            );
+            assert!(broker.claim(retired).is_err());
+            assert!(broker.set_default(retired).is_err());
         }
-        let launcher = Arc::new(MockLauncher(AtomicUsize::new(0)));
-        let broker = FrontendBroker::with_install_root(&FrontendConfig { default: "org.example.other".into() }, Some(root.path())).unwrap();
-        assert_eq!(broker.default_frontend(), DEFAULT_FRONTEND);
-        assert_eq!(fs::read(&state).unwrap(), legacy_state, "迁移只发生在读取时");
-
-        let broker = broker_with(root.path(), &legacy, launcher.clone());
-        assert!(broker
-            .open_for(Some(LEGACY_EGUI_FRONTEND), OpenIntent::Inbox { account: None })
-            .unwrap());
-        assert_eq!(launcher.0.load(Ordering::Relaxed), 1);
-        assert_eq!(broker.claim(BUILTIN_RECOVERY_FRONTEND).unwrap(), Some(OpenIntent::Background));
-        assert!(broker.claim(LEGACY_EGUI_FRONTEND).is_err());
-        assert!(broker.set_default(LEGACY_EGUI_FRONTEND).is_err());
     }
 
     #[test]
@@ -1625,6 +1630,7 @@ mod tests {
         assert_eq!(info.l10n["zh-Hans"].name.as_deref(), Some("Featherpost 修复与后台管理"));
     }
 
+    #[cfg(unix)]
     fn install_root() -> tempfile::TempDir {
         use std::os::unix::fs::PermissionsExt as _;
         let root = tempfile::tempdir().unwrap();
@@ -1929,26 +1935,22 @@ mod tests {
     #[test]
     fn only_the_default_bundled_frontend_is_hosted_by_the_top_level_app() {
         let app = Path::new("/Applications").join(maild_brand::APP_BUNDLE_NAME);
-        for id in [
-            crate::recovery::BUNDLED_FRONTEND_ID,
-            crate::recovery::STUDIO_FRONTEND_ID,
-        ] {
-            assert_eq!(single_dock_host(id, true, || Some(app.clone())), Some(app.clone()));
-            // Ineligible session/layout keeps the installed app.
-            assert_eq!(single_dock_host(id, true, || None), None);
-            // Non-default explicit target never redirects to Featherpost.app (which opens the default).
+        let id = crate::recovery::BUNDLED_FRONTEND_ID;
+        assert_eq!(single_dock_host(id, true, || Some(app.clone())), Some(app.clone()));
+        // Ineligible session/layout keeps the installed app.
+        assert_eq!(single_dock_host(id, true, || None), None);
+        // Non-default explicit target never redirects to Featherpost.app (which opens the default).
+        assert_eq!(
+            single_dock_host(id, false, || panic!("non-default target is not redirected")),
+            None
+        );
+        // Retired legacy id and third-party frontends never evaluate the in-place host.
+        for other in [LEGACY_UI_FRONTEND, "org.example.reader"] {
             assert_eq!(
-                single_dock_host(id, false, || panic!("non-default target is not redirected")),
+                single_dock_host(other, true, || panic!("non-bundled frontend is not hosted")),
                 None
             );
         }
-        // A third-party frontend never even evaluates the in-place host.
-        assert_eq!(
-            single_dock_host("org.example.reader", true, || panic!(
-                "third party is not hosted"
-            )),
-            None
-        );
     }
 
     #[cfg(unix)]
@@ -1969,12 +1971,12 @@ mod tests {
             }
         }
         let root = install_root();
-        write_independent(root.path(), crate::recovery::STUDIO_FRONTEND_ID, "\"inbox\"");
         write_independent(root.path(), crate::recovery::BUNDLED_FRONTEND_ID, "\"inbox\"");
+        write_independent(root.path(), "org.example.reader", "\"inbox\"");
         let launcher = Arc::new(CaptureLauncher(Mutex::new(Vec::new())));
         let broker = FrontendBroker::from_catalog(
             &FrontendConfig {
-                default: crate::recovery::STUDIO_FRONTEND_ID.into(),
+                default: crate::recovery::BUNDLED_FRONTEND_ID.into(),
             },
             FrontendCatalog::load(Some(root.path())).unwrap(),
             launcher.clone(),
@@ -1982,65 +1984,62 @@ mod tests {
         broker.open(OpenIntent::Inbox { account: None }).unwrap();
         broker
             .open_for(
-                Some(crate::recovery::STUDIO_FRONTEND_ID),
+                Some(crate::recovery::BUNDLED_FRONTEND_ID),
                 OpenIntent::Inbox { account: None },
             )
             .unwrap();
         broker
             .open_for(
-                Some(crate::recovery::BUNDLED_FRONTEND_ID),
+                Some("org.example.reader"),
                 OpenIntent::Inbox { account: None },
             )
             .unwrap();
         assert_eq!(
             *launcher.0.lock().unwrap(),
             vec![
-                (crate::recovery::STUDIO_FRONTEND_ID.into(), true),
-                (crate::recovery::STUDIO_FRONTEND_ID.into(), true),
-                (crate::recovery::BUNDLED_FRONTEND_ID.into(), false),
+                (crate::recovery::BUNDLED_FRONTEND_ID.into(), true),
+                (crate::recovery::BUNDLED_FRONTEND_ID.into(), true),
+                ("org.example.reader".into(), false),
             ]
         );
     }
 
     #[cfg(unix)]
     #[test]
-    fn studio_installed_frontend_inspection_distinguishes_match_stale_different_version_and_damage() {
+    fn bundled_installed_frontend_inspection_distinguishes_match_stale_different_version_and_damage() {
         let bundle = tempfile::tempdir().unwrap();
-        let (_legacy, studio) = crate::recovery::tests::studio_source_fixture(bundle.path());
+        let source = crate::recovery::tests::source_fixture(bundle.path());
         let bundled = bundle
             .path()
             .join(maild_brand::APP_BUNDLE_NAME)
             .join("Contents/Resources/frontends")
-            .join(crate::recovery::STUDIO_FRONTEND_ID);
+            .join(crate::recovery::BUNDLED_FRONTEND_ID);
         let root = tempfile::tempdir().unwrap();
-        studio.preinstall(root.path()).unwrap();
-        let installed = root.path().join(crate::recovery::STUDIO_FRONTEND_ID);
+        source.preinstall(root.path()).unwrap();
+        let installed = root.path().join(crate::recovery::BUNDLED_FRONTEND_ID);
         assert_eq!(
-            inspect_installed_frontend(crate::recovery::STUDIO_FRONTEND_ID, &installed, &bundled)
+            inspect_installed_frontend(crate::recovery::BUNDLED_FRONTEND_ID, &installed, &bundled)
                 .unwrap(),
             InstalledFrontendMatch::MatchesBundled
         );
 
         // Same version, different bytes -> Stale.
-        let exe = installed
-            .join(crate::recovery::STUDIO_PAYLOAD.app)
-            .join("Contents/MacOS")
-            .join(crate::recovery::STUDIO_PAYLOAD.binary);
+        let exe = crate::recovery::tests::ui_exe_in(&installed);
         let mut bytes = fs::read(&exe).unwrap();
         bytes[100] ^= 0xff;
         fs::write(&exe, &bytes).unwrap();
         assert_eq!(
-            inspect_installed_frontend(crate::recovery::STUDIO_FRONTEND_ID, &installed, &bundled)
+            inspect_installed_frontend(crate::recovery::BUNDLED_FRONTEND_ID, &installed, &bundled)
                 .unwrap(),
             InstalledFrontendMatch::Stale
         );
 
-        // Different standalone Studio version -> DifferentVersion (launcher falls back to bundle).
+        // Different standalone version -> DifferentVersion (launcher falls back to bundle).
         let manifest = installed.join(MANIFEST_FILE);
         let text = fs::read_to_string(&manifest).unwrap();
-        fs::write(&manifest, text.replace("version = \"0.3.3\"", "version = \"0.4.0\"")).unwrap();
+        fs::write(&manifest, text.replace("version = \"0.4.0\"", "version = \"0.5.0\"")).unwrap();
         assert_eq!(
-            inspect_installed_frontend(crate::recovery::STUDIO_FRONTEND_ID, &installed, &bundled)
+            inspect_installed_frontend(crate::recovery::BUNDLED_FRONTEND_ID, &installed, &bundled)
                 .unwrap(),
             InstalledFrontendMatch::DifferentVersion
         );
@@ -2048,9 +2047,9 @@ mod tests {
         // Missing reference payload -> Unreferenced.
         assert_eq!(
             inspect_installed_frontend(
-                crate::recovery::STUDIO_FRONTEND_ID,
+                crate::recovery::BUNDLED_FRONTEND_ID,
                 &installed,
-                &bundle.path().join("missing-studio")
+                &bundle.path().join("missing-bundled")
             )
             .unwrap(),
             InstalledFrontendMatch::Unreferenced
@@ -2059,7 +2058,7 @@ mod tests {
         // Missing executable -> Err (damaged).
         fs::remove_file(&exe).unwrap();
         assert!(
-            inspect_installed_frontend(crate::recovery::STUDIO_FRONTEND_ID, &installed, &bundled)
+            inspect_installed_frontend(crate::recovery::BUNDLED_FRONTEND_ID, &installed, &bundled)
                 .is_err()
         );
     }
@@ -2090,7 +2089,7 @@ mod tests {
         // A different installed version (pending upgrade/rollback) is not byte-compared.
         let manifest = installed.join(MANIFEST_FILE);
         let text = fs::read_to_string(&manifest).unwrap();
-        fs::write(&manifest, text.replace("version = \"0.1.0\"", "version = \"0.0.9\""))
+        fs::write(&manifest, text.replace("version = \"0.4.0\"", "version = \"0.3.4\""))
             .unwrap();
         check_installed_bundled_frontend(&installed, &bundled).unwrap();
 

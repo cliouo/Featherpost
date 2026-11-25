@@ -32,10 +32,10 @@ packaging/macos/build-universal.sh --output "$PWD/dist/macos/<app_bundle_name>"
 | `slug` | `featherpost` | 平台数据/配置目录（`~/Library/Application Support/<slug>`）、`<slug>.toml` / `<slug>.sqlite3` / `<slug>.sock`、临时目录前缀 |
 | `env_prefix` | `FEATHERPOST` | 所有生产环境变量：`<P>_CONFIG`、`<P>_SOCKET`、`<P>_URL`、`<P>_TOKEN(_FILE)`、`<P>_PLUGIN_*`、`<P>_MAINTENANCE_LOCK_FD` / `_VALIDATOR`、打包用 `<P>_BUNDLE_SHORT_VERSION` / `_BUILD_VERSION`、`<P>_UI_ORIGIN` |
 | `cli_daemon` / `cli_ctl` | `featherpostd` / `featherpostctl` | 守护进程与控制 CLI 的 Cargo `[[bin]]` 名 |
-| `launcher_bin` / `agent_bin` / `menu_bin` / `ui_bin` | `featherpost-launcher` / `-agent` / `-menu` / `-ui` | App 内四个可执行文件（`CFBundleExecutable`）与对应 `[[bin]]` 名 |
-| `app_bundle_name` / `agent_bundle_name` / `menu_bundle_name` / `ui_bundle_name` | `Featherpost.app` / `Featherpost Agent.app` / `Featherpost Menu.app` / `Featherpost UI.app` | 顶层与内嵌 bundle 目录名；安装位 `~/Applications/<app_bundle_name>` |
+| `launcher_bin` / `agent_bin` / `menu_bin` / `ui_bin` | `featherpost-launcher` / `-agent` / `-menu` / `-studio` | App 内四个可执行文件（`CFBundleExecutable`）与对应 `[[bin]]` 名 |
+| `app_bundle_name` / `agent_bundle_name` / `menu_bundle_name` / `ui_bundle_name` | `Featherpost.app` / `Featherpost Agent.app` / `Featherpost Menu.app` / `Featherpost Studio.app` | 顶层与内嵌 bundle 目录名；安装位 `~/Applications/<app_bundle_name>` |
 | `icon_name` | `Featherpost` | `Contents/Resources/<icon_name>.icns` 与 `CFBundleIconFile` |
-| `app_bundle_id` / `agent_bundle_id` / `menu_bundle_id` / `ui_bundle_id` | `dev.featherpost.desktop` / `.agent` / `.menu` / `.ui` | plist `CFBundleIdentifier`、`SMAppService` 登录项、`UNUserNotificationCenter` 通知身份、编译期 identity contract、内置前端包 id 与 `frontends/<ui_bundle_id>/`、Tauri `identifier` |
+| `app_bundle_id` / `agent_bundle_id` / `menu_bundle_id` / `ui_bundle_id` | `dev.featherpost.desktop` / `.agent` / `.menu` / `.studio` | plist `CFBundleIdentifier`、`SMAppService` 登录项、`UNUserNotificationCenter` 通知身份、编译期 identity contract、内置前端包 id 与 `frontends/<ui_bundle_id>/`、Tauri `identifier` |
 | `uri_scheme` | `featherpost-mail` | HTML 阅读器隔离文档的自定义协议，同步进 Tauri CSP `frame-src` |
 | `keychain_service` | `featherpost.account.credentials.v1` | macOS Keychain 中账户凭据的 service 名 |
 

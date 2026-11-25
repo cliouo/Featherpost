@@ -1,6 +1,6 @@
 [package]
 name = "cordis"
-version = "0.1.0"
+version = "0.4.0"
 edition = "2021"
 description = "maild 的 Rust 内核：cordis 时空可组合性方法论移植"
 license = "MIT OR Apache-2.0"

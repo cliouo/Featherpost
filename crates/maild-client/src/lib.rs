@@ -57,13 +57,15 @@ mod brand_env {
 /// Pre-09-C egui shell. Never a catalog entry: persisted defaults naming it read as
 /// [`DEFAULT_FRONTEND`], explicit requests route to [`BUILTIN_RECOVERY_FRONTEND`] (ADR-0039).
 pub const LEGACY_EGUI_FRONTEND: &str = "builtin-egui";
+/// Retired pre-0.4.0 legacy embedded Tauri frontend (`dev.featherpost.ui`, ADR-0049).
+/// Never a catalog entry: persisted defaults and configs naming it read as [`DEFAULT_FRONTEND`],
+/// explicit requests route to [`BUILTIN_RECOVERY_FRONTEND`], and stale packages on disk are
+/// skipped without silent deletion.
+pub const LEGACY_UI_FRONTEND: &str = "dev.featherpost.ui";
 pub const BUILTIN_RECOVERY_FRONTEND: &str = "builtin-repair";
-/// The bundled Tauri frontend, installed and managed like any other frontend package.
+/// The sole bundled Tauri frontend (Featherpost Studio), installed and managed like any other
+/// frontend package.
 pub const DEFAULT_FRONTEND: &str = maild_brand::BUNDLED_FRONTEND_ID;
-/// The bundled Studio frontend package identifier.
-pub const STUDIO_FRONTEND_ID: &str = "dev.featherpost.studio";
-/// The bundled Studio frontend executable name (in-place and standalone).
-pub const STUDIO_BIN: &str = "featherpost-studio";
 mod native_recovery;
 pub use native_recovery::{
     claim_main_ui, configured_default_frontend, native_child_command, open_native_recovery,
@@ -71,7 +73,10 @@ pub use native_recovery::{
 };
 
 pub fn is_builtin_frontend(id: &str) -> bool {
-    matches!(id, LEGACY_EGUI_FRONTEND | BUILTIN_RECOVERY_FRONTEND)
+    matches!(
+        id,
+        LEGACY_EGUI_FRONTEND | LEGACY_UI_FRONTEND | BUILTIN_RECOVERY_FRONTEND
+    )
 }
 pub const DEFAULT_CONFIG: &str = maild_paths::CONFIG_FILE_NAME;
 pub const MAX_FRAME_BYTES: usize = 1024 * 1024;

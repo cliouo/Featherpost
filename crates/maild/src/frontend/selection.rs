@@ -213,20 +213,27 @@ mod tests {
 mod legacy_tests {
     use super::*;
     #[test]
-    fn legacy_seed_and_state_read_as_tauri_default_without_rewrite() {
-        let dir = tempfile::tempdir().unwrap();
-        assert_eq!(Selection::load("builtin-egui", None).id, maild_brand::BUNDLED_FRONTEND_ID);
-        let path = dir.path().join(".default.json");
-        let legacy = br#"{"version":1,"default":"builtin-egui"}"#;
-        std::fs::write(&path, legacy).unwrap();
-        #[cfg(unix)]
+    fn legacy_seed_and_state_read_as_default_without_rewrite() {
+        for retired in [crate::frontend::LEGACY_EGUI_FRONTEND, crate::frontend::LEGACY_UI_FRONTEND]
         {
-            use std::os::unix::fs::PermissionsExt as _;
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+            let dir = tempfile::tempdir().unwrap();
+            assert_eq!(
+                Selection::load(retired, None).id,
+                maild_brand::BUNDLED_FRONTEND_ID,
+                "{retired}"
+            );
+            let path = dir.path().join(".default.json");
+            let legacy = format!(r#"{{"version":1,"default":"{retired}"}}"#).into_bytes();
+            std::fs::write(&path, &legacy).unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt as _;
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+            }
+            let s = Selection::load("other.ui", Some(dir.path()));
+            assert_eq!(s.id, maild_brand::BUNDLED_FRONTEND_ID, "{retired}");
+            assert!(s.is_healthy(), "{retired}");
+            assert_eq!(std::fs::read(path).unwrap(), legacy, "{retired}");
         }
-        let s = Selection::load("other.ui", Some(dir.path()));
-        assert_eq!(s.id, maild_brand::BUNDLED_FRONTEND_ID);
-        assert!(s.is_healthy());
-        assert_eq!(std::fs::read(path).unwrap(), legacy);
     }
 }

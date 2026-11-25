@@ -35,7 +35,7 @@ schema_version = 2
 protocol_version = 1
 id = "{BUNDLED_FRONTEND_ID}"
 name = "{PRODUCT_NAME}"
-version = "0.1.0"
+version = "0.4.0"
 lifecycle = "on_demand"
 capabilities = ["inbox", "message", "compose", "settings", "background"]
 permissions = ["mailbox_write", "plugins_manage"]
@@ -70,7 +70,7 @@ path = "{UI_BUNDLE_NAME}"
 <key>CFBundleExecutable</key><string>{UI_BIN}</string>
 <key>CFBundleIdentifier</key><string>{BUNDLED_FRONTEND_ID}</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>0.1.0</string>
+<key>CFBundleShortVersionString</key><string>0.4.0</string>
 </dict></plist>"#
         ),
     )
@@ -280,7 +280,7 @@ fn source_identity_launch_path_and_plist_version_must_match() {
         ),
         (
             ui_plist_rel(),
-            "<string>0.1.0</string>".to_owned(),
+            "<string>0.4.0</string>".to_owned(),
             "<string>9.0.0</string>".to_owned(),
         ),
         (
@@ -657,7 +657,7 @@ fn bundled_manifest_template_matches_the_development_manifest_and_is_launchable(
     let payload = source.source.clone();
     fs::write(payload.join("frontend.toml"), template).unwrap();
     let plist = payload.join(ui_plist_rel());
-    let text = fs::read_to_string(&plist).unwrap().replace("0.1.0", "1.2.3");
+    let text = fs::read_to_string(&plist).unwrap().replace("0.4.0", "1.2.3");
     fs::write(&plist, text).unwrap();
     let root = tempfile::tempdir().unwrap();
     assert_eq!(source.preinstall(root.path()).unwrap(), PreinstallOutcome::Installed);
@@ -675,30 +675,31 @@ fn version_parse_accepts_only_numeric_bundle_versions() {
     assert_eq!(parse_version("1"), Some([1, 0, 0]));
     assert_eq!(parse_version("0.10.2"), Some([0, 10, 2]));
     assert!(parse_version("0.10.2") > parse_version("0.9.9"));
+    assert!(parse_version("0.4.0") > parse_version("0.3.4"));
     for bad in ["", "1.", ".1", "1.2.3.4", "1.0-beta", "v1.0", "1..2"] {
         assert_eq!(parse_version(bad), None, "{bad}");
     }
 }
 
-/// App upgrade: an older installed bundled UI follows the newer bundled copy; the old package is
-/// backed up and the user's default selection is untouched.
+/// App upgrade: an older installed bundled UI (e.g. pre-0.4.0 Studio 0.3.4) follows the newer
+/// bundled copy; the old package is backed up and the user's default selection is untouched.
 #[test]
 fn refresh_upgrades_only_an_older_installed_copy_and_keeps_preference() {
     let bundle = tempfile::tempdir().unwrap();
-    let source = source_fixture(bundle.path()); // bundled 0.1.0
+    let source = source_fixture(bundle.path()); // bundled 0.4.0
     let root = tempfile::tempdir().unwrap();
     assert_eq!(source.refresh(root.path()).unwrap(), RefreshOutcome::Absent);
     source.preinstall(root.path()).unwrap();
     assert_eq!(source.refresh(root.path()).unwrap(), RefreshOutcome::Kept);
 
     state(root.path(), br#"{"version":1,"default":"another.ui"}"#);
-    set_installed_version(root.path(), "0.0.9");
+    set_installed_version(root.path(), "0.3.4");
     assert_eq!(
         source.refresh(root.path()).unwrap(),
-        RefreshOutcome::Upgraded { from: "0.0.9".into(), to: "0.1.0".into() }
+        RefreshOutcome::Upgraded { from: "0.3.4".into(), to: "0.4.0".into() }
     );
     let installed = crate::frontend::inspect_staged_frontend(&root.path().join(BUNDLED_FRONTEND_ID));
-    assert_eq!(installed.unwrap().version, "0.1.0");
+    assert_eq!(installed.unwrap().version, "0.4.0");
     assert_eq!(
         fs::read(root.path().join(STATE)).unwrap(),
         br#"{"version":1,"default":"another.ui"}"#,
@@ -707,7 +708,7 @@ fn refresh_upgrades_only_an_older_installed_copy_and_keeps_preference() {
     let backups: Vec<_> = fs::read_dir(root.path().join(BACKUPS)).unwrap().map(|e| e.unwrap().path()).collect();
     assert_eq!(backups.len(), 1);
     let saved = fs::read_to_string(backups[0].join(BUNDLED_FRONTEND_ID).join("frontend.toml")).unwrap();
-    assert!(saved.contains("version = \"0.0.9\""));
+    assert!(saved.contains("version = \"0.3.4\""));
     assert_eq!(source.refresh(root.path()).unwrap(), RefreshOutcome::Kept, "idempotent");
 }
 
@@ -717,7 +718,7 @@ fn refresh_leaves_newer_unparseable_and_damaged_packages_alone() {
     let source = source_fixture(bundle.path());
     let root = tempfile::tempdir().unwrap();
     source.preinstall(root.path()).unwrap();
-    for version in ["0.2.0", "0.1.0-dev"] {
+    for version in ["0.5.0", "0.4.0-dev"] {
         set_installed_version(root.path(), version);
         assert_eq!(source.refresh(root.path()).unwrap(), RefreshOutcome::Kept, "{version}");
     }
@@ -747,7 +748,7 @@ fn refresh_resyncs_a_same_version_copy_from_a_different_build() {
     assert_eq!(
         source.refresh(root.path()).unwrap(),
         RefreshOutcome::Resynced {
-            version: "0.1.0".into()
+            version: "0.4.0".into()
         }
     );
     crate::frontend::check_installed_bundled_frontend(&installed, &source.source).unwrap();
@@ -769,7 +770,7 @@ fn agent_startup_upgrades_an_older_bundled_frontend() {
     let source = source_fixture(bundle.path());
     let root = tempfile::tempdir().unwrap();
     source.preinstall(root.path()).unwrap();
-    set_installed_version(root.path(), "0.0.1");
+    set_installed_version(root.path(), "0.3.4");
     let ctx = Context::new();
     ctx.provide(Arc::new(crate::frontend::FrontendConfig::default()));
     ctx.provide(Arc::new(crate::frontend::FrontendInstallRoot(root.path().into())));
@@ -778,7 +779,7 @@ fn agent_startup_upgrades_an_older_bundled_frontend() {
     crate::frontend::FrontendPlugin.apply(&ctx).unwrap();
     let listed = ctx.get::<crate::frontend::FrontendBroker>().unwrap().frontends(None);
     let entry = listed.frontends.iter().find(|f| f.id == BUNDLED_FRONTEND_ID).unwrap();
-    assert_eq!(entry.version, "0.1.0");
+    assert_eq!(entry.version, "0.4.0");
     assert_eq!(listed.default, BUNDLED_FRONTEND_ID);
 }
 
@@ -788,11 +789,11 @@ fn source_fixture_versioned(root: &Path, version: &str) -> BundledFrontend {
     let payload = &source.source;
     let manifest = fs::read_to_string(payload.join("frontend.toml"))
         .unwrap()
-        .replace("version = \"0.1.0\"", &format!("version = \"{version}\""));
+        .replace("version = \"0.4.0\"", &format!("version = \"{version}\""));
     fs::write(payload.join("frontend.toml"), manifest).unwrap();
     let plist = fs::read_to_string(payload.join(ui_plist_rel()))
         .unwrap()
-        .replace("0.1.0", version);
+        .replace("0.4.0", version);
     fs::write(payload.join(ui_plist_rel()), plist).unwrap();
     source
 }
@@ -918,347 +919,53 @@ fn runtime_permission_checks_do_not_exempt_preinstalled_frontend() {
     );
 }
 
-pub(crate) fn studio_source_fixture(root: &Path) -> (BundledFrontend, BundledFrontend) {
-    let legacy = source_fixture(root);
-    let source = legacy.source.parent().unwrap().join(STUDIO_FRONTEND_ID);
-    let old_app = legacy.source.join(UI_BUNDLE_NAME);
-    let app = source.join(STUDIO_PAYLOAD.app);
-    fs::create_dir_all(app.join("Contents/MacOS")).unwrap();
-    fs::copy(
-        old_app.join("Contents/MacOS").join(UI_BIN),
-        app.join("Contents/MacOS").join(STUDIO_PAYLOAD.binary),
-    )
-    .unwrap();
-    fs::copy(
-        legacy.source.join("recovery.sha256"),
-        source.join("recovery.sha256"),
-    )
-    .unwrap();
-    let manifest = fs::read_to_string(legacy.source.join("frontend.toml"))
-        .unwrap()
-        .replace(BUNDLED_FRONTEND_ID, STUDIO_FRONTEND_ID)
-        .replace(UI_BUNDLE_NAME, STUDIO_PAYLOAD.app)
-        .replace("0.1.0", "0.3.3");
-    fs::write(source.join("frontend.toml"), manifest).unwrap();
-    let plist = fs::read_to_string(old_app.join("Contents/Info.plist"))
-        .unwrap()
-        .replace(BUNDLED_FRONTEND_ID, STUDIO_FRONTEND_ID)
-        .replace(UI_BIN, STUDIO_PAYLOAD.binary)
-        .replace("0.1.0", "0.3.3");
-    fs::write(app.join("Contents/Info.plist"), plist).unwrap();
-    let studio = legacy.studio().unwrap().unwrap();
-    (legacy, studio)
-}
-
-#[test]
-fn studio_and_recovery_are_both_preinstalled_and_studio_removal_is_respected() {
-    let bundle = tempfile::tempdir().unwrap();
-    let (legacy, studio) = studio_source_fixture(bundle.path());
-    let root = tempfile::tempdir().unwrap();
-    assert_eq!(
-        legacy.preinstall(root.path()).unwrap(),
-        PreinstallOutcome::Installed
-    );
-    assert_eq!(
-        studio.preinstall(root.path()).unwrap(),
-        PreinstallOutcome::Installed
-    );
-    let broker = crate::frontend::FrontendBroker::with_install_root(
-        &crate::frontend::FrontendConfig {
-            default: STUDIO_FRONTEND_ID.into(),
-        },
-        Some(root.path()),
-    )
-    .unwrap();
-    assert_eq!(broker.default_frontend(), STUDIO_FRONTEND_ID);
-    assert!(broker.frontend_ids().contains(&BUNDLED_FRONTEND_ID.into()));
-    fs::remove_dir_all(root.path().join(STUDIO_FRONTEND_ID)).unwrap();
-    assert_eq!(
-        studio.preinstall(root.path()).unwrap(),
-        PreinstallOutcome::AlreadyConsidered
-    );
-    assert_eq!(studio.refresh(root.path()).unwrap(), RefreshOutcome::Absent);
-    assert!(root.path().join(BUNDLED_FRONTEND_ID).is_dir());
-}
-
-/// The real Studio manifest (schema 3 with `description` / `l10n`, ADR-0048) passes the same
-/// inspection the Agent applies before preinstalling the bundled Studio payload.
-#[test]
-fn shipped_studio_manifest_is_preinstallable() {
-    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let shipped = fs::read_to_string(repo.join("packaging/macos/studio/frontend.toml")).unwrap();
-    let version = shipped
-        .lines()
-        .find_map(|line| line.strip_prefix("version = \""))
-        .and_then(|rest| rest.strip_suffix('"'))
-        .unwrap()
-        .to_owned();
-    let bundle = tempfile::tempdir().unwrap();
-    let (legacy, studio) = studio_source_fixture(bundle.path());
-    fs::write(
-        studio.source.join("frontend.toml"),
-        shipped.replace(&format!("version = \"{version}\""), "version = \"0.3.3\""),
-    )
-    .unwrap();
-    let root = tempfile::tempdir().unwrap();
-    assert_eq!(legacy.preinstall(root.path()).unwrap(), PreinstallOutcome::Installed);
-    assert_eq!(studio.preinstall(root.path()).unwrap(), PreinstallOutcome::Installed);
-    let installed: toml::Table = toml::from_str(
-        &fs::read_to_string(root.path().join(STUDIO_FRONTEND_ID).join("frontend.toml")).unwrap(),
-    )
-    .unwrap();
-    assert_eq!(installed["schema_version"].as_integer(), Some(3));
-    assert!(installed["l10n"]["zh-Hans"]["description"].is_str());
-}
-
-#[test]
-fn studio_same_version_resync_preserves_explicit_default_and_legacy_bytes() {
-    let bundle = tempfile::tempdir().unwrap();
-    let (legacy, studio) = studio_source_fixture(bundle.path());
-    let root = tempfile::tempdir().unwrap();
-    legacy.preinstall(root.path()).unwrap();
-    studio.preinstall(root.path()).unwrap();
-    let choice = default_state();
-    state(root.path(), &choice);
-    let legacy_bytes = fs::read(ui_exe_in(&root.path().join(BUNDLED_FRONTEND_ID))).unwrap();
-    let installed = root.path().join(STUDIO_FRONTEND_ID);
-    let exe = installed
-        .join(STUDIO_PAYLOAD.app)
-        .join("Contents/MacOS")
-        .join(STUDIO_PAYLOAD.binary);
-    // Standalone trial packages did not carry the product integrity sidecar.
-    fs::remove_file(installed.join("recovery.sha256")).unwrap();
-    let mut old = fs::read(&exe).unwrap();
-    old.push(42);
-    fs::write(&exe, old).unwrap();
-    assert!(matches!(
-        studio.refresh(root.path()).unwrap(),
-        RefreshOutcome::Resynced { .. }
-    ));
-    assert_eq!(fs::read(root.path().join(STATE)).unwrap(), choice);
-    assert_eq!(
-        fs::read(ui_exe_in(&root.path().join(BUNDLED_FRONTEND_ID))).unwrap(),
-        legacy_bytes
-    );
-    assert_eq!(
-        fs::read(exe).unwrap(),
-        fs::read(
-            studio
-                .source
-                .join(STUDIO_PAYLOAD.app)
-                .join("Contents/MacOS")
-                .join(STUDIO_PAYLOAD.binary)
-        )
-        .unwrap()
-    );
-    let manifest = installed.join("frontend.toml");
-    let newer = fs::read_to_string(&manifest)
-        .unwrap()
-        .replace("0.3.3", "0.3.4");
-    fs::write(&manifest, &newer).unwrap();
-    assert_eq!(studio.refresh(root.path()).unwrap(), RefreshOutcome::Kept);
-    assert_eq!(fs::read_to_string(manifest).unwrap(), newer);
-}
-
+/// ADR-0049: upgrading from a pre-0.4.0 install that still has a stale `dev.featherpost.ui`
+/// package and `.default.json` pointing to `dev.featherpost.ui` preinstalls the sole bundled
+/// Studio frontend, migrates the default at read time without deleting the stale directory, and
+/// reconciles identity only for active frontends.
 #[cfg(unix)]
 #[test]
-fn agent_bootstrap_installs_studio_before_catalog_and_identity_reconciliation() {
+fn agent_bootstrap_migrates_retired_legacy_ui_install_to_bundled_studio() {
     use cordis::{Context, Plugin as _};
     let bundle = tempfile::tempdir().unwrap();
-    let (legacy, _) = studio_source_fixture(bundle.path());
+    let source = source_fixture(bundle.path());
     let root = tempfile::tempdir().unwrap();
+    // Simulate a pre-0.4.0 user with legacy dev.featherpost.ui installed and selected.
+    let stale_legacy = root.path().join(maild_client::LEGACY_UI_FRONTEND);
+    fs::create_dir(&stale_legacy).unwrap();
+    fs::write(stale_legacy.join("original"), b"legacy bytes").unwrap();
+    let legacy_state = default_state_for(maild_client::LEGACY_UI_FRONTEND);
+    state(root.path(), &legacy_state);
+
     let ctx = Context::new();
     ctx.provide(Arc::new(crate::frontend::FrontendConfig {
-        default: STUDIO_FRONTEND_ID.into(),
+        default: maild_client::LEGACY_UI_FRONTEND.into(),
     }));
     ctx.provide(Arc::new(crate::frontend::FrontendInstallRoot(
         root.path().into(),
     )));
-    ctx.provide(Arc::new(legacy));
+    ctx.provide(Arc::new(source));
     ctx.provide(crate::plugin_identity::IdentitySeam::open(
         root.path().join("auth.toml"),
     ));
     crate::frontend::FrontendPlugin.apply(&ctx).unwrap();
+
     let broker = ctx.get::<crate::frontend::FrontendBroker>().unwrap();
-    assert_eq!(broker.default_frontend(), STUDIO_FRONTEND_ID);
-    assert!(broker.frontend_ids().contains(&BUNDLED_FRONTEND_ID.into()));
+    assert_eq!(broker.default_frontend(), BUNDLED_FRONTEND_ID);
+    assert!(!broker
+        .frontend_ids()
+        .contains(&maild_client::LEGACY_UI_FRONTEND.to_owned()));
     assert!(ctx
         .get::<crate::plugin_identity::IdentitySeam>()
         .unwrap()
         .contains(
             crate::plugin_identity::PluginKind::Frontend,
-            STUDIO_FRONTEND_ID
+            BUNDLED_FRONTEND_ID
         ));
-    assert!(
-        !root.path().join(STATE).exists(),
-        "preinstall never writes a preference"
-    );
-}
-
-#[test]
-fn studio_integrity_and_capacity_fail_before_marker_or_legacy_changes() {
-    let bundle = tempfile::tempdir().unwrap();
-    let (legacy, studio) = studio_source_fixture(bundle.path());
-    let root = tempfile::tempdir().unwrap();
-    legacy.preinstall(root.path()).unwrap();
-    for n in 0..63 {
-        fs::create_dir(root.path().join(format!("extra{n}"))).unwrap();
-    }
-    assert!(studio.preinstall(root.path()).is_err());
-    assert!(!root
-        .path()
-        .join(format!(".preinstalled-{STUDIO_FRONTEND_ID}"))
-        .exists());
-    fs::remove_dir(root.path().join("extra0")).unwrap();
-    fs::write(
-        studio.source.join("recovery.sha256"),
-        format!("{}\n", "0".repeat(64)),
-    )
-    .unwrap();
-    assert!(studio.preinstall(root.path()).is_err());
-    assert!(!root.path().join(STUDIO_FRONTEND_ID).exists());
-    assert!(root.path().join(BUNDLED_FRONTEND_ID).is_dir());
-}
-
-#[test]
-fn repair_restores_and_defaults_to_studio_when_bundled() {
-    let bundle = tempfile::tempdir().unwrap();
-    let (legacy, _studio) = studio_source_fixture(bundle.path());
-    let root = tempfile::tempdir().unwrap();
-    // Pre-existing legacy package, damaged Studio package, legacy default selection, and another package.
-    installed(root.path());
-    let old_studio = root.path().join(STUDIO_FRONTEND_ID);
-    fs::create_dir(&old_studio).unwrap();
-    fs::write(old_studio.join("original"), b"damaged studio bytes").unwrap();
-    state(root.path(), &default_state_for(BUNDLED_FRONTEND_ID));
-    fs::create_dir(root.path().join("another.ui")).unwrap();
-    fs::write(root.path().join("another.ui/keep"), b"other").unwrap();
-
-    let result = legacy.repair(root.path()).unwrap();
-    assert_eq!(result.id, STUDIO_FRONTEND_ID);
-    assert_eq!(result.version, "0.3.3");
-    let backup = root.path().join(BACKUPS).join(&result.backup);
+    // Stale legacy package and .default.json are left untouched on disk (read-time migration).
     assert_eq!(
-        fs::read(backup.join(STUDIO_FRONTEND_ID).join("original")).unwrap(),
-        b"damaged studio bytes"
+        fs::read(stale_legacy.join("original")).unwrap(),
+        b"legacy bytes"
     );
-    assert_eq!(
-        fs::read(backup.join(STATE)).unwrap(),
-        default_state_for(BUNDLED_FRONTEND_ID)
-    );
-    assert_eq!(
-        fs::read(root.path().join(STATE)).unwrap(),
-        default_state_for(STUDIO_FRONTEND_ID)
-    );
-    assert!(root.path().join(marker_for(STUDIO_FRONTEND_ID)).exists());
-    // Legacy and third-party packages are untouched.
-    assert_eq!(
-        fs::read(root.path().join(BUNDLED_FRONTEND_ID).join("original")).unwrap(),
-        b"old package bytes"
-    );
-    assert_eq!(
-        fs::read(root.path().join("another.ui/keep")).unwrap(),
-        b"other"
-    );
-
-    let broker = crate::frontend::FrontendBroker::with_install_root(
-        &crate::frontend::FrontendConfig::default(),
-        Some(root.path()),
-    )
-    .unwrap();
-    assert_eq!(broker.default_frontend(), STUDIO_FRONTEND_ID);
-    broker
-        .reload_after_repair(root.path(), &result.id)
-        .unwrap();
-    assert_eq!(broker.default_frontend(), STUDIO_FRONTEND_ID);
-
-    // Offline repair uses the same Studio-first resolution.
-    let offline_dir = tempfile::tempdir().unwrap();
-    let paths = offline_paths(offline_dir.path(), "offline.db");
-    let offline_result = offline(&paths, |dir| legacy.repair(dir)).unwrap();
-    assert_eq!(offline_result.id, STUDIO_FRONTEND_ID);
-    assert_eq!(
-        fs::read(paths.frontend_dir.join(STATE)).unwrap(),
-        default_state_for(STUDIO_FRONTEND_ID)
-    );
-}
-
-#[test]
-fn repair_with_studio_rolls_back_at_each_checkpoint_and_fails_closed_on_damaged_studio() {
-    for point in ["backed_up", "package_published", "state_published"] {
-        let bundle = tempfile::tempdir().unwrap();
-        let (legacy, _studio) = studio_source_fixture(bundle.path());
-        let root = tempfile::tempdir().unwrap();
-        let old_studio = root.path().join(STUDIO_FRONTEND_ID);
-        fs::create_dir(&old_studio).unwrap();
-        fs::write(old_studio.join("original"), b"old studio bytes").unwrap();
-        state(root.path(), b"future format original");
-
-        let error = legacy
-            .repair_with(root.path(), |at| {
-                if at == point {
-                    Err("injected failure".into())
-                } else {
-                    Ok(())
-                }
-            })
-            .unwrap_err();
-        assert!(error.contains("已回退"), "{point}: {error}");
-        assert_eq!(
-            fs::read(root.path().join(STUDIO_FRONTEND_ID).join("original")).unwrap(),
-            b"old studio bytes",
-            "{point}"
-        );
-        assert_eq!(
-            fs::read(root.path().join(STATE)).unwrap(),
-            b"future format original",
-            "{point}"
-        );
-    }
-
-    // A damaged Studio payload inside the bundle fails closed without falling back to legacy UI.
-    let bundle = tempfile::tempdir().unwrap();
-    let (legacy, studio) = studio_source_fixture(bundle.path());
-    let root = tempfile::tempdir().unwrap();
-    state(root.path(), &default_state_for(STUDIO_FRONTEND_ID));
-    fs::write(
-        studio.source.join("recovery.sha256"),
-        format!("{}\n", "0".repeat(64)),
-    )
-    .unwrap();
-    assert!(legacy.repair(root.path()).unwrap_err().contains("校验和"));
-    assert_eq!(
-        fs::read(root.path().join(STATE)).unwrap(),
-        default_state_for(STUDIO_FRONTEND_ID)
-    );
-    assert!(!root.path().join(BUNDLED_FRONTEND_ID).exists());
-    assert!(!root.path().join(BACKUPS).exists());
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::symlink;
-        let bundle = tempfile::tempdir().unwrap();
-        let (legacy, studio) = studio_source_fixture(bundle.path());
-        let outside = tempfile::tempdir().unwrap();
-        fs::remove_dir_all(&studio.source).unwrap();
-        symlink(outside.path(), &studio.source).unwrap();
-        let root = tempfile::tempdir().unwrap();
-        assert!(legacy.repair(root.path()).is_err());
-        assert!(!root.path().join(BUNDLED_FRONTEND_ID).exists());
-        assert!(!root.path().join(STATE).exists());
-    }
-}
-
-#[test]
-fn repair_falls_back_to_legacy_when_studio_is_not_bundled() {
-    let bundle = tempfile::tempdir().unwrap();
-    let legacy = source_fixture(bundle.path());
-    let root = tempfile::tempdir().unwrap();
-    state(root.path(), &default_state_for(STUDIO_FRONTEND_ID));
-    let outcome = legacy.repair(root.path()).unwrap();
-    assert_eq!(outcome.id, BUNDLED_FRONTEND_ID);
-    assert_eq!(
-        fs::read(root.path().join(STATE)).unwrap(),
-        default_state_for(BUNDLED_FRONTEND_ID)
-    );
+    assert_eq!(fs::read(root.path().join(STATE)).unwrap(), legacy_state);
 }

@@ -20,7 +20,6 @@ use crate::agent_lifecycle::AgentLifecycleLock;
 use crate::store::{DatabaseLock, StoreConfig};
 
 pub const BUNDLED_FRONTEND_ID: &str = maild_brand::BUNDLED_FRONTEND_ID;
-pub const STUDIO_FRONTEND_ID: &str = maild_client::STUDIO_FRONTEND_ID;
 
 #[derive(Clone, Copy)]
 pub(crate) struct BundledIdentity {
@@ -28,15 +27,10 @@ pub(crate) struct BundledIdentity {
     pub app: &'static str,
     pub binary: &'static str,
 }
-pub(crate) const LEGACY_PAYLOAD: BundledIdentity = BundledIdentity {
+pub(crate) const BUNDLED_PAYLOAD: BundledIdentity = BundledIdentity {
     id: BUNDLED_FRONTEND_ID,
     app: maild_brand::UI_BUNDLE_NAME,
     binary: maild_brand::UI_BIN,
-};
-pub(crate) const STUDIO_PAYLOAD: BundledIdentity = BundledIdentity {
-    id: STUDIO_FRONTEND_ID,
-    app: "Featherpost Studio.app",
-    binary: maild_client::STUDIO_BIN,
 };
 const STATE: &str = ".default.json";
 const BACKUPS: &str = ".repair-backups";
@@ -115,23 +109,7 @@ impl BundledFrontend {
         Ok(Some(Self {
             app: app.into(),
             source,
-            identity: LEGACY_PAYLOAD,
-        }))
-    }
-
-    /// Optional second managed payload, derived only from this already validated app root.
-    pub(crate) fn studio(&self) -> Result<Option<Self>, String> {
-        let source = self
-            .app
-            .join("Contents/Resources/frontends")
-            .join(STUDIO_FRONTEND_ID);
-        if !files::check_optional_chain(&self.app, &source)? {
-            return Ok(None);
-        }
-        Ok(Some(Self {
-            app: self.app.clone(),
-            source,
-            identity: STUDIO_PAYLOAD,
+            identity: BUNDLED_PAYLOAD,
         }))
     }
 
@@ -265,34 +243,14 @@ impl BundledFrontend {
             .ok_or_else(|| "内置前端清单缺少版本".into())
     }
 
-    /// Select the bundled frontend restored by explicit repair: Studio when bundled alongside the
-    /// app, otherwise the legacy bundled UI. Unsafe Studio paths inside the bundle fail closed.
-    fn repair_target(&self) -> Result<Self, String> {
-        if self.identity.id == STUDIO_FRONTEND_ID {
-            return Ok(self.clone());
-        }
-        match self.studio()? {
-            Some(studio) => Ok(studio),
-            None => Ok(self.clone()),
-        }
-    }
-
-    /// Explicit replacement, including same-version/corrupt packages. Old bytes are retained.
-    /// Restores Studio and selects it as default when bundled; falls back to the legacy bundled
-    /// frontend otherwise. Caller must serialize this with all package/default mutations.
+    /// Explicit replacement of the bundled frontend, including same-version/corrupt packages.
+    /// Old bytes are retained and the bundled frontend is selected as default. Caller must
+    /// serialize this with all package/default mutations.
     pub(crate) fn repair(&self, root: &Path) -> Result<RepairOutcome, String> {
         self.repair_with(root, |_| Ok(()))
     }
 
     fn repair_with(
-        &self,
-        root: &Path,
-        checkpoint: impl Fn(&str) -> Result<(), String>,
-    ) -> Result<RepairOutcome, String> {
-        self.repair_target()?.repair_self_with(root, checkpoint)
-    }
-
-    fn repair_self_with(
         &self,
         root: &Path,
         checkpoint: impl Fn(&str) -> Result<(), String>,

@@ -22,11 +22,11 @@ Builds locked release binaries for aarch64-apple-darwin and
 x86_64-apple-darwin with a macOS 13.0 deployment target, combines both
 executables with lipo, then delegates bundle construction and validation to
 build-bundle.sh. Binary and bundle names come from packaging/macos/brand.env.
-The bundled Tauri UI is compiled with \`--features embedded\` after
-\`pnpm --dir packages/maild-ui build\` produces its web assets. When the checkout
-is a git work tree, the short commit is compiled in as MAILD_BUILD_REV and
-${BRAND_ENV_PREFIX}_BUILD_REV (getAgentInfo.build_rev, ADR-0016); other checkouts
-omit it. It never signs, notarizes, registers, or launches the bundle.
+The bundled Tauri UI (Featherpost Studio) is compiled with \`--features embedded\`
+after \`pnpm --dir packages/featherpost-studio build\` produces its web assets. When
+the checkout is a git work tree, the short commit is compiled in as MAILD_BUILD_REV
+and ${BRAND_ENV_PREFIX}_BUILD_REV (getAgentInfo.build_rev, ADR-0016); other
+checkouts omit it. It never signs, notarizes, registers, or launches the bundle.
 EOF
 }
 
@@ -108,8 +108,8 @@ if [ -n "$build_rev" ]; then
     export "${BRAND_ENV_PREFIX}_BUILD_REV=$build_rev"
 fi
 command -v pnpm >/dev/null 2>&1 || die 'pnpm is required to build the bundled UI assets'
-pnpm --dir "$repo_root/packages/maild-ui" install --frozen-lockfile
-pnpm --dir "$repo_root/packages/maild-ui" build
+pnpm --dir "$repo_root" install --frozen-lockfile
+pnpm --dir "$repo_root/packages/featherpost-studio" build
 # Crate names (`maild*`) are internal and stable; the [[bin]] names come from brand.toml.
 for target in aarch64-apple-darwin x86_64-apple-darwin; do
     cargo build --manifest-path "$repo_root/Cargo.toml" \
@@ -133,9 +133,6 @@ for binary in "$BRAND_LAUNCHER_BIN" "$BRAND_AGENT_BIN" "$BRAND_MENU_BIN" "$BRAND
         die "$binary universal binary does not contain exactly arm64 and x86_64"
 done
 
-# Save the legacy universal binary before the Studio feature overwrites the per-target UI.
-bash "$script_dir/build-studio-binary.sh" "$work/featherpost-studio"
-
 env "${BRAND_ENV_PREFIX}_BUNDLE_SHORT_VERSION=$short_version" \
     "${BRAND_ENV_PREFIX}_BUNDLE_BUILD_VERSION=$build_version" \
     "$script_dir/build-bundle.sh" \
@@ -143,5 +140,4 @@ env "${BRAND_ENV_PREFIX}_BUNDLE_SHORT_VERSION=$short_version" \
         --agent-bin "$work/$BRAND_AGENT_BIN" \
         --menu-bin "$work/$BRAND_MENU_BIN" \
         --ui-bin "$work/$BRAND_UI_BIN" \
-        --studio-bin "$work/featherpost-studio" \
         --output "$output"

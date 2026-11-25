@@ -341,7 +341,7 @@
   "studio_nav_select_hint": "选中一封邮件，查看所属邮箱与文件夹",
   "studio_nav_starred": "星标邮件",
   "studio_nav_unread": "未读邮件",
-  "studio_notice_identity_failure": "新版前端尚未注册，请运行安装包里的「安装 Studio.command」后重开窗口",
+  "studio_notice_identity_failure": "内置前端尚未注册，请从菜单栏或主应用打开「修复与后台管理」恢复内置前端后重开窗口",
   "studio_notice_version_mismatch": "界面与后台版本不同，当前只读。请更新 Featherpost 后重试。",
   "studio_phase_connecting": "连接中",
   "studio_phase_offline": "未连接",

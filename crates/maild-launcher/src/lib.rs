@@ -96,12 +96,7 @@ pub fn run(repair: bool) {
 /// is queued: it would supersede a notification/menu intent, and the window defaults to the inbox.
 /// Returns only on failure.
 fn host_in_place(exe: &std::path::Path) -> Result<(), &'static str> {
-    let target_id = if exe.file_name() == Some(std::ffi::OsStr::new(maild_client::STUDIO_BIN)) {
-        maild::recovery::STUDIO_FRONTEND_ID
-    } else {
-        maild_brand::BUNDLED_FRONTEND_ID
-    };
-    if let Some(pid) = platform::main_window_pid_for(target_id) {
+    if let Some(pid) = platform::main_window_pid_for(maild::recovery::BUNDLED_FRONTEND_ID) {
         if let Some(pid) = pid {
             platform::focus(pid);
         }

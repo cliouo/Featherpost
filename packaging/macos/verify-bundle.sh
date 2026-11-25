@@ -113,9 +113,10 @@ render_template() {
     text=$(cat -- "$template") || die "cannot read template: $template"
     for key in PRODUCT_NAME LAUNCHER_BIN AGENT_BIN MENU_BIN UI_BIN ICON_NAME \
         APP_BUNDLE_ID AGENT_BUNDLE_ID MENU_BUNDLE_ID UI_BUNDLE_ID \
-        APP_BUNDLE AGENT_BUNDLE MENU_BUNDLE UI_BUNDLE \
+        APP_BUNDLE AGENT_BUNDLE MENU_BUNDLE UI_BUNDLE UI_DISPLAY_NAME \
         BUNDLE_SHORT_VERSION BUNDLE_BUILD_VERSION; do
         case "$key" in
+            UI_DISPLAY_NAME) value=${BRAND_UI_BUNDLE%.app} ;;
             BUNDLE_SHORT_VERSION) value=$short_version ;;
             BUNDLE_BUILD_VERSION) value=$build_version ;;
             *) name="BRAND_$key"; value=${!name} ;;
@@ -265,6 +266,7 @@ ui_payload="$bundle/Contents/Resources/frontends/$BRAND_UI_BUNDLE_ID"
 ui_bundle="$ui_payload/$BRAND_UI_BUNDLE"
 ui_plist="$ui_bundle/Contents/Info.plist"
 ui_executable="$ui_bundle/Contents/MacOS/$BRAND_UI_BIN"
+ui_icon="$ui_bundle/Contents/Resources/$BRAND_ICON_NAME.icns"
 ui_manifest="$ui_payload/frontend.toml"
 ui_checksum="$ui_payload/recovery.sha256"
 
@@ -285,8 +287,10 @@ require_directory "$ui_payload"
 require_directory "$ui_bundle"
 require_directory "$ui_bundle/Contents"
 require_directory "$ui_bundle/Contents/MacOS"
+require_directory "$ui_bundle/Contents/Resources"
 require_file "$ui_plist"
 require_file "$ui_executable"
+require_file "$ui_icon"
 require_file "$ui_manifest"
 require_file "$ui_checksum"
 require_file "$main_plist"
@@ -295,6 +299,7 @@ require_file "$menu_plist"
 require_file "$launcher_executable"
 require_file "$host_ui_executable"
 require_file "$app_icon"
+cmp -s "$app_icon" "$ui_icon" || die 'UI icon differs from the application icon'
 has_agent_icon=true
 if [ "$allow_missing_agent_icon" = true ] &&
     [ ! -e "$agent_bundle/Contents/Resources" ] && [ ! -L "$agent_bundle/Contents/Resources" ] &&
@@ -358,6 +363,8 @@ $ui_rel/Contents
 $ui_rel/Contents/Info.plist
 $ui_rel/Contents/MacOS
 $ui_rel/Contents/MacOS/$BRAND_UI_BIN
+$ui_rel/Contents/Resources
+$ui_rel/Contents/Resources/$BRAND_ICON_NAME.icns
 $payload_rel/frontend.toml
 $payload_rel/recovery.sha256
 EOF
@@ -403,8 +410,6 @@ if [ -e "$stapled_ticket" ] || [ -L "$stapled_ticket" ]; then
     expected_layout=$(printf '%s\n%s' "$expected_layout" './Contents/CodeResources')
 fi
 
-. "$script_dir/studio-payload.sh"
-verify_studio_payload "$bundle"
 expected_layout=$(printf '%s\n' "$expected_layout" | LC_ALL=C sort)
 [ "$actual_layout" = "$expected_layout" ] || {
     printf 'verify-bundle: unexpected bundle layout\nexpected:\n' >&2
@@ -436,7 +441,7 @@ for manifest_pair in "app:$app_bundle_id" "agent:$agent_bundle_id" "menu:$menu_b
 done
 short_version_env="${BRAND_ENV_PREFIX}_BUNDLE_SHORT_VERSION"
 build_version_env="${BRAND_ENV_PREFIX}_BUNDLE_BUILD_VERSION"
-short_version=$(brand_env_value BUNDLE_SHORT_VERSION 0.1.0)
+short_version=$(brand_env_value BUNDLE_SHORT_VERSION 0.4.0)
 build_version=$(brand_env_value BUNDLE_BUILD_VERSION 1)
 
 validate_bundle_id BRAND_APP_BUNDLE_ID "$app_bundle_id"
@@ -490,8 +495,10 @@ expect_plist_string "$menu_plist" CFBundleShortVersionString "$short_version"
 expect_plist_string "$menu_plist" CFBundleVersion "$build_version"
 expect_plist_string "$menu_plist" LSMinimumSystemVersion 13.0
 
-expect_plist_string "$ui_plist" CFBundleDisplayName "$BRAND_PRODUCT_NAME UI"
+expect_plist_string "$ui_plist" CFBundleDisplayName "${BRAND_UI_BUNDLE%.app}"
+expect_plist_string "$ui_plist" CFBundleName "${BRAND_UI_BUNDLE%.app}"
 expect_plist_string "$ui_plist" CFBundleExecutable "$BRAND_UI_BIN"
+expect_plist_string "$ui_plist" CFBundleIconFile "$BRAND_ICON_NAME"
 expect_plist_string "$ui_plist" CFBundleIdentifier "$ui_bundle_id"
 expect_plist_string "$ui_plist" CFBundlePackageType APPL
 expect_plist_string "$ui_plist" CFBundleShortVersionString "$short_version"

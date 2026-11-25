@@ -341,7 +341,7 @@
   "studio_nav_select_hint": "Select a message to see its mailbox and folder",
   "studio_nav_starred": "Starred",
   "studio_nav_unread": "Unread",
-  "studio_notice_identity_failure": "This frontend version isn't registered yet. Run “安装 Studio.command” from the installer, then reopen the window.",
+  "studio_notice_identity_failure": "This frontend isn't registered yet. Open Repair & Background Management from the menu bar or main app to restore the built-in frontend, then reopen the window.",
   "studio_notice_version_mismatch": "The interface and the background service are different versions, so everything is read-only. Update Featherpost and try again.",
   "studio_phase_connecting": "Connecting",
   "studio_phase_offline": "Not connected",

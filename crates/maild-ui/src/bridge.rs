@@ -28,10 +28,7 @@ use crate::documents::{Document, DocumentIdentity, DocumentStore, ProtocolBase};
 use crate::html::{self, LinkKind};
 
 /// 本前端在受管目录与 manifest 里的 id（`package/frontend.toml`），来自 `brand.toml`。
-#[cfg(not(feature = "studio"))]
 pub const FRONTEND_ID: &str = maild_brand::BUNDLED_FRONTEND_ID;
-#[cfg(feature = "studio")]
-pub const FRONTEND_ID: &str = "dev.featherpost.studio";
 /// 连接快照事件；载荷是 [`UiSnapshot`]。
 pub const STATE_EVENT: &str = "maild://state";
 /// 导航意图事件；载荷是 `OpenIntent`（ADR-0014 seam 的消费侧）。

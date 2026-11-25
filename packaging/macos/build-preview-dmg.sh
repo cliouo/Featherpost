@@ -122,24 +122,14 @@ env "$short_version_env=$short_version" "$build_version_env=$build_version" \
 # Ad-hoc preview signing is inside-out. Formal release uses Developer ID + timestamp + notary.
 # Signing rewrites the UI Mach-O, so reseal its recovery checksum before sealing the app.
 /usr/bin/codesign --force --sign - --options runtime --timestamp=none "$ui" >/dev/null
-. "$script_dir/studio-payload.sh"
-studio_payload=$(studio_payload_path "$preview")
-host_studio=$(studio_host_path "$preview")
-if [ -d "$studio_payload" ]; then
-    /usr/bin/codesign --force --sign - --options runtime --timestamp=none "$studio_payload/$STUDIO_APP" >/dev/null
-fi
 "$script_dir/seal-recovery-payload.sh" "$preview"
 /usr/bin/codesign --force --sign - --options runtime --timestamp=none "$agent" >/dev/null
 /usr/bin/codesign --force --sign - --options runtime --timestamp=none "$menu" >/dev/null
 # Signing the app only seals its CFBundleExecutable (the launcher). The single-host UI
-# siblings must be signed explicitly with the hardened runtime first; a linker ad-hoc
+# sibling must be signed explicitly with the hardened runtime first; a linker ad-hoc
 # signature would otherwise survive `codesign --verify --deep` without runtime.
 /usr/bin/codesign --force --sign - --identifier "$BRAND_UI_BUNDLE_ID" --options runtime \
     --timestamp=none "$host_ui" >/dev/null
-if [ -d "$studio_payload" ]; then
-    /usr/bin/codesign --force --sign - --identifier "$STUDIO_FRONTEND_ID" --options runtime \
-        --timestamp=none "$host_studio" >/dev/null
-fi
 /usr/bin/codesign --force --sign - --options runtime --timestamp=none "$preview" >/dev/null
 env "$short_version_env=$short_version" "$build_version_env=$build_version" \
     "$script_dir/verify-bundle.sh" "$preview" >/dev/null
@@ -152,15 +142,6 @@ printf '%s\n' "$host_ui_details" | LC_ALL=C grep -Fqx "Identifier=$BRAND_UI_BUND
 printf '%s\n' "$host_ui_details" | LC_ALL=C grep -Eq \
     '^CodeDirectory .* flags=.*[(].*runtime.*[)]' ||
     die "host $BRAND_UI_BIN does not enable the hardened runtime"
-if [ -d "$studio_payload" ]; then
-    host_studio_details=$(/usr/bin/codesign --display --verbose=4 "$host_studio" 2>&1) ||
-        die "cannot inspect host $STUDIO_BIN signature"
-    printf '%s\n' "$host_studio_details" | LC_ALL=C grep -Fqx "Identifier=$STUDIO_FRONTEND_ID" ||
-        die "host $STUDIO_BIN signing identifier is not $STUDIO_FRONTEND_ID"
-    printf '%s\n' "$host_studio_details" | LC_ALL=C grep -Eq \
-        '^CodeDirectory .* flags=.*[(].*runtime.*[)]' ||
-        die "host $STUDIO_BIN does not enable the hardened runtime"
-fi
 
 ln -s /Applications "$root/Applications"
 temporary="$work/$BRAND_PRODUCT_NAME-preview.dmg"

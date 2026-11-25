@@ -18,10 +18,6 @@ fn launcher() -> PathBuf {
 fn ui() -> PathBuf {
     Path::new("Contents/MacOS").join(UI_BIN)
 }
-/// ADR-0044: the bundled Studio executable hosted in place by the top-level app bundle.
-fn studio_ui() -> PathBuf {
-    Path::new("Contents/MacOS").join(crate::STUDIO_BIN)
-}
 fn agent_app() -> PathBuf {
     Path::new("Contents/Library/LoginItems").join(AGENT_BUNDLE_NAME)
 }
@@ -87,7 +83,7 @@ impl NativeAppLayout {
     }
 
     fn from_executable(exe: &Path) -> Result<Option<Self>, &'static str> {
-        let suffixes = [launcher(), ui(), studio_ui(), agent(), menu()];
+        let suffixes = [launcher(), ui(), agent(), menu()];
         let app = suffixes.iter().find_map(|suffix| {
             let root = exe.ancestors().nth(suffix.components().count())?;
             (root.file_name()? == APP_BUNDLE_NAME && root.join(suffix) == exe).then_some(root)
@@ -126,39 +122,11 @@ impl NativeAppLayout {
         Ok(exe)
     }
 
-    /// `Contents/MacOS/<STUDIO_BIN>`, hosted in place by the top-level app when Studio is bundled.
-    /// Rejects symlinks, foreign owners, group/other-writable components and non-executable files.
-    pub fn studio_ui_executable(&self) -> Result<PathBuf, &'static str> {
-        let exe = self.app.join(studio_ui());
-        checked_executable(&self.app, &exe)?;
-        Ok(exe)
-    }
-
-    /// In-place UI executable for a bundled frontend id (`BUNDLED_FRONTEND_ID` or
-    /// `STUDIO_FRONTEND_ID`). Returns `Ok(None)` for third-party frontend ids.
-    pub fn frontend_ui_executable(&self, id: &str) -> Result<Option<PathBuf>, &'static str> {
-        if id == BUNDLED_FRONTEND_ID {
-            self.ui_executable().map(Some)
-        } else if id == crate::STUDIO_FRONTEND_ID {
-            self.studio_ui_executable().map(Some)
-        } else {
-            Ok(None)
-        }
-    }
-
-    /// Packaged recovery payload for a bundled frontend id (unchecked path; callers inspect it).
-    pub fn bundled_frontend_payload_for(&self, id: &str) -> PathBuf {
-        self.app.join("Contents/Resources/frontends").join(id)
-    }
-
     /// Packaged recovery payload of the bundled frontend (unchecked path; callers inspect it).
     pub fn bundled_frontend_payload(&self) -> PathBuf {
-        self.bundled_frontend_payload_for(BUNDLED_FRONTEND_ID)
-    }
-
-    /// Packaged recovery payload of the bundled Studio frontend (unchecked path; callers inspect it).
-    pub fn studio_frontend_payload(&self) -> PathBuf {
-        self.bundled_frontend_payload_for(crate::STUDIO_FRONTEND_ID)
+        self.app
+            .join("Contents/Resources/frontends")
+            .join(BUNDLED_FRONTEND_ID)
     }
 
     fn recovery_executable(&self) -> Result<PathBuf, &'static str> {
@@ -422,7 +390,7 @@ fn valid_frontend_id(value: &str) -> bool {
 }
 
 fn migrate_legacy_default(id: &str) -> String {
-    if id == crate::LEGACY_EGUI_FRONTEND {
+    if matches!(id, crate::LEGACY_EGUI_FRONTEND | crate::LEGACY_UI_FRONTEND) {
         crate::DEFAULT_FRONTEND.to_owned()
     } else {
         id.to_owned()
@@ -690,72 +658,7 @@ mod tests {
     }
 
     #[test]
-    fn in_place_studio_resolves_the_app_and_rejects_standalone_copy() {
-        let root = tempfile::tempdir().unwrap();
-        let app = root.path().join(APP_BUNDLE_NAME);
-        let studio = macos_exe(&app, crate::STUDIO_BIN);
-        executable(&studio);
-        let layout = NativeAppLayout::from_executable(&studio).unwrap().unwrap();
-        assert_eq!(layout.app_bundle(), app);
-        assert_eq!(layout.studio_ui_executable().unwrap(), studio);
-        assert_eq!(
-            layout
-                .frontend_ui_executable(crate::STUDIO_FRONTEND_ID)
-                .unwrap(),
-            Some(studio.clone())
-        );
-        assert_eq!(
-            layout
-                .frontend_ui_executable("org.example.reader")
-                .unwrap(),
-            None
-        );
-        assert_eq!(
-            layout.studio_frontend_payload(),
-            app.join("Contents/Resources/frontends")
-                .join(crate::STUDIO_FRONTEND_ID)
-        );
-        // Standalone Studio inside frontends/ is never mistaken for the top-level app.
-        let standalone = root
-            .path()
-            .join("frontends")
-            .join(crate::STUDIO_FRONTEND_ID)
-            .join("Featherpost Studio.app/Contents/MacOS")
-            .join(crate::STUDIO_BIN);
-        executable(&standalone);
-        assert!(NativeAppLayout::from_executable(&standalone)
-            .unwrap()
-            .is_none());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn in_place_studio_rejects_symlinks_and_wide_permissions() {
-        use std::os::unix::fs::PermissionsExt as _;
-        let root = tempfile::tempdir().unwrap();
-        let app = root.path().join(APP_BUNDLE_NAME);
-        let launcher = macos_exe(&app, LAUNCHER_BIN);
-        executable(&launcher);
-        let layout = NativeAppLayout::from_executable(&launcher).unwrap().unwrap();
-        assert!(layout.studio_ui_executable().is_err());
-
-        let elsewhere = root.path().join(crate::STUDIO_BIN);
-        executable(&elsewhere);
-        std::os::unix::fs::symlink(&elsewhere, macos_exe(&app, crate::STUDIO_BIN)).unwrap();
-        assert!(layout.studio_ui_executable().is_err());
-        std::fs::remove_file(macos_exe(&app, crate::STUDIO_BIN)).unwrap();
-
-        let studio = macos_exe(&app, crate::STUDIO_BIN);
-        executable(&studio);
-        assert!(layout.studio_ui_executable().is_ok());
-        std::fs::set_permissions(&studio, std::fs::Permissions::from_mode(0o722)).unwrap();
-        assert!(layout.studio_ui_executable().is_err());
-        std::fs::set_permissions(&studio, std::fs::Permissions::from_mode(0o600)).unwrap();
-        assert!(layout.studio_ui_executable().is_err());
-    }
-
-    #[test]
-    fn configured_default_frontend_reads_state_then_config_and_fails_open_to_none_on_corruption() {
+    fn configured_default_frontend_reads_state_then_config_and_migrates_retired_ids() {
         let root = tempfile::tempdir().unwrap();
         let paths = maild_paths::AppPaths::from_roots(
             &root.path().join("config"),
@@ -771,7 +674,7 @@ mod tests {
             &paths.config_file,
             format!(
                 "[plugins.frontend.config]\ndefault = \"{}\"\n",
-                crate::STUDIO_FRONTEND_ID
+                crate::LEGACY_UI_FRONTEND
             ),
         )
         .unwrap();
@@ -783,7 +686,7 @@ mod tests {
         }
         assert_eq!(
             configured_default_frontend(&paths).as_deref(),
-            Some(crate::STUDIO_FRONTEND_ID)
+            Some(crate::DEFAULT_FRONTEND)
         );
 
         // .default.json takes precedence over config.
@@ -791,7 +694,7 @@ mod tests {
         let state_path = paths.frontend_dir.join(".default.json");
         std::fs::write(
             &state_path,
-            format!(r#"{{"version":1,"default":"{}"}}"#, BUNDLED_FRONTEND_ID),
+            r#"{"version":1,"default":"org.example.custom"}"#,
         )
         .unwrap();
         #[cfg(unix)]
@@ -801,15 +704,22 @@ mod tests {
         }
         assert_eq!(
             configured_default_frontend(&paths).as_deref(),
-            Some(BUNDLED_FRONTEND_ID)
+            Some("org.example.custom")
         );
 
-        // Legacy builtin-egui migrates to DEFAULT_FRONTEND.
-        std::fs::write(&state_path, r#"{"version":1,"default":"builtin-egui"}"#).unwrap();
-        assert_eq!(
-            configured_default_frontend(&paths).as_deref(),
-            Some(crate::DEFAULT_FRONTEND)
-        );
+        // Retired builtin-egui and dev.featherpost.ui migrate to DEFAULT_FRONTEND.
+        for retired in [crate::LEGACY_EGUI_FRONTEND, crate::LEGACY_UI_FRONTEND] {
+            std::fs::write(
+                &state_path,
+                format!(r#"{{"version":1,"default":"{retired}"}}"#),
+            )
+            .unwrap();
+            assert_eq!(
+                configured_default_frontend(&paths).as_deref(),
+                Some(crate::DEFAULT_FRONTEND),
+                "{retired}"
+            );
+        }
 
         // Corrupt .default.json returns None (never silently falls back to config).
         std::fs::write(&state_path, b"not json").unwrap();

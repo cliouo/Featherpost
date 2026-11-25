@@ -549,9 +549,9 @@ password = "dev"
         "  remote-image-counter: http://{remote_addr}/  （GET /count 看命中数；ADR-0033 验收）"
     );
     eprintln!();
-    eprintln!("  起壳（开发形态，需先 pnpm --dir packages/maild-ui dev）：");
+    eprintln!("  起壳（开发形态，需先 pnpm --dir packages/featherpost-studio dev）：");
     eprintln!("    cargo run -p maild-ui -- --socket {}", socket.display());
-    eprintln!("  或内嵌形态（先 pnpm --dir packages/maild-ui build）：");
+    eprintln!("  或内嵌形态（先 pnpm --dir packages/featherpost-studio build）：");
     eprintln!(
         "    cargo run -p maild-ui --features embedded -- --socket {}",
         socket.display()
