@@ -1,9 +1,9 @@
 # @featherpost/i18n
 
-默认前端 `packages/maild-ui` 与 `packages/featherpost-studio` 共用的界面消息与语言运行时，
+默认前端 `packages/featherpost-studio` 使用的界面消息与语言运行时，
 实现 [ADR-0048](../../docs/decisions/0048-locale-preference-and-decoupled-i18n.md) 决策 8。
-消息用 [Paraglide JS](https://paraglidejs.com) v2（inlang）在**本包里编译一次**，两个前端都从这里导入；
-两个 Vite 配置里都不挂 Paraglide 插件。
+消息用 [Paraglide JS](https://paraglidejs.com) v2（inlang）在**本包里编译一次**，前端从这里导入；
+Vite 配置里不挂 Paraglide 插件。
 
 ```text
 packages/i18n/
@@ -31,10 +31,9 @@ packages/i18n/
 
 | 入口 | 怎么拿到产物 |
 |---|---|
-| 任意 `pnpm install`（CI 的 `pnpm --dir packages/maild-ui install --frozen-lockfile`、仓库根 `pnpm install`） | 本包的 `postinstall` 编译一次 |
-| `pnpm --dir packages/maild-ui {dev,build,typecheck,test}` | 脚本先跑 `pnpm --dir ../i18n compile` |
-| `pnpm --dir packages/featherpost-studio {dev,build,typecheck}`（含 `packaging/macos/build-studio.sh`、Tauri `beforeBuildCommand`） | 同上 |
-| `pnpm --dir packages/maild-ui exec tsc …`（直接 exec，不经脚本） | 依赖安装时的产物；改了消息后先 `pnpm i18n:compile` |
+| 任意 `pnpm install`（CI 与仓库根 `pnpm install --frozen-lockfile`） | 本包的 `postinstall` 编译一次 |
+| `pnpm --dir packages/featherpost-studio {dev,build,typecheck,test}`（含 Tauri `beforeBuildCommand`） | 脚本先跑 `pnpm --dir ../i18n compile` |
+| `pnpm --dir packages/featherpost-studio exec tsc …`（直接 exec，不经脚本） | 依赖安装时的产物；改了消息后先 `pnpm i18n:compile` |
 
 开发时改消息：另开一个终端跑 `pnpm i18n:watch`，Vite 会热更新。
 
@@ -69,7 +68,7 @@ messages/en/{common,mailbox,compose,settings,extensions,studio}.json
   `mailbox_account_state_online`、`extensions_permission_drafts_read`。
 - 前缀只能是 `common_`、`mailbox_`、`compose_`、`settings_`、`extensions_`、`studio_`。
   多个模块共用的文案（「取消」「保存」）放 `common_*`。
-- 调用写 `m.mailbox_inbox()`、`m.mailbox_account_folders_label({ account })`；不用 `m["..."]`。
+- 调用写 `m.mailbox_folder_inbox()`、`m.studio_folder_expand({ folder })`；不用 `m["..."]`。
 - 按用途命名，不按文字命名：同样是「全部邮件」，`mailbox_folder_all`（系统文件夹名）与
   `mailbox_smart_all`（智能文件夹）分成两个 key，英文可以各自措辞。
 - `aria-label`、`title` 与可见文字一样要翻译。
@@ -79,10 +78,10 @@ messages/en/{common,mailbox,compose,settings,extensions,studio}.json
 1. 在 `messages/zh-CN/<命名空间>.json` 与 `messages/en/<命名空间>.json` 的字典序位置各加一行。
 2. 组件里 `import { m } from "@featherpost/i18n/messages";`，调用 `m.<key>(...)`。
 3. 组件里调用一次 `useUiLocale()`（从 `../i18n` 或 `@featherpost/i18n/react` 导入），切换语言时它会重新渲染。
-   根组件 `App` / `Studio` 已订阅，整棵树会随之重新渲染；组件自己订阅是为了不依赖这一点。
+   根组件 `Studio` 已订阅，整棵树会随之重新渲染；组件自己订阅是为了不依赖这一点。
 4. 不要在模块顶层调用 `m.x()` 把结果存成常量，那样切换语言后不会变。要建映射表，就存消息函数本身
-   （参照 `maild-ui/src/i18n.ts` 的 `folderNames`、`FolderNav.tsx` 的 `SMART_LABEL`）。
-5. 跑 `pnpm i18n:lint` 与 `pnpm --dir packages/maild-ui typecheck`。
+   （参照 `featherpost-studio/src/i18n.ts` 的 `folderNames`）。
+5. 跑 `pnpm i18n:lint` 与 `pnpm --dir packages/featherpost-studio typecheck`。
 
 ## 收紧白名单
 
@@ -92,7 +91,7 @@ messages/en/{common,mailbox,compose,settings,extensions,studio}.json
 - 迁移完一个文件，就删掉它那一行。文件已经没有中文字面量却还在单上，`i18n:lint` 会报错，提醒删除。
 - 新文件不得加进白名单。`node scripts/lint.mjs --write-allowlist` 会用当前违规文件重写白名单，只用于删减条目；
   它新增的行在代码评审里能直接看到。
-- 不属于界面文案的中文（例如 `maild-ui/src/mailbox/otp.ts` 的验证码识别关键词，见 ADR-0048 非目标），在该语句前
+- 不属于界面文案的中文（例如 `featherpost-studio/src/mailbox/otp.ts` 的验证码识别关键词，见 ADR-0048 非目标），在该语句前
   加注释 `// i18n-lint-allow-cjk: <理由>`，lint 会跳过这条语句（含其子节点），然后把文件移出白名单。
 
 ## 运行时 API
@@ -114,13 +113,13 @@ import { m } from "@featherpost/i18n/messages";
   不用 URL、cookie、`navigator.language`、localStorage。
 - `applyEffectiveLocales` 协商后若语言变化：切换消息语言（`setLocale(…, { reload: false })`，从不重载页面）、
   更新 `<html lang>`、通知订阅者。没有推送过时为 `zh-CN`，即今天的行为。
-- `maild-ui/src/i18n.ts` 另外导出 `uiLocale()`（等于 `getUiLocale()`）与 `useUiLocale()`，用于 `Intl`
+- `featherpost-studio/src/i18n.ts` 另外导出 `uiLocale()`（等于 `getUiLocale()`）与 `useUiLocale()`，用于 `Intl`
   格式化与 `localeCompare`；它取代了原来的 `UI_LOCALE` 常量。
 
 - `matchTag` 只判断一个 BCP 47 标签能映射到哪种界面语言，不能就返回 `undefined`；`negotiateLocale` 就是对
   偏好列表逐项调用它。反方向也用它：包作者在 manifest `[l10n.<tag>]` 里写的标签各式各样（`zh-Hans`、`zh`、
   `en-US`），默认前端渲染扩展名称与描述时，取所有 `matchTag(tag) === getUiLocale()` 的条目，逐字段用第一个
-  有值的，缺省回落顶层 `name` / `description`（`maild-ui/src/i18n.ts` 的 `packageText`，Studio 复用它）。两个方向共用一套规则，界面语言与包文案
+  有值的，缺省回落顶层 `name` / `description`（`featherpost-studio/src/i18n.ts` 的 `packageText`）。两个方向共用一套规则，界面语言与包文案
   才不会对不上。
 
   negotiateLocale,       // (effective) => UiLocale：纯函数

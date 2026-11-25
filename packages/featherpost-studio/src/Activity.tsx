@@ -1,26 +1,26 @@
 import { m } from "@featherpost/i18n/messages";
-import { Choice } from "../../maild-ui/src/settings/Choice";
+import { Choice } from "./settings/Choice";
 import { useEffect, useState } from "react";
-import { Icon } from "../../maild-ui/src/app/Icon";
-import { BRAND } from "../../maild-ui/src/brand";
-import { useStore } from "../../maild-ui/src/host/hooks";
-import { folderLabel, uiLocale, useUiLocale } from "../../maild-ui/src/i18n";
+import { Icon } from "./app/Icon";
+import { BRAND } from "./brand";
+import { useStore } from "./host/hooks";
+import { folderLabel, uiLocale, useUiLocale } from "./i18n";
 import {
   ActivityController,
   operationDetail,
   operationDiscarded,
   operationLabel,
   stateLabel,
-} from "../../maild-ui/src/mailbox/activityController";
-import type { MailboxController } from "../../maild-ui/src/mailbox/controller";
-import { Dialog } from "../../maild-ui/src/mailbox/Dialog";
+} from "./mailbox/activityController";
+import type { MailboxController } from "./mailbox/controller";
+import { Dialog } from "./mailbox/Dialog";
 import {
   clockTime,
   dateOnly,
   fullDate,
   isoDateTime,
-} from "../../maild-ui/src/mailbox/format";
-import type { Operation } from "../../maild-ui/src/mailbox/types";
+} from "./mailbox/format";
+import type { Operation } from "./mailbox/types";
 
 const supportedStates = new Set([
   "pending",

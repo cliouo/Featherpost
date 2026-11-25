@@ -1,39 +1,39 @@
 import { m } from "@featherpost/i18n/messages";
 import { useRef, useState } from "react";
-import { PopoverMenu } from "../../maild-ui/src/app/PopoverMenu";
-import type { Host } from "../../maild-ui/src/host/host";
-import { useDarkShell } from "../../maild-ui/src/app/theme";
+import { PopoverMenu } from "./app/PopoverMenu";
+import type { Host } from "./host/host";
+import { useDarkShell } from "./app/theme";
 import { readingDocumentUrl } from "./readingTheme";
-import { useStore } from "../../maild-ui/src/host/hooks";
-import { useUiLocale } from "../../maild-ui/src/i18n";
-import { Icon } from "../../maild-ui/src/app/Icon";
-import { compatBlocksWrites } from "../../maild-ui/src/bridge/types";
+import { useStore } from "./host/hooks";
+import { useUiLocale } from "./i18n";
+import { Icon } from "./app/Icon";
+import { compatBlocksWrites } from "./bridge/types";
 import {
   messageKey,
   type MailboxController,
-} from "../../maild-ui/src/mailbox/controller";
+} from "./mailbox/controller";
 import {
   presentation,
   type DocumentController,
-} from "../../maild-ui/src/mailbox/document";
+} from "./mailbox/document";
 import {
   displayName,
   addressOnly,
   fullDate,
-} from "../../maild-ui/src/mailbox/format";
+} from "./mailbox/format";
 import {
   AttachmentStrip,
   LinkSheet,
   OtpBar,
   RemoteBanner,
-} from "../../maild-ui/src/mailbox/ReaderParts";
-import { Thread } from "../../maild-ui/src/mailbox/Thread";
-import { detectOtpCode } from "../../maild-ui/src/mailbox/otp";
+} from "./mailbox/ReaderParts";
+import { Thread } from "./mailbox/Thread";
+import { detectOtpCode } from "./mailbox/otp";
 import {
   sourceKey,
   type ComposeController,
-} from "../../maild-ui/src/compose/controller";
-import { Editor } from "../../maild-ui/src/compose/Editor";
+} from "./compose/controller";
+import { Editor } from "./compose/Editor";
 import { useContextMenu } from "./ContextMenu";
 import { addressMenu, messageMenu } from "./menus";
 import { useStudioActions } from "./studioActions";

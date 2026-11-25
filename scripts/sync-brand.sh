@@ -326,7 +326,7 @@ def patch_bins(rel, bins):
 
 outputs = {
     "crates/maild-brand/src/generated.rs": generated_rs,
-    "packages/maild-ui/src/brand.ts": brand_ts,
+    "packages/featherpost-studio/src/brand.ts": brand_ts,
     "packaging/macos/brand.env": brand_env,
     "packaging/macos/app-bundle-id.txt": b["app_bundle_id"] + "\n",
     "packaging/macos/agent-bundle-id.txt": b["agent_bundle_id"] + "\n",

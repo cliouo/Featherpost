@@ -5,7 +5,7 @@ Featherpost 的文档按“入口、架构、设计、状态、路线、运维�
 > **关于命名**：项目早期工作代号为 `maild`。**ADR-0001–0046 是历史架构演进档案，使用早期工作代号 `maild`
 > 书写**（`Maild.app`、`maild-ui`、`com.maild.ui`、`MAILD_*` 等），按原样保留、不做回溯改名。自
 > [ADR-0047](decisions/0047-decoupled-brand-and-open-source-readiness.md) 起，所有面向用户与操作系统的名字由仓库根的
-> [`brand.toml`](../brand.toml) 决定（当前品牌 Featherpost），Cargo 包名与源码目录 `crates/maild*`、`packages/maild-ui`
+> [`brand.toml`](../brand.toml) 决定（当前品牌 Featherpost），Cargo 包名与源码目录 `crates/maild*`
 > 仍是内部稳定名。阅读历史 ADR 时请按 [BRANDING.md](BRANDING.md) 的字段对照理解。
 
 ## 快速入口

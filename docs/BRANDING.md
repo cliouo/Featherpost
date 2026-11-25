@@ -48,7 +48,7 @@ packaging/macos/build-universal.sh --output "$PWD/dist/macos/<app_bundle_name>"
 | 派生文件 | 内容 |
 | --- | --- |
 | `crates/maild-brand/src/generated.rs` | 全部 Rust 品牌常量与编译期字面量宏（`bin_exe_daemon!`、`agent_id_contract!` 等） |
-| `packages/maild-ui/src/brand.ts` | 前端 webview 用的 `BRAND` 常量 |
+| `packages/featherpost-studio/src/brand.ts` | 前端 webview 用的 `BRAND` 常量 |
 | `packaging/macos/brand.env` | macOS 打包脚本、测试与 GitHub Actions 读取的 `BRAND_*` 变量 |
 | `packaging/macos/{app,agent,menu}-bundle-id.txt` | Rust 侧在编译期包含的 bundle identity；打包脚本要求与 `brand.env` 一致 |
 | `crates/maild-ui/tauri.conf.json` | `productName`、`identifier`、CSP `frame-src <uri_scheme>:` |
@@ -62,7 +62,7 @@ macOS 打包模板（`packaging/macos/templates/*.in`）本身是品牌中立的
 
 ## 有意保持不变的东西
 
-- **Cargo 包名与源码目录**：`crates/maild*`、`packages/maild-ui`、`-p maild` 是内部名，改它们只会制造巨大 diff 而
+- **Cargo 包名与源码目录**：`crates/maild*`、`-p maild` 是内部名，改它们只会制造巨大 diff 而
   用户看不见。
 - **编译期 identity 扫描前缀**：`maild-agent-bundle-id:`、`maild-menu-bundle-id:`、`maild-ui-embedded:` 是打包门禁
   在 Mach-O 中搜索的稳定标记；跟在前缀之后的 bundle ID 才随品牌变化。

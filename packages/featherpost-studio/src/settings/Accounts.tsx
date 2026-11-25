@@ -1,14 +1,14 @@
 import { m } from "@featherpost/i18n/messages";
 import { useUiLocale } from "@featherpost/i18n/react";
-import { packageText, providerName } from "../../../maild-ui/src/i18n";
-import { AccountReason } from "../../../maild-ui/src/settings/AccountReason";
-import { Choice } from "../../../maild-ui/src/settings/Choice";
+import { packageText, providerName } from "../i18n";
+import { AccountReason } from "./AccountReason";
+import { Choice } from "./Choice";
 import { useRef, useState, type ReactNode } from "react";
-import { PopoverMenu } from "../../../maild-ui/src/app/PopoverMenu";
-import { useStore } from "../../../maild-ui/src/host/hooks";
-import type { AccountProfile, Endpoint, ProbeStage } from "../../../maild-ui/src/settings/types";
-import { SettingsController, newDraft } from "../../../maild-ui/src/settings/controller";
-import { accountLabel } from "../../../maild-ui/src/settings/accountLabel";
+import { PopoverMenu } from "../app/PopoverMenu";
+import { useStore } from "../host/hooks";
+import type { AccountProfile, Endpoint, ProbeStage } from "./types";
+import { SettingsController, newDraft } from "./controller";
+import { accountLabel } from "./accountLabel";
 import {
   CREDENTIAL_LABEL,
   QUICK_PROVIDERS,
@@ -18,27 +18,12 @@ import {
   serversFor,
   stageLabel,
   type ProviderPreset,
-} from "../../../maild-ui/src/settings/providers";
-import { Icon } from "../../../maild-ui/src/app/Icon";
-import { BRAND } from "../../../maild-ui/src/brand";
+} from "./providers";
+import { Icon } from "../app/Icon";
+import { BRAND } from "../brand";
+import { Field } from "./Field";
 
-export function Field({
-  label,
-  children,
-  hint,
-}: {
-  label: string;
-  children: ReactNode;
-  hint?: string;
-}) {
-  return (
-    <label className="settings-field">
-      <span>{label}</span>
-      {children}
-      {hint && <small>{hint}</small>}
-    </label>
-  );
-}
+export { Field };
 export function needsRepair(p: AccountProfile) {
   return p.enabled && (p.runtime.state === "needs_credentials" || p.runtime.state === "error");
 }

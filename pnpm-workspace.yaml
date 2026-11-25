@@ -1,5 +1,4 @@
 packages:
-  - packages/maild-ui
   - packages/featherpost-studio
   - packages/i18n
 # vite depends on esbuild; pnpm 11 refuses to install while its postinstall is unapproved.

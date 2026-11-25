@@ -10,8 +10,8 @@ import {
   type MouseEvent,
   type ReactElement,
 } from "react";
-import { Icon } from "../../maild-ui/src/app/Icon";
-import type { IconName } from "../../maild-ui/src/host/types";
+import { Icon } from "./app/Icon";
+import type { IconName } from "./host/types";
 import { isTextEntry, separator, tidy, type MenuEntry } from "./menus";
 
 type Build = () => MenuEntry[];

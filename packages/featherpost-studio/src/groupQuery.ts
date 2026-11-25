@@ -2,8 +2,8 @@ import type {
   MailBridge,
   UiPage,
   UiSummary,
-} from "../../maild-ui/src/bridge/types";
-import type { MailboxQuery } from "../../maild-ui/src/mailbox/types";
+} from "./bridge/types";
+import type { MailboxQuery } from "./mailbox/types";
 
 interface Source {
   account: string;

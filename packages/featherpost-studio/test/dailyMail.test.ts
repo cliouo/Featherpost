@@ -1,0 +1,418 @@
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import type { MessageIdentity, ServerSearchOptions, UiSummary } from "../src/bridge/types";
+import { MailboxController, messageKey } from "../src/mailbox/controller";
+import type { MailboxBridge } from "../src/mailbox/types";
+import { SettingsController } from "../src/settings/controller";
+import { Notifications } from "../src/settings/Notifications";
+import { deferred, FakeBridge, flush, folder, message, offlineError, online, summary } from "./fakeBridge";
+import { FakeSettings, account, rules } from "./fakeSettings";
+
+const controllers: MailboxController[] = [];
+afterEach(() => {
+  controllers.splice(0).forEach((c) => c.stop());
+  vi.useRealTimers();
+});
+
+type SyncOutcome = Awaited<ReturnType<NonNullable<MailboxBridge["syncScope"]>>>;
+
+async function ready(rows: UiSummary[] = []) {
+  const bridge = new FakeBridge();
+  const c = new MailboxController(bridge);
+  controllers.push(c);
+  c.acceptSnapshot(online);
+  for (const r of bridge.folderRequests) r.d.resolve([folder("INBOX", "inbox"), folder("Archive", "archive")]);
+  bridge.mailbox.queries[0].d.resolve({ messages: rows, total: rows.length });
+  await flush();
+  return { bridge, c };
+}
+
+describe("立即同步", () => {
+  it.each([undefined, "Archive"])("tracks an explicit sidebar sync (%s) through completion and suppresses duplicates", async (name) => {
+    const { bridge, c } = await ready();
+    const originalScope = c.state.scope;
+    const sync = deferred<SyncOutcome>();
+    const asked: Array<[string, string | undefined]> = [];
+    bridge.mailbox.syncScope = (account, folder) => {
+      asked.push([account, folder]);
+      return sync.promise;
+    };
+    const scope = { account: "demo", folder: name };
+    const run = c.syncNow(scope);
+    await c.syncNow({ account: "demo", folder: "INBOX" });
+    expect(c.state.syncingScopes.get("demo")).toEqual({ folder: name });
+    expect(asked).toEqual([["demo", name]]);
+    expect(bridge.folderRequests).toHaveLength(1);
+    if (name) sync.reject(offlineError());
+    else sync.resolve("complete");
+    await flush();
+    expect(c.state.syncingScopes.get("demo")).toEqual({ folder: name });
+    bridge.folderRequests.at(-1)!.d.resolve([folder("INBOX", "inbox"), folder("Renamed")]);
+    bridge.mailbox.queries.at(-1)!.d.resolve({ messages: [], total: 0 });
+    await run;
+    expect(c.state.syncingScopes.has("demo")).toBe(false);
+    expect(c.isSyncing()).toBe(false);
+    expect(c.state.scope).toEqual(originalScope);
+    expect(c.foldersOf("demo").map((folder) => folder.name)).toEqual(["INBOX", "Renamed"]);
+    if (name) expect(c.state.syncError).toContain("后台连接不可用");
+    else expect(c.state.syncError).toBeNull();
+    expect(c.state.syncNotice).toBeNull();
+  });
+
+  it("clears the spinner, then refreshes folders and the open list when background sync completes", async () => {
+    const { bridge, c } = await ready();
+    vi.useFakeTimers();
+    const sync = deferred<SyncOutcome>();
+    bridge.mailbox.syncScope = (account) => account === "demo" ? sync.promise : Promise.resolve("complete");
+    bridge.mailbox.syncStatus = vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    const run = c.syncNow({ account: "demo" });
+    expect(c.isSyncing("demo")).toBe(true);
+
+    sync.resolve({ background: { sync_id: 42 } });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(c.isSyncing("demo")).toBe(false);
+    expect(c.state.syncNotice).toBe("同步已启动，仍在后台进行。");
+    expect(c.state.syncError).toBeNull();
+
+    bridge.folderRequests.at(-1)!.d.resolve([folder("INBOX", "inbox")]);
+    bridge.mailbox.queries.at(-1)!.d.resolve({ messages: [], total: 0 });
+    await run;
+    expect(c.state.syncNotice).toBe("同步已启动，仍在后台进行。");
+
+    await c.syncNow({ account: "demo" });
+    expect(c.isSyncPending("demo")).toBe(true);
+    const independent = c.syncNow({ account: "other" });
+    expect(c.isSyncing("other")).toBe(true);
+    await vi.advanceTimersByTimeAsync(0);
+    bridge.folderRequests.at(-1)!.d.resolve([folder("INBOX", "inbox")]);
+    bridge.mailbox.queries.at(-1)!.d.resolve({ messages: [], total: 0 });
+    await independent;
+    expect(c.state.syncNotice).toBe("同步已启动，仍在后台进行。");
+
+    const foldersBefore = bridge.folderRequests.length;
+    const queriesBefore = bridge.mailbox.queries.length;
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(bridge.mailbox.syncStatus).toHaveBeenCalledWith("demo", 42);
+    expect(bridge.folderRequests).toHaveLength(foldersBefore);
+    expect(bridge.mailbox.queries).toHaveLength(queriesBefore);
+
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(bridge.folderRequests).toHaveLength(foldersBefore + 1);
+    expect(bridge.mailbox.queries).toHaveLength(queriesBefore + 1);
+    bridge.folderRequests.at(-1)!.d.resolve([folder("INBOX", "inbox"), folder("Renamed")]);
+    bridge.mailbox.queries.at(-1)!.d.resolve({ messages: [summary("INBOX", "2")], total: 1 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(c.foldersOf("demo").map((f) => f.name)).toEqual(["INBOX", "Renamed"]);
+    expect(c.state.rows.map((row) => row.uid)).toEqual(["2"]);
+    expect(c.state.syncNotice).toBeNull();
+    expect(c.state.syncError).toBeNull();
+    expect(c.isSyncPending("demo")).toBe(false);
+  });
+
+  it.each(["failure", "stop"] as const)("ends background tracking on %s", async (end) => {
+    const { bridge, c } = await ready();
+    vi.useFakeTimers();
+    bridge.mailbox.syncScope = async () => ({ background: { sync_id: 42 } });
+    bridge.mailbox.syncStatus = vi.fn().mockRejectedValue(offlineError());
+    const run = c.syncNow({ account: "demo" });
+    await vi.advanceTimersByTimeAsync(0);
+    bridge.folderRequests.at(-1)!.d.resolve([folder("INBOX", "inbox")]);
+    bridge.mailbox.queries.at(-1)!.d.resolve({ messages: [], total: 0 });
+    await run;
+
+    if (end === "stop") c.stop();
+    await vi.advanceTimersByTimeAsync(1000);
+    if (end === "failure") {
+      bridge.folderRequests.at(-1)!.d.resolve([folder("INBOX", "inbox")]);
+      bridge.mailbox.queries.at(-1)!.d.resolve({ messages: [], total: 0 });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(c.state.syncError).toContain("后台连接不可用");
+    } else {
+      expect(bridge.mailbox.syncStatus).not.toHaveBeenCalled();
+    }
+    expect(c.state.syncNotice).toBeNull();
+  });
+
+  it("lets another account finish while a scoped sync is stalled", async () => {
+    const { bridge, c } = await ready();
+    const stalled = deferred<SyncOutcome>();
+    const independent = deferred<SyncOutcome>();
+    bridge.mailbox.syncScope = (account) => account === "demo" ? stalled.promise : independent.promise;
+    const first = c.syncNow({ account: "demo", folder: "Archive" });
+    const second = c.syncNow({ account: "other" });
+    expect(c.isSyncing("demo")).toBe(true);
+    expect(c.isSyncing("other")).toBe(true);
+
+    independent.resolve("complete");
+    await flush();
+    bridge.folderRequests.at(-1)!.d.resolve([folder("INBOX", "inbox")]);
+    bridge.mailbox.queries.at(-1)!.d.resolve({ messages: [], total: 0 });
+    await second;
+    expect(c.isSyncing("other")).toBe(false);
+    expect(c.isSyncing("demo")).toBe(true);
+
+    stalled.reject(offlineError());
+    await flush();
+    bridge.folderRequests.at(-1)!.d.resolve([folder("INBOX", "inbox")]);
+    bridge.mailbox.queries.at(-1)!.d.resolve({ messages: [], total: 0 });
+    await first;
+    expect(c.isSyncing()).toBe(false);
+  });
+
+  it("先敲醒后台（带当前账户），再刷新列表，期间显示同步中", async () => {
+    const { bridge, c } = await ready();
+    c.selectFolder(c.foldersOf("demo")[0]);
+    bridge.pageRequests.at(-1)!.d.resolve({ messages: [], total: 0 });
+    await flush();
+    const sync = deferred<void>();
+    const asked: Array<string | undefined> = [];
+    bridge.mailbox.syncNow = (account) => {
+      asked.push(account);
+      return sync.promise;
+    };
+    const pages = bridge.pageRequests.length;
+    const run = c.syncNow();
+    expect(c.isSyncing()).toBe(true);
+    expect(asked).toEqual(["demo"]);
+    expect(bridge.pageRequests).toHaveLength(pages);
+    sync.resolve();
+    await flush();
+    expect(bridge.pageRequests.length).toBeGreaterThan(pages);
+    for (const r of bridge.folderRequests.slice(1)) r.d.resolve([folder("INBOX", "inbox")]);
+    bridge.pageRequests.at(-1)!.d.resolve({ messages: [summary("INBOX", "9")], total: 1 });
+    await run;
+    expect(c.isSyncing()).toBe(false);
+    expect(c.state.syncError).toBeNull();
+    expect(c.state.rows.map((r) => r.uid)).toEqual(["9"]);
+  });
+
+  it("旧后台没有 syncNow：照常刷新；离线错误如实提示", async () => {
+    const { bridge, c } = await ready();
+    const queries = bridge.mailbox.queries.length;
+    const run = c.syncNow();
+    await flush();
+    expect(bridge.mailbox.queries.length).toBeGreaterThan(queries);
+    bridge.mailbox.queries.at(-1)!.d.resolve({ messages: [], total: 0 });
+    for (const r of bridge.folderRequests.slice(1)) r.d.resolve([]);
+    await run;
+    expect(c.state.syncError).toBeNull();
+    bridge.mailbox.syncNow = async () => {
+      throw offlineError();
+    };
+    const again = c.syncNow();
+    await flush();
+    bridge.mailbox.queries.at(-1)!.d.resolve({ messages: [], total: 0 });
+    for (const r of bridge.folderRequests.slice(1)) r.d.resolve([]);
+    await again;
+    expect(c.state.syncError).toContain("后台连接不可用");
+  });
+});
+
+describe("服务器历史搜索与按需拉取", () => {
+  const remote = (uid: string, subject = `old ${uid}`): UiSummary => ({ ...summary("INBOX", uid, subject), sort_at: Number(uid) });
+
+  it("旧后台没有 serverSearch 时不提供入口", async () => {
+    const { c } = await ready();
+    c.search({ query: "发票" });
+    expect(c.serverSearchSupported).toBe(false);
+    expect(c.canSearchServer).toBe(false);
+  });
+
+  it.each(["INBOX", "Posteingang"])("searches %s rather than the configured Archive primary", async (inbox) => {
+    const { bridge, c } = await ready();
+    const loading = c.ensureFolders("demo", true);
+    bridge.folderRequests.at(-1)!.d.resolve([
+      folder("Nested/INBOX", "inbox"),
+      { ...folder("Archive", "archive"), is_primary: true },
+      {
+        ...folder(inbox, "inbox"),
+        is_primary: false,
+        ...(inbox === "Posteingang" ? { is_search_inbox: true } : {}),
+      },
+    ]);
+    await loading;
+    expect(c.preferredInbox("demo")?.name).toBe("Archive");
+
+    const searched: string[] = [];
+    bridge.mailbox.serverSearch = async (_account, name) => {
+      searched.push(name);
+      return [];
+    };
+    c.search({ query: "invoice" });
+    await c.searchServer();
+    c.search({ account: "demo", query: "invoice" });
+    await c.searchServer();
+    c.search({ account: "demo", folder: "Archive", query: "invoice" });
+    await c.searchServer();
+    expect(searched).toEqual([inbox, inbox, "Archive"]);
+  });
+
+  it("搜索 → 远端结果（去掉本地已有）→ 点开拉回本地并原位渲染", async () => {
+    const { bridge, c } = await ready();
+    const searches: Array<[string, string, string]> = [];
+    const page = deferred<UiSummary[]>();
+    bridge.mailbox.serverSearch = (account, folderName, query) => {
+      searches.push([account, folderName, query]);
+      return page.promise;
+    };
+    const fetches: MessageIdentity[] = [];
+    const fetched = deferred<ReturnType<typeof message> | null>();
+    bridge.mailbox.fetchServerMessage = (account, folderName, uid) => {
+      fetches.push({ account, folder: folderName, uid });
+      return fetched.promise;
+    };
+    c.search({ query: "发票" });
+    bridge.mailbox.queries.at(-1)!.d.resolve({ messages: [summary("INBOX", "500")], total: 1 });
+    await flush();
+    expect(c.canSearchServer).toBe(true);
+    const run = c.searchServer();
+    expect(c.state.remote.status).toBe("loading");
+    expect(searches).toEqual([["demo", "INBOX", "发票"]]);
+    page.resolve([remote("10"), remote("500"), remote("20"), { ...remote("30"), account: "intruder" }]);
+    await run;
+    expect(c.state.remote.status).toBe("ready");
+    expect(c.state.remote.rows.map((r) => r.uid)).toEqual(["20", "10"]);
+    const target = c.state.remote.rows[1];
+    expect(c.isRemote(target)).toBe(true);
+    c.openRemote(target);
+    expect(c.state.selected?.uid).toBe("10");
+    expect(c.state.loadingDetail).toBe(true);
+    expect(fetches).toEqual([{ account: "demo", folder: "INBOX", uid: "10" }]);
+    expect(bridge.detailRequests).toHaveLength(0);
+    fetched.resolve(message("INBOX", "10", { has_html: true, body: "历史邮件正文" }));
+    await flush();
+    expect(c.state.loadingDetail).toBe(false);
+    expect(c.state.detail?.body).toBe("历史邮件正文");
+    expect(c.state.remote.fetched).toEqual([messageKey(target)]);
+    // 已拉回：再打开走本地详情通道。
+    c.clearSelection();
+    c.openRemote(target);
+    expect(bridge.detailRequests.map((r) => r.identity.uid)).toEqual(["10"]);
+    // j / k 在服务器结果里移动。
+    c.step(-1);
+    expect(c.state.selected?.uid).toBe("20");
+    expect(fetches.map((f) => f.uid)).toEqual(["10", "20"]);
+  });
+
+  it("服务器上已不存在、桥未实现命令时如实提示；换范围后迟到结果作废", async () => {
+    const { bridge, c } = await ready();
+    bridge.mailbox.serverSearch = async () => {
+      throw new Error("command ui_server_search not found");
+    };
+    c.search({ query: "合同" });
+    bridge.mailbox.queries.at(-1)!.d.resolve({ messages: [], total: 0 });
+    await flush();
+    await c.searchServer();
+    expect(c.state.remote.status).toBe("error");
+    expect(c.state.remote.error).toContain("服务器搜索暂不可用");
+
+    const late = deferred<UiSummary[]>();
+    bridge.mailbox.serverSearch = () => late.promise;
+    const run = c.searchServer();
+    c.selectSmart("inbox");
+    late.resolve([remote("1")]);
+    await run;
+    expect(c.state.remote).toMatchObject({ status: "idle", rows: [] });
+
+    bridge.mailbox.serverSearch = async () => [remote("7")];
+    bridge.mailbox.fetchServerMessage = async () => null;
+    c.search({ query: "合同" });
+    bridge.mailbox.queries.at(-1)!.d.resolve({ messages: [], total: 0 });
+    await flush();
+    await c.searchServer();
+    c.openRemote(c.state.remote.rows[0]);
+    await flush();
+    expect(c.state.detailError).toContain("服务器上已找不到");
+    // 未拉回本地的服务器结果不能写。
+    expect(await c.toggleSelected("flagged")).toBeNull();
+  });
+
+  it("searchServer 透传 since/until 日期筛选，并对忽略参数的桥做纵深后置过滤", async () => {
+    const { bridge, c } = await ready();
+    const receivedCalls: Array<{
+      account: string;
+      folder: string;
+      query: string;
+      options?: ServerSearchOptions;
+    }> = [];
+    // 假桥故意忽略 options 返回越界与无日期（sort_at = 0）摘要，验证 controller 纵深过滤
+    bridge.mailbox.serverSearch = async (account, folderName, query, options) => {
+      receivedCalls.push({ account, folder: folderName, query, options });
+      return [
+        { ...remote("101"), sort_at: 999 }, // 早于 since
+        { ...remote("102"), sort_at: 1000 }, // 恰好等于 since
+        { ...remote("103"), sort_at: 1500 }, // 区间内
+        { ...remote("104"), sort_at: 2000 }, // 恰好等于 until
+        { ...remote("105"), sort_at: 2001 }, // 晚于 until
+        { ...remote("106"), sort_at: 0 }, // 缺失日期兜底 0
+      ];
+    };
+    c.search({ query: "报销", since: 1000, until: 2000 });
+    bridge.mailbox.queries.at(-1)!.d.resolve({ messages: [], total: 0 });
+    await flush();
+    await c.searchServer();
+    expect(receivedCalls).toEqual([
+      {
+        account: "demo",
+        folder: "INBOX",
+        query: "报销",
+        options: { since: 1000, until: 2000 },
+      },
+    ]);
+    expect(c.state.remote.status).toBe("ready");
+    expect(c.state.remote.rows.map((r) => r.uid)).toEqual(["104", "103", "102"]);
+  });
+});
+
+describe("账户向导与修复导航入口", () => {
+  it("openSetup 预填服务商参数，openAccounts 切回账户分区", () => {
+    const settings = new SettingsController(new FakeSettings());
+    settings.connection(online);
+    settings.openSetup("gmail");
+    expect(settings.store.getSnapshot().editor?.draft.incoming.server).toBe("imap.gmail.com");
+    settings.store.patch({ section: "maild.settings.addresses" });
+    settings.openAccounts();
+    expect(settings.store.getSnapshot().section).toBe("maild.settings.accounts");
+    settings.dispose();
+  });
+});
+
+describe("通知与规则：新邮件通知与按账户静音", () => {
+  it("旧后台不回传新键：如实标为不可用，并展示非持久状态", async () => {
+    const bridge = new FakeSettings();
+    const c = new SettingsController(bridge);
+    c.connection(online);
+    c.activate("maild.settings.notifications");
+    await c.load();
+    await flush();
+    const html = renderToStaticMarkup(createElement(Notifications, { controller: c }));
+    expect(html).toContain("收件箱新邮件系统通知");
+    expect(html).toContain("当前后台版本尚未提供此开关");
+    expect(html).toContain("静音 工作邮箱");
+    expect(html).toContain("后台尚未说明规则是否持久保存");
+  });
+
+  it("新后台：开关与静音名单可编辑，保存回执决定持久化文案", async () => {
+    const bridge = new FakeSettings();
+    bridge.rules = async () => ({ rules: { ...rules(), notify_new_mail: true, muted_accounts: [] }, persisted: true });
+    bridge.profileRows = [account(), { ...account(), id: "acct-b", display_name: "个人", address: "me@qq.com" }];
+    const c = new SettingsController(bridge);
+    c.connection(online);
+    c.activate("maild.settings.notifications");
+    await c.load();
+    await flush();
+    expect(c.store.getSnapshot().rulesPersisted).toBe(true);
+    let html = renderToStaticMarkup(createElement(Notifications, { controller: c }));
+    expect(html).toContain("规则已持久保存，重启后台后继续生效");
+    expect(html).not.toContain("当前后台版本尚未提供此开关");
+    expect(html).toContain("静音 个人");
+    c.setRules({ ...c.store.getSnapshot().rules!, notify_new_mail: false, muted_accounts: ["acct-b"] });
+    await c.saveRules();
+    expect(bridge.savedRules.at(-1)).toMatchObject({ notify_new_mail: false, muted_accounts: ["acct-b"] });
+    expect(c.store.getSnapshot().rulesPersisted).toBe(false);
+    html = renderToStaticMarkup(createElement(Notifications, { controller: c }));
+    expect(html).toContain("规则仅在当前后台运行期间生效");
+  });
+});

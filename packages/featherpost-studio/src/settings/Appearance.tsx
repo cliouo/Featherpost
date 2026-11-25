@@ -1,16 +1,16 @@
 import { m } from "@featherpost/i18n/messages";
 import { useUiLocale } from "@featherpost/i18n/react";
 import { useEffect } from "react";
-import type { Host } from "../../../maild-ui/src/host/host";
-import { useStore } from "../../../maild-ui/src/host/hooks";
-import type { Preferences } from "../../../maild-ui/src/preferences";
-import { Choice } from "../../../maild-ui/src/settings/Choice";
+import type { Host } from "../host/host";
+import { useStore } from "../host/hooks";
+import type { Preferences } from "../preferences";
+import { Choice } from "./Choice";
 import {
   LANGUAGE_OPTIONS,
   languageChoice,
   type LanguageChoice,
   type LanguageController,
-} from "../../../maild-ui/src/settings/language";
+} from "./language";
 
 // 存消息函数而非文案：每次渲染按当前界面语言取值。
 const themes = [

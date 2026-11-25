@@ -9,7 +9,7 @@ import { applyEffectiveLocales, getUiLocale, type UiLocale } from "../src/index"
 
 // 正确用法：无参数、带参数、显式指定语言。
 const plain: string = m.mailbox_folder_inbox();
-const withParam: string = m.mailbox_account_folders_label({ account: "工作" });
+const withParam: string = m.studio_folder_expand({ folder: "工作" });
 const english: string = m.mailbox_folder_inbox({}, { locale: "en" });
 void [plain, withParam, english];
 
@@ -20,13 +20,13 @@ m.mailbox_folder_inbx();
 m.inbox();
 
 // @ts-expect-error 缺少全部参数
-m.mailbox_account_folders_label();
+m.studio_folder_expand();
 
 // @ts-expect-error 缺少必需参数
-m.mailbox_account_folders_label({});
+m.studio_folder_expand({});
 
 // @ts-expect-error 参数名拼错
-m.mailbox_account_folders_label({ acount: "工作" });
+m.studio_folder_expand({ foldr: "工作" });
 
 // @ts-expect-error 参数为 null
 m.extensions_lifecycle_unknown({ value: null });

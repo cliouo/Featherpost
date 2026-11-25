@@ -21,7 +21,7 @@
 [cordis](https://github.com/cordiverse/cordis) 时空可组合性方法论的 Rust 移植，一切能力——收信、存储、
 规则、通知、前端、第三方服务商——都是可插拔、可热替换的插件。
 
-> 项目早期工作代号为 `maild`：Rust crate 与源码目录（`crates/maild*`、`packages/maild-ui`）仍沿用这个内部
+> 项目早期工作代号为 `maild`：Rust crate 与源码目录（`crates/maild*`）仍沿用这个内部
 > 名字，ADR-0001–0046 也以它书写。所有面向用户与操作系统的名字都来自根目录的
 > [`brand.toml`](brand.toml)，见 [品牌切换指南](docs/BRANDING.md)。
 
@@ -179,8 +179,7 @@ crates/maild-app/       GUI 无关的连接 actor、视图状态与请求/通知
 crates/maild-launcher/  顶层原生启动器：默认配置、打开默认前端、原生修复与后台管理窗口
 crates/maild-ui/        默认 Tauri 前端壳（Studio，dev.featherpost.studio）
 crates/maild-menu/      macOS 菜单栏 companion
-packages/featherpost-studio/ 默认前端 webview（React + TypeScript + Vite）
-packages/maild-ui/      共享前端基础模块与测试（正并入 packages/featherpost-studio）
+packages/featherpost-studio/ 默认前端 webview（React + TypeScript + Vite，Vitest）
 plugins/nodeseek-email/ 仓库内第三方 transport provider 插件示例
 packaging/macos/        App bundle 构建、验证、Preview DMG、安装生命周期与签名/公证发布门禁
 docs/                   文档索引、架构决策（ADR）、协议、运维、测试证据与路线图

@@ -492,7 +492,7 @@ fn package_folder_title(locale: maild_l10n::Locale) -> String {
     }
 }
 
-// —— 日常收信与登录向导（T4 契约：`packages/maild-ui/src/bridge/tauri.ts`）——
+// —— 日常收信与登录向导（T4 契约：`packages/featherpost-studio/src/bridge/tauri.ts`）——
 
 #[tauri::command(rename_all = "snake_case")]
 pub(crate) async fn ui_sync_mailbox(

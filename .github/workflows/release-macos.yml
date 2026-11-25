@@ -68,7 +68,7 @@ jobs:
           packaging/macos/tests/test_bundle.sh
           packaging/macos/tests/test_release.sh
           packaging/macos/tests/test_lifecycle.sh
-      - name: Prepare pnpm and test Tauri UI webview packages
+      - name: Prepare pnpm and test Tauri UI webview package
         shell: bash
         run: |
           set -euo pipefail
@@ -76,9 +76,8 @@ jobs:
           node --version
           pnpm --version
           pnpm install --frozen-lockfile
-          pnpm --dir packages/maild-ui typecheck
-          pnpm --dir packages/maild-ui test
           pnpm --dir packages/featherpost-studio typecheck
+          pnpm --dir packages/featherpost-studio test
           pnpm --dir packages/featherpost-studio build
       - name: Build universal2 release candidate
         shell: bash

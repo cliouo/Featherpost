@@ -1,6 +1,6 @@
 import { m } from "@featherpost/i18n/messages";
-import { folderLabel, uiLocale, useUiLocale } from "../../maild-ui/src/i18n";
-import { Choice } from "../../maild-ui/src/settings/Choice";
+import { folderLabel, uiLocale, useUiLocale } from "./i18n";
+import { Choice } from "./settings/Choice";
 import {
   useEffect,
   useImperativeHandle,
@@ -10,11 +10,11 @@ import {
   type ReactNode,
   type Ref,
 } from "react";
-import { useStore } from "../../maild-ui/src/host/hooks";
-import type { MailboxController } from "../../maild-ui/src/mailbox/controller";
-import { queryOf } from "../../maild-ui/src/mailbox/controller";
-import { Icon } from "../../maild-ui/src/app/Icon";
-import { Dialog } from "../../maild-ui/src/mailbox/Dialog";
+import { useStore } from "./host/hooks";
+import type { MailboxController } from "./mailbox/controller";
+import { queryOf } from "./mailbox/controller";
+import { Icon } from "./app/Icon";
+import { Dialog } from "./mailbox/Dialog";
 import {
   OTHER_GROUP,
   createGrouping,
