@@ -71,6 +71,7 @@ fn main() {
             "ui_settings_discover_provider",
             "ui_discover_provider",
             "ui_open_external_url",
+            "ui_open_native_recovery",
         ]),
     ))
     .expect("tauri-build：tauri.conf.json 或 capabilities 无效");

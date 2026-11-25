@@ -259,4 +259,6 @@ export interface SettingsBridge {
   discoverProvider?(address: string): Promise<DiscoveredServers | null>;
   /** 可选：经宿主安全打开服务商官方帮助页（仅 https）。 */
   openExternalUrl?(url: string): Promise<void>;
+  /** 可选：不依赖后台直接打开原生修复与后台管理窗口（离线或独立前端兜底）。 */
+  openRecovery?(): Promise<void>;
 }

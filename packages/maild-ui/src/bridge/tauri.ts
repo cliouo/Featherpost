@@ -88,6 +88,7 @@ export const tauriBridge: MailBridge = {
     // 后端发现未注册或失败时返回 null，界面按 imap.<domain> / smtp.<domain> 预填。
     discoverProvider:async address=>{ try { return await call('ui_settings_discover_provider',{address}); } catch { return null; } },
     openExternalUrl:url=>openExternalUrl(url),
+    openRecovery:()=>call('ui_open_native_recovery'),
   },
   mailbox: {
     profiles:()=>call('ui_mailbox_profiles'), query:(query,offset)=>call('ui_mailbox_query',{query,offset}),

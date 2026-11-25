@@ -317,3 +317,105 @@ async fn repair_rpc_restores_studio_and_sets_default_when_bundled() {
     stop.send(()).unwrap();
     task.await.unwrap().unwrap();
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn resync_rpc_covers_studio_without_touching_default_or_newer_standalone() {
+    use maild_client::{Endpoint, RpcClient};
+    let root = tempfile::tempdir().unwrap();
+    let bundle = tempfile::tempdir().unwrap();
+    let (legacy, studio) = studio_source_fixture(bundle.path());
+    legacy.preinstall(root.path()).unwrap();
+    studio.preinstall(root.path()).unwrap();
+    // Persist an explicit default and tamper the installed Studio bytes (same version, stale build).
+    let default_state = format!(r#"{{"version":1,"default":"{BUNDLED_FRONTEND_ID}"}}"#);
+    std::fs::write(root.path().join(".default.json"), &default_state).unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(
+            root.path().join(".default.json"),
+            std::fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+    }
+    let studio_installed = root.path().join(STUDIO_FRONTEND_ID);
+    let studio_exe = studio_installed
+        .join("Featherpost Studio.app/Contents/MacOS")
+        .join(maild_client::STUDIO_BIN);
+    let mut stale_bytes = std::fs::read(&studio_exe).unwrap();
+    stale_bytes[100] ^= 0xff;
+    std::fs::write(&studio_exe, &stale_bytes).unwrap();
+    let studio_bundled = bundle
+        .path()
+        .join(maild_brand::APP_BUNDLE_NAME)
+        .join("Contents/Resources/frontends")
+        .join(STUDIO_FRONTEND_ID);
+    assert_eq!(
+        crate::frontend::inspect_installed_frontend(
+            STUDIO_FRONTEND_ID,
+            &studio_installed,
+            &studio_bundled
+        )
+        .unwrap(),
+        crate::frontend::InstalledFrontendMatch::Stale
+    );
+
+    let ctx = context(root.path(), legacy);
+    let socket = root.path().join("api.sock");
+    let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+    let (stop, stopped) = tokio::sync::oneshot::channel();
+    let task = tokio::spawn(serve_unix(listener, ctx.clone(), async {
+        let _ = stopped.await;
+    }));
+    let client = RpcClient::new(Endpoint::Unix { path: socket }).unwrap();
+
+    let resynced = client
+        .call("resyncBuiltinFrontend", json!({}))
+        .await
+        .unwrap();
+    assert_eq!(resynced["id"], BUNDLED_FRONTEND_ID);
+    assert_eq!(
+        resynced["ids"],
+        json!([BUNDLED_FRONTEND_ID, STUDIO_FRONTEND_ID])
+    );
+    assert_eq!(resynced["replaced"], true);
+    assert_eq!(resynced["replaced_ids"], json!([STUDIO_FRONTEND_ID]));
+    assert_eq!(
+        crate::frontend::inspect_installed_frontend(
+            STUDIO_FRONTEND_ID,
+            &studio_installed,
+            &studio_bundled
+        )
+        .unwrap(),
+        crate::frontend::InstalledFrontendMatch::MatchesBundled
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.path().join(".default.json")).unwrap(),
+        default_state,
+        "resync must not overwrite user default selection"
+    );
+
+    // Calling again is a no-op with replaced = false.
+    let second = client
+        .call("resyncBuiltinFrontend", json!({}))
+        .await
+        .unwrap();
+    assert_eq!(second["replaced"], false);
+    assert_eq!(second["replaced_ids"], json!([]));
+
+    // A newer standalone Studio version is left untouched by resync.
+    let manifest = studio_installed.join("frontend.toml");
+    let newer = std::fs::read_to_string(&manifest)
+        .unwrap()
+        .replace("0.3.3", "0.4.0");
+    std::fs::write(&manifest, &newer).unwrap();
+    let third = client
+        .call("resyncBuiltinFrontend", json!({}))
+        .await
+        .unwrap();
+    assert_eq!(third["replaced"], false);
+    assert_eq!(std::fs::read_to_string(&manifest).unwrap(), newer);
+
+    stop.send(()).unwrap();
+    task.await.unwrap().unwrap();
+}

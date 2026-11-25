@@ -28,7 +28,10 @@ Defaults use target/release binaries and dist/macos/$BRAND_APP_BUNDLE. When only
 The embedded $BRAND_UI_BIN is installed twice: as the single-host main window at
 Contents/MacOS/$BRAND_UI_BIN (exec'd in place by $BRAND_LAUNCHER_BIN) and as the
 recovery copy at Contents/Resources/frontends/$BRAND_UI_BUNDLE_ID with a rendered
-manifest and recovery.sha256. assets/AppIcon.icns becomes
+manifest and recovery.sha256. When --studio-bin is supplied, the embedded Studio
+binary is likewise installed both at Contents/MacOS/featherpost-studio (for
+single-Dock in-place hosting) and under Contents/Resources/frontends/dev.featherpost.studio.
+assets/AppIcon.icns becomes
 Contents/Resources/$BRAND_ICON_NAME.icns. Versions come from
 ${BRAND_ENV_PREFIX}_BUNDLE_SHORT_VERSION / ${BRAND_ENV_PREFIX}_BUNDLE_BUILD_VERSION (legacy
 MAILD_BUNDLE_* is still read as a fallback). The command never overwrites an
@@ -411,7 +414,11 @@ cp -X -- "$ui_bin" "$bundle/Contents/MacOS/$BRAND_UI_BIN"
 cp -X -- "$agent_bin" "$agent_bundle/Contents/MacOS/$BRAND_AGENT_BIN"
 cp -X -- "$menu_bin" "$menu_bundle/Contents/MacOS/$BRAND_MENU_BIN"
 cp -X -- "$ui_bin" "$ui_bundle/Contents/MacOS/$BRAND_UI_BIN"
-if [ -n "$studio_bin" ]; then copy_studio_payload "$bundle" "$studio_bin"; fi
+if [ -n "$studio_bin" ]; then
+    cp -X -- "$studio_bin" "$(studio_host_path "$bundle")"
+    chmod 0755 "$(studio_host_path "$bundle")"
+    copy_studio_payload "$bundle" "$studio_bin"
+fi
 chmod 0755 \
     "$bundle/Contents/MacOS/$BRAND_LAUNCHER_BIN" \
     "$bundle/Contents/MacOS/$BRAND_UI_BIN" \

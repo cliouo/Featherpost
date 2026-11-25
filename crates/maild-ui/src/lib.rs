@@ -23,6 +23,7 @@ pub mod system;
 pub mod settings;
 pub mod settings_packages;
 mod shell_locale;
+pub mod standalone_handoff;
 
 /// Packaging contract (ADR-0039): only the `embedded` form serves its assets from the binary.
 /// A default-form build would load `devUrl` from a local port, so `build-bundle.sh` and
@@ -64,11 +65,18 @@ pub struct AppState {
     pub exiting: AtomicBool,
     /// ADR-0048 决策 8（M2）：壳的语言列表，`ui_locale`、`maild://locale` 与原生菜单都读它。
     pub locale: shell_locale::ShellLocale,
+    /// 启动时是否传入了自定义连接参数（`--config/--url/--socket/--pipe`）；为真时禁用平台离线修复入口。
+    pub custom_connection: bool,
 }
 
 /// 起 Tauri 事件循环。必须在主线程调用；`tauri::async_runtime` 需已由调用方绑定到
 /// 持有连接 actor 的 runtime（见 `main.rs`）。
 pub fn run(bridge: Arc<Bridge>) -> Result<(), tauri::Error> {
+    run_with_options(bridge, false)
+}
+
+/// 同 [`run`]，额外记录启动时是否使用了自定义连接参数。
+pub fn run_with_options(bridge: Arc<Bridge>, custom_connection: bool) -> Result<(), tauri::Error> {
     let documents = Arc::new(DocumentStore::new());
     let remote_images = Arc::new(remote_image::RemoteImageFetcher::new());
     let base = ProtocolBase::for_platform();
@@ -95,6 +103,7 @@ pub fn run(bridge: Arc<Bridge>) -> Result<(), tauri::Error> {
             guard_ready: AtomicBool::new(false),
             exiting: AtomicBool::new(false),
             locale: shell_locale::ShellLocale::default(),
+            custom_connection,
         })
         // ADR-0033 决策 4：文档与 part 只经令牌可达。处理器在 tokio 上异步跑——part 要经认证连接
         // 向 daemon 取字节；Phase 3 远程图片经 `RemoteImageFetcher`（走 `maild-proxy`）抓取。
@@ -211,6 +220,7 @@ pub fn run(bridge: Arc<Bridge>) -> Result<(), tauri::Error> {
             commands::ui_settings_discover_provider,
             commands::ui_discover_provider,
             commands::ui_open_external_url,
+            commands::ui_open_native_recovery,
         ])
         .setup(move |app| {
             // ADR-0045：`LSUIElement` 包以 `Accessory` 起步；窗口可见期间是 `Regular`

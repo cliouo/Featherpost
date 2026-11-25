@@ -571,6 +571,30 @@ pub(crate) fn ui_open_external_url(url: String) -> Result<(), UiError> {
         .map_err(|error| UiError::failed("ui_open_external_url", error, "external_link_failed", "无法打开这个链接。"))
 }
 
+/// 不依赖 daemon 直接打开原生修复与后台管理窗口（离线或独立前端兜底）。
+#[tauri::command]
+pub(crate) fn ui_open_native_recovery(state: State<'_, AppState>) -> Result<(), UiError> {
+    if state.custom_connection || maild_client::NativeAppLayout::has_custom_connection() {
+        return Err(UiError::invalid(
+            "recovery_unavailable",
+            &format!(
+                "修复入口未能打开，请从完整 {} 打开修复与后台管理。",
+                maild_brand::APP_BUNDLE_NAME
+            ),
+        ));
+    }
+    crate::standalone_handoff::open_native_recovery_directly().map_err(|error| {
+        eprintln!("[maild-ui] 离线修复入口打开失败: {error}");
+        UiError::invalid(
+            "recovery_unavailable",
+            &format!(
+                "修复入口未能打开，请从完整 {} 打开修复与后台管理。",
+                maild_brand::APP_BUNDLE_NAME
+            ),
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::package_folder_title;

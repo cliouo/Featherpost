@@ -2,7 +2,7 @@ use super::*;
 
 struct RecordingLauncher(Mutex<Vec<String>>);
 impl FrontendLauncher for RecordingLauncher {
-    fn activate(&self, frontend: &FrontendRecord) -> Result<bool, &'static str> {
+    fn activate(&self, frontend: &FrontendRecord, _is_default: bool) -> Result<bool, &'static str> {
         self.0.lock().unwrap().push(frontend.info.id.clone());
         if is_builtin_frontend(&frontend.info.id) {
             Ok(true)

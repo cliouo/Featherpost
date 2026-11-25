@@ -345,8 +345,9 @@ async fn request_agent_stop(endpoint: Endpoint) -> bool {
 }
 
 /// Offline fallback: the Agent is gone but a main UI may still hold `.main-ui.lock` in the
-/// runtime directory (the parent of the local socket). Ask that app to terminate normally so it
-/// still gets to flush drafts.
+/// runtime directory (the parent of the local socket), or an older standalone Studio may hold
+/// `runtime_dir/studio/.main-ui.lock`. Ask each app to terminate normally so it still gets to
+/// flush drafts.
 fn terminate_leftover_main_ui(endpoint: Option<&Endpoint>) {
     let Some(Endpoint::Unix { path }) = endpoint else {
         return;
@@ -354,27 +355,38 @@ fn terminate_leftover_main_ui(endpoint: Option<&Endpoint>) {
     let Some(runtime_dir) = path.parent() else {
         return;
     };
-    let Some(Some(pid)) = maild_client::running_main_ui(runtime_dir) else {
-        return;
-    };
-    if pid <= 0 || u32::try_from(pid).is_ok_and(|pid| pid == std::process::id()) {
-        return;
+    for pid in leftover_main_ui_pids(runtime_dir, std::process::id()) {
+        objc2::rc::autoreleasepool(|_| {
+            // SAFETY: `+[NSRunningApplication runningApplicationWithProcessIdentifier:]` takes a
+            // `pid_t` (i32) and returns a nullable instance. Called via `msg_send!` because the typed
+            // binding is gated behind objc2-app-kit's `libc` feature.
+            let app: Option<Retained<NSRunningApplication>> = unsafe {
+                msg_send![
+                    NSRunningApplication::class(),
+                    runningApplicationWithProcessIdentifier: pid
+                ]
+            };
+            match app {
+                Some(app) if app.terminate() => {}
+                _ => eprintln!("[maild-menu] leftover main UI did not accept terminate"),
+            }
+        });
     }
-    objc2::rc::autoreleasepool(|_| {
-        // SAFETY: `+[NSRunningApplication runningApplicationWithProcessIdentifier:]` takes a
-        // `pid_t` (i32) and returns a nullable instance. Called via `msg_send!` because the typed
-        // binding is gated behind objc2-app-kit's `libc` feature.
-        let app: Option<Retained<NSRunningApplication>> = unsafe {
-            msg_send![
-                NSRunningApplication::class(),
-                runningApplicationWithProcessIdentifier: pid
-            ]
-        };
-        match app {
-            Some(app) if app.terminate() => {}
-            _ => eprintln!("[maild-menu] leftover main UI did not accept terminate"),
+}
+
+fn leftover_main_ui_pids(runtime_dir: &std::path::Path, self_pid: u32) -> Vec<i32> {
+    let mut pids = Vec::new();
+    for dir in [runtime_dir.to_path_buf(), runtime_dir.join("studio")] {
+        if let Some(Some(pid)) = maild_client::running_main_ui(&dir) {
+            if pid > 0
+                && !u32::try_from(pid).is_ok_and(|pid| pid == self_pid)
+                && !pids.contains(&pid)
+            {
+                pids.push(pid);
+            }
         }
-    });
+    }
+    pids
 }
 
 /// Build a current-thread runtime and park it on one named background thread for the life of
@@ -408,4 +420,60 @@ pub(super) fn run() {
     let application = NSApplication::sharedApplication(mtm);
     application.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
     application.run();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::leftover_main_ui_pids;
+
+    struct TempDir(std::path::PathBuf);
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn leftover_main_ui_pids_covers_unified_and_legacy_studio_locks_and_filters_self() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = TempDir(
+            std::env::temp_dir().join(format!("maild-menu-lock-test-{}-{unique}", std::process::id())),
+        );
+        let runtime = root.0.join("run");
+        let legacy_studio = runtime.join("studio");
+        std::fs::create_dir_all(&runtime).unwrap();
+        std::fs::set_permissions(&runtime, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::create_dir(&legacy_studio).unwrap();
+        std::fs::set_permissions(&legacy_studio, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        assert!(leftover_main_ui_pids(&runtime, 99999).is_empty());
+
+        let maild_client::MainUiClaim::Acquired(main_lock) =
+            maild_client::claim_main_ui(&runtime).unwrap()
+        else {
+            panic!("main lock should acquire");
+        };
+        let maild_client::MainUiClaim::Acquired(studio_lock) =
+            maild_client::claim_main_ui(&legacy_studio).unwrap()
+        else {
+            panic!("legacy studio lock should acquire");
+        };
+        // Write distinct fake PIDs while keeping the locks held.
+        std::fs::write(runtime.join(maild_client::MAIN_UI_LOCK), "1111").unwrap();
+        std::fs::write(legacy_studio.join(maild_client::MAIN_UI_LOCK), "2222").unwrap();
+        assert_eq!(leftover_main_ui_pids(&runtime, 99999), vec![1111, 2222]);
+        assert_eq!(leftover_main_ui_pids(&runtime, 1111), vec![2222]);
+
+        // Duplicate PID across both locks is returned once.
+        std::fs::write(legacy_studio.join(maild_client::MAIN_UI_LOCK), "1111").unwrap();
+        assert_eq!(leftover_main_ui_pids(&runtime, 99999), vec![1111]);
+
+        drop(main_lock);
+        drop(studio_lock);
+        assert!(leftover_main_ui_pids(&runtime, 99999).is_empty());
+    }
 }

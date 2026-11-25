@@ -28,25 +28,10 @@ pub fn claim(custom_connection: bool) -> InstanceClaim {
     let Ok(paths) = maild_paths::AppPaths::discover() else {
         return InstanceClaim::Owner(None);
     };
-    // Studio is a separately installed frontend; it must not focus the legacy window.
-    let runtime_dir = if cfg!(feature = "studio") {
-        let path = paths.runtime_dir.join("studio");
-        let mut builder = std::fs::DirBuilder::new();
-        builder.recursive(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::DirBuilderExt as _;
-            builder.mode(0o700);
-        }
-        if let Err(error) = builder.create(&path) {
-            eprintln!("maild-ui: cannot prepare Studio runtime: {error}");
-            return InstanceClaim::Owner(None);
-        }
-        path
-    } else {
-        paths.runtime_dir
-    };
-    match claim_at(&runtime_dir, focus) {
+    // Both legacy UI and Studio use the unified platform runtime `.main-ui.lock` (ADR-0044)
+    // so launcher minimized-window wake, `--repair` Accessory policy, menu-bar offline cleanup,
+    // and duplicate standalone-bundle launches all converge on the single main window.
+    match claim_at(&paths.runtime_dir, focus) {
         Ok(Some(lock)) => InstanceClaim::Owner(Some(lock)),
         Ok(None) => InstanceClaim::Focused,
         Err(message) => {

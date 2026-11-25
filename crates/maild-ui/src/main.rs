@@ -26,13 +26,7 @@ struct Cli {
 
 fn main() {
     let cli = Cli::parse();
-    // ADR-0044：同一平台 runtime 只有一个主邮件窗口。后到者把已有窗口带到前台后退出；
-    // 锁守卫活到 `main` 结束（进程退出即释放）。
     let custom = cli.config.is_some() || cli.url.is_some() || cli.socket.is_some() || cli.pipe.is_some();
-    let _instance = match maild_ui::instance_lock::claim(custom) {
-        maild_ui::instance_lock::InstanceClaim::Owner(lock) => lock,
-        maild_ui::instance_lock::InstanceClaim::Focused => std::process::exit(0),
-    };
     let options = DiscoveryOptions {
         config_path: cli.config,
         url: cli.url,
@@ -45,6 +39,17 @@ fn main() {
             eprintln!("maild-ui: {}", error.message);
             std::process::exit(2);
         }
+    };
+    // Angle 2A：用户直接打开独立前端包（如曾固定在 Dock 的 Featherpost Studio.app）且后台离线时，
+    // 在获取单实例锁之前移交顶层 Featherpost.app（由启动器拉起后台并单 Dock 承载），避免锁竞态与假离线空窗。
+    if maild_ui::standalone_handoff::maybe_handoff_to_host_app(custom, &endpoint) {
+        std::process::exit(0);
+    }
+    // ADR-0044：同一平台 runtime 只有一个主邮件窗口。后到者把已有窗口带到前台后退出；
+    // 锁守卫活到 `main` 结束（进程退出即释放）。
+    let _instance = match maild_ui::instance_lock::claim(custom) {
+        maild_ui::instance_lock::InstanceClaim::Owner(lock) => lock,
+        maild_ui::instance_lock::InstanceClaim::Focused => std::process::exit(0),
     };
 
     // 连接 actor 与 Tauri 共用一个 tokio runtime；runtime 活到进程结束。
@@ -60,7 +65,7 @@ fn main() {
             std::process::exit(2);
         }
     };
-    if let Err(error) = maild_ui::run(bridge) {
+    if let Err(error) = maild_ui::run_with_options(bridge, custom) {
         eprintln!("maild-ui: {error}");
         std::process::exit(1);
     }

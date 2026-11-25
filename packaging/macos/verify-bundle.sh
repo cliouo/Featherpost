@@ -469,6 +469,7 @@ expect_plist_string "$main_plist" CFBundlePackageType APPL
 expect_plist_string "$main_plist" CFBundleShortVersionString "$short_version"
 expect_plist_string "$main_plist" CFBundleVersion "$build_version"
 expect_plist_string "$main_plist" LSMinimumSystemVersion 13.0
+expect_frontend_localizations "$main_plist"
 
 expect_plist_string "$agent_plist" CFBundleDisplayName "$BRAND_PRODUCT_NAME Agent"
 expect_plist_string "$agent_plist" CFBundleExecutable "$BRAND_AGENT_BIN"

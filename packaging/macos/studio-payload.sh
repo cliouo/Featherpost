@@ -8,6 +8,10 @@ studio_payload_path() {
     printf '%s/Contents/Resources/frontends/%s' "$1" "$STUDIO_FRONTEND_ID"
 }
 
+studio_host_path() {
+    printf '%s/Contents/MacOS/%s' "$1" "$STUDIO_BIN"
+}
+
 studio_payload_version() {
     sed -nE 's/^version = "([^"]+)"$/\1/p' "$script_dir/studio/frontend.toml"
 }
@@ -28,8 +32,9 @@ copy_studio_payload() {
 
 # Called by verify-bundle.sh: keep the allowlist and integrity gates closed over this payload.
 verify_studio_payload() {
-    local payload app exe rel version
+    local payload app exe host_exe rel version
     payload=$(studio_payload_path "$1")
+    host_exe=$(studio_host_path "$1")
     [ -e "$payload" ] || [ -L "$payload" ] || return 0
     app="$payload/$STUDIO_APP"
     exe="$app/Contents/MacOS/$STUDIO_BIN"
@@ -40,13 +45,18 @@ verify_studio_payload() {
     require_directory "$app/Contents"
     require_directory "$app/Contents/MacOS"
     require_directory "$app/Contents/Resources"
+    require_file "$host_exe"
     require_file "$exe"
     require_file "$payload/frontend.toml"
     require_file "$payload/recovery.sha256"
     require_file "$app/Contents/Info.plist"
     require_file "$app/Contents/Resources/$BRAND_ICON_NAME.icns"
+    [ -x "$host_exe" ] || die 'host Studio executable bit is missing'
     [ -x "$exe" ] || die 'Studio executable bit is missing'
+    [ "$(binary_architectures "Studio (host)" "$host_exe")" = "$launcher_architectures" ] ||
+        die 'host Studio architectures differ'
     [ "$(binary_architectures Studio "$exe")" = "$launcher_architectures" ] || die 'Studio architectures differ'
+    require_compiled_identity "Studio (host)" "$host_exe" 'maild-ui-embedded:' "$STUDIO_FRONTEND_ID"
     require_compiled_identity Studio "$exe" 'maild-ui-embedded:' "$STUDIO_FRONTEND_ID"
     [ "$(cat "$payload/frontend.toml")" = "$(cat "$script_dir/studio/frontend.toml")" ] || die 'Studio manifest drifted'
     [ "$(wc -c <"$payload/recovery.sha256" | tr -d ' ')" = 65 ] || die 'Studio checksum must be 65 bytes'
@@ -59,6 +69,7 @@ verify_studio_payload() {
     expect_plist_string "$app/Contents/Info.plist" CFBundleVersion "$version"
     expect_frontend_localizations "$app/Contents/Info.plist"
     expected_layout=$(printf '%s\n%s\n' "$expected_layout" "$(cat <<EOF
+./Contents/MacOS/$STUDIO_BIN
 $rel
 $rel/frontend.toml
 $rel/recovery.sha256

@@ -341,18 +341,19 @@ impl FrontendCatalog {
 
 trait FrontendLauncher: Send + Sync + 'static {
     /// `true` means a platform activation request was issued; independent frontends return false.
-    fn activate(&self, frontend: &FrontendRecord) -> Result<bool, &'static str>;
+    /// `is_default` is `true` only when `frontend` is currently the catalog's default frontend.
+    fn activate(&self, frontend: &FrontendRecord, is_default: bool) -> Result<bool, &'static str>;
 }
 
 struct PlatformLauncher;
 
 impl FrontendLauncher for PlatformLauncher {
-    fn activate(&self, frontend: &FrontendRecord) -> Result<bool, &'static str> {
+    fn activate(&self, frontend: &FrontendRecord, is_default: bool) -> Result<bool, &'static str> {
         match &frontend.launch {
             LaunchTarget::Recovery => maild_client::open_native_recovery().map(|()| true),
             LaunchTarget::MacosApplication(path) => {
-                let host = single_dock_host(&frontend.info.id, || {
-                    platform_single_dock_host(path)
+                let host = single_dock_host(&frontend.info.id, is_default, || {
+                    platform_single_dock_host(&frontend.info.id, path)
                 });
                 activate_application(host.as_deref().unwrap_or(path)).map(|()| true)
             }
@@ -361,30 +362,59 @@ impl FrontendLauncher for PlatformLauncher {
     }
 }
 
-/// ADR-0044: the bundled frontend is hosted in place by the top-level app bundle (one Dock
-/// identity). Only the bundled frontend id is ever redirected; every other frontend activates its own app.
-fn single_dock_host(id: &str, host: impl FnOnce() -> Option<PathBuf>) -> Option<PathBuf> {
-    (id == crate::recovery::BUNDLED_FRONTEND_ID).then(host).flatten()
+fn is_single_dock_hostable(id: &str) -> bool {
+    id == crate::recovery::BUNDLED_FRONTEND_ID || id == crate::recovery::STUDIO_FRONTEND_ID
+}
+
+/// ADR-0044: a bundled frontend (`BUNDLED_FRONTEND_ID` or `STUDIO_FRONTEND_ID`) is hosted in place
+/// by the top-level app bundle (one Dock identity) ONLY when it is the current default frontend;
+/// explicit requests for a non-default frontend or any third-party frontend activate their own app.
+fn single_dock_host(
+    id: &str,
+    is_default: bool,
+    host: impl FnOnce() -> Option<PathBuf>,
+) -> Option<PathBuf> {
+    (is_default && is_single_dock_hostable(id))
+        .then(host)
+        .flatten()
 }
 
 /// `Some(<APP_BUNDLE_NAME>)` only for a real user session Agent inside a complete app bundle that
-/// carries `Contents/MacOS/<UI_BIN>`, with no connection overrides, and whose installed
-/// `<UI_BUNDLE_NAME>` still passes the basic application checks. Otherwise the installed app is
-/// activated exactly as before (and its own failure routes to native recovery).
+/// carries the matching in-place UI binary (`Contents/MacOS/<UI_BIN>` or
+/// `Contents/MacOS/featherpost-studio`), with no connection overrides, and whose installed app
+/// still passes basic checks. For Studio, the installed package version must also match the
+/// bundled payload (exact match or same-version stale build that the launcher will resync); a
+/// different standalone Studio version activates its own installed `.app` directly so the launcher
+/// and Agent never loop.
 #[cfg(target_os = "macos")]
-fn platform_single_dock_host(installed: &Path) -> Option<PathBuf> {
+fn platform_single_dock_host(id: &str, installed: &Path) -> Option<PathBuf> {
     use maild_client::NativeAppLayout;
     if NativeAppLayout::has_custom_connection() || !maild_client::system_home() {
         return None;
     }
     let layout = NativeAppLayout::discover().ok()??;
-    layout.ui_executable().ok()?;
-    macos::validate_installed(installed).ok()?;
+    if id == crate::recovery::STUDIO_FRONTEND_ID {
+        layout.studio_ui_executable().ok()?;
+        macos::validate_installed(installed).ok()?;
+        let installed_package = installed.parent()?;
+        let payload = layout.studio_frontend_payload();
+        match inspect_installed_frontend(id, installed_package, &payload).ok()? {
+            InstalledFrontendMatch::MatchesBundled | InstalledFrontendMatch::Stale => {}
+            InstalledFrontendMatch::DifferentVersion | InstalledFrontendMatch::Unreferenced => {
+                return None;
+            }
+        }
+    } else if id == crate::recovery::BUNDLED_FRONTEND_ID {
+        layout.ui_executable().ok()?;
+        macos::validate_installed(installed).ok()?;
+    } else {
+        return None;
+    }
     Some(layout.app_bundle().to_path_buf())
 }
 
 #[cfg(not(target_os = "macos"))]
-fn platform_single_dock_host(_installed: &Path) -> Option<PathBuf> {
+fn platform_single_dock_host(_id: &str, _installed: &Path) -> Option<PathBuf> {
     None
 }
 
@@ -568,13 +598,14 @@ impl FrontendBroker {
 
         let routed_intent = if selected.info.id == BUILTIN_RECOVERY_FRONTEND { OpenIntent::Background } else { intent };
         let token = self.enqueue(&selected.info.id, routed_intent);
-        match self.launcher.activate(&selected) {
+        let is_default = selected.info.id == default;
+        match self.launcher.activate(&selected, is_default) {
             Ok(requested) => Ok(requested),
             Err(_) if !explicit && selected.info.id != BUILTIN_RECOVERY_FRONTEND => {
                 self.remove_pending(token);
                 let builtin = FrontendRecord::recovery();
                 self.enqueue(BUILTIN_RECOVERY_FRONTEND, OpenIntent::Background);
-                Ok(self.launcher.activate(&builtin).is_ok())
+                Ok(self.launcher.activate(&builtin, false).is_ok())
             }
             Err(_) => Ok(false),
         }
@@ -889,6 +920,39 @@ fn executable_checksum(exe: &Path) -> Result<String, String> {
     Ok(format!("{:x}\n", digest.finalize()))
 }
 
+/// Comparison of an installed managed bundled frontend against the app bundle's packaged payload.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InstalledFrontendMatch {
+    /// Installed package is valid and matches the bundled payload's version and executable checksum.
+    MatchesBundled,
+    /// Installed package is valid and launchable, but its version differs from the bundled payload
+    /// (e.g. a user-installed standalone Studio version or a rolled-back copy).
+    DifferentVersion,
+    /// Installed package is valid and has the same version as the bundled payload, but its
+    /// executable bytes differ from `recovery.sha256` (e.g. app rebuilt/re-signed over an old one).
+    Stale,
+    /// Installed package is valid and launchable, but the bundled reference payload or checksum
+    /// could not be read.
+    Unreferenced,
+}
+
+/// Inspect an installed bundled frontend (`BUNDLED_FRONTEND_ID` or `STUDIO_FRONTEND_ID`) against
+/// its packaged recovery payload.
+pub fn inspect_installed_frontend(
+    id: &str,
+    installed: &Path,
+    bundled: &Path,
+) -> Result<InstalledFrontendMatch, String> {
+    let identity = if id == crate::recovery::BUNDLED_FRONTEND_ID {
+        crate::recovery::LEGACY_PAYLOAD
+    } else if id == crate::recovery::STUDIO_FRONTEND_ID {
+        crate::recovery::STUDIO_PAYLOAD
+    } else {
+        return Err("不支持的内置前端标识".into());
+    };
+    inspect_installed_payload(installed, bundled, identity)
+}
+
 /// ADR-0044: before the app bundle hosts its own `Contents/MacOS/<UI_BIN>` in place, the managed
 /// installed bundled frontend must still be a loadable package (the daemon's catalog already
 /// requires it) whose executable is intact. When the installed copy claims the SAME version as
@@ -897,9 +961,11 @@ fn executable_checksum(exe: &Path) -> Result<String, String> {
 /// Other versions (pending upgrade, rollback) are not byte-compared. An unreadable bundled
 /// payload is not the installed package's fault and never blocks the window.
 pub fn check_installed_bundled_frontend(installed: &Path, bundled: &Path) -> Result<(), String> {
-    match inspect_installed_bundled_frontend(installed, bundled)? {
-        InstalledBundled::Intact => Ok(()),
-        InstalledBundled::Stale => Err("已装内置前端与同版本打包校验和不一致".into()),
+    match inspect_installed_frontend(crate::recovery::BUNDLED_FRONTEND_ID, installed, bundled)? {
+        InstalledFrontendMatch::MatchesBundled
+        | InstalledFrontendMatch::DifferentVersion
+        | InstalledFrontendMatch::Unreferenced => Ok(()),
+        InstalledFrontendMatch::Stale => Err("已装内置前端与同版本打包校验和不一致".into()),
     }
 }
 
@@ -909,28 +975,27 @@ pub fn check_installed_bundled_frontend(installed: &Path, bundled: &Path) -> Res
 /// resyncing it from the bundled payload is an upgrade, not a repair of damage.
 pub fn installed_bundled_frontend_is_stale(installed: &Path, bundled: &Path) -> bool {
     matches!(
-        inspect_installed_bundled_frontend(installed, bundled),
-        Ok(InstalledBundled::Stale)
+        inspect_installed_frontend(crate::recovery::BUNDLED_FRONTEND_ID, installed, bundled),
+        Ok(InstalledFrontendMatch::Stale)
     )
 }
 
-enum InstalledBundled {
-    Intact,
-    Stale,
-}
-
-fn inspect_installed_bundled_frontend(
+pub(crate) fn installed_payload_is_stale(
     installed: &Path,
     bundled: &Path,
-) -> Result<InstalledBundled, String> {
-    inspect_installed_payload(installed, bundled, crate::recovery::LEGACY_PAYLOAD)
+    identity: crate::recovery::BundledIdentity,
+) -> bool {
+    matches!(
+        inspect_installed_payload(installed, bundled, identity),
+        Ok(InstalledFrontendMatch::Stale)
+    )
 }
 
-pub(crate) fn installed_payload_is_stale(installed: &Path, bundled: &Path, identity: crate::recovery::BundledIdentity) -> bool {
-    matches!(inspect_installed_payload(installed, bundled, identity), Ok(InstalledBundled::Stale))
-}
-
-fn inspect_installed_payload(installed: &Path, bundled: &Path, identity: crate::recovery::BundledIdentity) -> Result<InstalledBundled, String> {
+fn inspect_installed_payload(
+    installed: &Path,
+    bundled: &Path,
+    identity: crate::recovery::BundledIdentity,
+) -> Result<InstalledFrontendMatch, String> {
     let record = load_package_at(installed, Some(identity.id))?;
     let LaunchTarget::MacosApplication(app) = &record.launch else {
         return Err("installed bundled frontend launch shape is invalid".into());
@@ -949,18 +1014,18 @@ fn inspect_installed_payload(installed: &Path, bundled: &Path, identity: crate::
         }
     }
     let Ok(reference) = load_package_at(bundled, Some(identity.id)) else {
-        return Ok(InstalledBundled::Intact);
+        return Ok(InstalledFrontendMatch::Unreferenced);
     };
     if reference.info.version != record.info.version {
-        return Ok(InstalledBundled::Intact);
+        return Ok(InstalledFrontendMatch::DifferentVersion);
     }
     let Ok(expected) = read_recovery_checksum(bundled) else {
-        return Ok(InstalledBundled::Intact);
+        return Ok(InstalledFrontendMatch::Unreferenced);
     };
     if executable_checksum(&exe)?.as_bytes() != expected {
-        return Ok(InstalledBundled::Stale);
+        return Ok(InstalledFrontendMatch::Stale);
     }
-    Ok(InstalledBundled::Intact)
+    Ok(InstalledFrontendMatch::MatchesBundled)
 }
 
 impl FrontendBroker {
@@ -1431,7 +1496,7 @@ mod tests {
     struct MockLauncher(AtomicUsize);
 
     impl FrontendLauncher for MockLauncher {
-        fn activate(&self, _frontend: &FrontendRecord) -> Result<bool, &'static str> {
+        fn activate(&self, _frontend: &FrontendRecord, _is_default: bool) -> Result<bool, &'static str> {
             self.0.fetch_add(1, Ordering::Relaxed);
             Ok(true)
         }
@@ -1862,18 +1927,140 @@ mod tests {
     }
 
     #[test]
-    fn only_the_bundled_frontend_is_hosted_by_the_top_level_app() {
+    fn only_the_default_bundled_frontend_is_hosted_by_the_top_level_app() {
         let app = Path::new("/Applications").join(maild_brand::APP_BUNDLE_NAME);
-        assert_eq!(
-            single_dock_host(crate::recovery::BUNDLED_FRONTEND_ID, || Some(app.clone())),
-            Some(app.clone())
-        );
-        // Ineligible session/layout keeps the installed app.
-        assert_eq!(single_dock_host(crate::recovery::BUNDLED_FRONTEND_ID, || None), None);
+        for id in [
+            crate::recovery::BUNDLED_FRONTEND_ID,
+            crate::recovery::STUDIO_FRONTEND_ID,
+        ] {
+            assert_eq!(single_dock_host(id, true, || Some(app.clone())), Some(app.clone()));
+            // Ineligible session/layout keeps the installed app.
+            assert_eq!(single_dock_host(id, true, || None), None);
+            // Non-default explicit target never redirects to Featherpost.app (which opens the default).
+            assert_eq!(
+                single_dock_host(id, false, || panic!("non-default target is not redirected")),
+                None
+            );
+        }
         // A third-party frontend never even evaluates the in-place host.
         assert_eq!(
-            single_dock_host("org.example.reader", || panic!("third party is not hosted")),
+            single_dock_host("org.example.reader", true, || panic!(
+                "third party is not hosted"
+            )),
             None
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn broker_marks_default_vs_explicit_non_default_when_activating() {
+        struct CaptureLauncher(Mutex<Vec<(String, bool)>>);
+        impl FrontendLauncher for CaptureLauncher {
+            fn activate(
+                &self,
+                frontend: &FrontendRecord,
+                is_default: bool,
+            ) -> Result<bool, &'static str> {
+                self.0
+                    .lock()
+                    .unwrap()
+                    .push((frontend.info.id.clone(), is_default));
+                Ok(true)
+            }
+        }
+        let root = install_root();
+        write_independent(root.path(), crate::recovery::STUDIO_FRONTEND_ID, "\"inbox\"");
+        write_independent(root.path(), crate::recovery::BUNDLED_FRONTEND_ID, "\"inbox\"");
+        let launcher = Arc::new(CaptureLauncher(Mutex::new(Vec::new())));
+        let broker = FrontendBroker::from_catalog(
+            &FrontendConfig {
+                default: crate::recovery::STUDIO_FRONTEND_ID.into(),
+            },
+            FrontendCatalog::load(Some(root.path())).unwrap(),
+            launcher.clone(),
+        );
+        broker.open(OpenIntent::Inbox { account: None }).unwrap();
+        broker
+            .open_for(
+                Some(crate::recovery::STUDIO_FRONTEND_ID),
+                OpenIntent::Inbox { account: None },
+            )
+            .unwrap();
+        broker
+            .open_for(
+                Some(crate::recovery::BUNDLED_FRONTEND_ID),
+                OpenIntent::Inbox { account: None },
+            )
+            .unwrap();
+        assert_eq!(
+            *launcher.0.lock().unwrap(),
+            vec![
+                (crate::recovery::STUDIO_FRONTEND_ID.into(), true),
+                (crate::recovery::STUDIO_FRONTEND_ID.into(), true),
+                (crate::recovery::BUNDLED_FRONTEND_ID.into(), false),
+            ]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn studio_installed_frontend_inspection_distinguishes_match_stale_different_version_and_damage() {
+        let bundle = tempfile::tempdir().unwrap();
+        let (_legacy, studio) = crate::recovery::tests::studio_source_fixture(bundle.path());
+        let bundled = bundle
+            .path()
+            .join(maild_brand::APP_BUNDLE_NAME)
+            .join("Contents/Resources/frontends")
+            .join(crate::recovery::STUDIO_FRONTEND_ID);
+        let root = tempfile::tempdir().unwrap();
+        studio.preinstall(root.path()).unwrap();
+        let installed = root.path().join(crate::recovery::STUDIO_FRONTEND_ID);
+        assert_eq!(
+            inspect_installed_frontend(crate::recovery::STUDIO_FRONTEND_ID, &installed, &bundled)
+                .unwrap(),
+            InstalledFrontendMatch::MatchesBundled
+        );
+
+        // Same version, different bytes -> Stale.
+        let exe = installed
+            .join(crate::recovery::STUDIO_PAYLOAD.app)
+            .join("Contents/MacOS")
+            .join(crate::recovery::STUDIO_PAYLOAD.binary);
+        let mut bytes = fs::read(&exe).unwrap();
+        bytes[100] ^= 0xff;
+        fs::write(&exe, &bytes).unwrap();
+        assert_eq!(
+            inspect_installed_frontend(crate::recovery::STUDIO_FRONTEND_ID, &installed, &bundled)
+                .unwrap(),
+            InstalledFrontendMatch::Stale
+        );
+
+        // Different standalone Studio version -> DifferentVersion (launcher falls back to bundle).
+        let manifest = installed.join(MANIFEST_FILE);
+        let text = fs::read_to_string(&manifest).unwrap();
+        fs::write(&manifest, text.replace("version = \"0.3.3\"", "version = \"0.4.0\"")).unwrap();
+        assert_eq!(
+            inspect_installed_frontend(crate::recovery::STUDIO_FRONTEND_ID, &installed, &bundled)
+                .unwrap(),
+            InstalledFrontendMatch::DifferentVersion
+        );
+
+        // Missing reference payload -> Unreferenced.
+        assert_eq!(
+            inspect_installed_frontend(
+                crate::recovery::STUDIO_FRONTEND_ID,
+                &installed,
+                &bundle.path().join("missing-studio")
+            )
+            .unwrap(),
+            InstalledFrontendMatch::Unreferenced
+        );
+
+        // Missing executable -> Err (damaged).
+        fs::remove_file(&exe).unwrap();
+        assert!(
+            inspect_installed_frontend(crate::recovery::STUDIO_FRONTEND_ID, &installed, &bundled)
+                .is_err()
         );
     }
 

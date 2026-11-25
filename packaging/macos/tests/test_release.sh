@@ -368,6 +368,42 @@ fi
 grep -F "$BRAND_PRODUCT_NAME host UI code signature is invalid" "$work/stripped-host.stderr" >/dev/null ||
     fail 'stripped host UI signature failed at the wrong gate'
 
+# Studio single-host release gate: a Studio bundle must sign Contents/MacOS/featherpost-studio
+# explicitly with hardened runtime + dev.featherpost.studio identifier; skipping it is caught.
+universal_fixture "$work/bin/featherpost-studio" "maild-ui-embedded:dev.featherpost.studio"
+studio_formal="$work/output/formal-studio/$app_bundle"
+env "${versions[@]}" \
+    "$fixture_repo/packaging/macos/build-bundle.sh" \
+        --launcher-bin "$formal_bundle/Contents/MacOS/$launcher_name" \
+        --agent-bin "$formal_agent/Contents/MacOS/$agent_name" \
+        --menu-bin "$formal_menu/Contents/MacOS/$menu_name" \
+        --ui-bin "$work/bin/$ui_name" \
+        --studio-bin "$work/bin/featherpost-studio" \
+        --output "$studio_formal" >/dev/null
+studio_payload_rel="Contents/Resources/frontends/dev.featherpost.studio"
+/usr/bin/codesign --force --sign - --options runtime --timestamp=none \
+    "$studio_formal/$ui_rel" >/dev/null
+/usr/bin/codesign --force --sign - --options runtime --timestamp=none \
+    "$studio_formal/$studio_payload_rel/Featherpost Studio.app" >/dev/null
+"$fixture_repo/packaging/macos/seal-recovery-payload.sh" "$studio_formal"
+/usr/bin/codesign --force --sign - --options runtime --timestamp=none \
+    "$studio_formal/$agent_rel" >/dev/null
+/usr/bin/codesign --force --sign - --options runtime --timestamp=none \
+    "$studio_formal/$menu_rel" >/dev/null
+/usr/bin/codesign --force --sign - --identifier "$ui_id" --options runtime \
+    --timestamp=none "$studio_formal/$host_ui_rel" >/dev/null
+# Leave host Studio with a plain linker-style ad hoc signature (no identifier / no runtime).
+/usr/bin/codesign --force --sign - "$studio_formal/Contents/MacOS/featherpost-studio" >/dev/null
+/usr/bin/codesign --force --sign - --options runtime --timestamp=none \
+    "$studio_formal" >/dev/null
+if "$fixture_repo/packaging/macos/verify-release.sh" \
+    --app "$studio_formal" --version 0.1.0 \
+    >/dev/null 2>"$work/unsigned-host-studio.stderr"; then
+    fail 'release verifier accepted a host Studio without its explicit signature'
+fi
+grep -F "$BRAND_PRODUCT_NAME host Studio" "$work/unsigned-host-studio.stderr" >/dev/null ||
+    fail 'host Studio missing explicit signature failed at the wrong gate'
+
 printf '[package]\nname = "maild-launcher"\nversion = "0.1.1"\nedition = "2021"\n' \
     >"$fixture_repo/crates/maild-launcher/Cargo.toml"
 git -C "$fixture_repo" add crates/maild-launcher/Cargo.toml

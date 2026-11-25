@@ -279,3 +279,44 @@ it("applies theme and density cards through the existing persisted preferences",
   expect(host.state.getSnapshot().preferences.density).toBe("comfortable");
   expect(host.state.getSnapshot().preferences.theme).toBe("dark");
 });
+
+it("enables Studio offline recovery via daemon-independent openRecovery and falls back online", async () => {
+  const bridge = new FakeBridge();
+  const host = new Host(bridge);
+  const bundle = settingsModule(host);
+  const Connection = bundle.settings!.find(
+    (section) => section.id === "maild.settings.connection",
+  )!.render as (props: { active: boolean }) => ReactNode;
+
+  // Without openRecovery, offline button remains disabled.
+  const disabledHtml = renderToStaticMarkup(createElement(Connection, { active: true }));
+  expect(disabledHtml).toMatch(/<button[^>]*disabled=""[^>]*>打开修复窗口<\/button>/);
+
+  // With openRecovery, offline button is enabled and invokes openRecovery directly.
+  const openRecovery = vi.fn(async () => {});
+  bridge.settings.openRecovery = openRecovery;
+  const offlineTree = capture(() => Connection({ active: true }));
+  const offlineBtn = offlineTree.elements.find(
+    (el) => el.type === "button" && el.props.children === "打开修复窗口",
+  )!;
+  expect(offlineBtn).toBeDefined();
+  expect(offlineBtn.props.disabled).toBe(false);
+  (offlineBtn.props.onClick as () => void)();
+  await Promise.resolve();
+  expect(openRecovery).toHaveBeenCalledTimes(1);
+  expect(bridge.settings.packageWrites).toEqual([]);
+
+  // Online: prefers daemon packageAction and falls back to openRecovery if daemon rejects.
+  host.state.patch({ snapshot: online });
+  bridge.settings.packageAction = async () => {
+    throw new Error("daemon offline mid-flight");
+  };
+  const onlineTree = capture(() => Connection({ active: true }));
+  const onlineBtn = onlineTree.elements.find(
+    (el) => el.type === "button" && el.props.children === "打开修复窗口",
+  )!;
+  (onlineBtn.props.onClick as () => void)();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(openRecovery).toHaveBeenCalledTimes(2);
+  bundle.dispose?.();
+});

@@ -37,6 +37,7 @@ maild-l10n = { path = "../maild-l10n" }
 # ADR-0044：单实例锁位于平台 runtime 目录。
 maild-paths = { path = "../maild-paths" }
 maild-proxy = { path = "../maild-proxy", features = ["reqwest"] }
+plist = "1"
 regex = "1"
 reqwest = { version = "0.13.4", default-features = false, features = ["rustls", "socks"] }
 # ADR-0033 决策 8：系统保存面板（与 maild-launcher 同一套 rfd feature 组合）。
@@ -53,8 +54,10 @@ libc = "0.2"
 # ADR-0044：第二个实例把已有主窗口带到前台（与 tauri 同一 objc2 版本，不引入新 crate）。
 # ADR-0045：窗口回到前台 / 关闭撤下时激活与交还前台（NSApplication，主线程标记来自 objc2）。
 [target.'cfg(target_os = "macos")'.dependencies]
+block2 = { version = "0.6.2", default-features = false, features = ["alloc"] }
 objc2 = { version = "0.6.4", default-features = false, features = ["std"] }
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "libc", "NSApplication", "NSResponder", "NSRunningApplication"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "libc", "block2", "NSApplication", "NSResponder", "NSRunningApplication", "NSWorkspace"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSError", "NSString", "NSURL"] }
 # ADR-0048 决策 8：把显式语言镜像到本 app 偏好域的 `AppleLanguages`（CFPreferences）；
 # 跟随系统时读本进程的首选语言（CFLocale，M2）。
 objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFArray", "CFLocale", "CFPreferences", "CFString"] }

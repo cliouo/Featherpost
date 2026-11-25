@@ -154,13 +154,30 @@ export function settingsModule(
     const { snapshot, frontendInfo, frontendInfoError } = useStore(host.state);
     const [opening, setOpening] = useState(false);
     const [recoveryError, setRecoveryError] = useState<string | null>(null);
+    const canOpenRecovery =
+      snapshot.phase === "online" || Boolean(host.bridge.settings.openRecovery);
     async function openRecovery() {
-      if (opening || snapshot.phase !== "online") return;
+      if (opening || !canOpenRecovery) return;
       setOpening(true);
       setRecoveryError(null);
-      try { await host.bridge.settings.packageAction({ action: "recovery" }); }
-      catch { setRecoveryError(m.settings_connection_recovery_failed({ app: BRAND.appBundleName })); }
-      finally { setOpening(false); }
+      try {
+        if (snapshot.phase === "online") {
+          try {
+            await host.bridge.settings.packageAction({ action: "recovery" });
+          } catch (error) {
+            if (!host.bridge.settings.openRecovery) throw error;
+            await host.bridge.settings.openRecovery();
+          }
+        } else if (host.bridge.settings.openRecovery) {
+          await host.bridge.settings.openRecovery();
+        }
+      } catch {
+        setRecoveryError(
+          m.settings_connection_recovery_failed({ app: BRAND.appBundleName }),
+        );
+      } finally {
+        setOpening(false);
+      }
     }
     return (
       <>
@@ -203,7 +220,7 @@ export function settingsModule(
         <Row title={m.settings_connection_recovery()} description={snapshot.phase === "online"
           ? m.settings_connection_recovery_hint()
           : m.settings_connection_recovery_offline({ app: BRAND.appBundleName })}>
-          <button type="button" className="secondary" disabled={opening || snapshot.phase !== "online"} onClick={() => void openRecovery()}>
+          <button type="button" className="secondary" disabled={opening || !canOpenRecovery} onClick={() => void openRecovery()}>
             {opening
               ? m.settings_connection_recovery_opening()
               : m.settings_connection_recovery_open()}
