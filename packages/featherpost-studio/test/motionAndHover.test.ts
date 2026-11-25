@@ -132,16 +132,6 @@ describe("shared hover states (#27)", () => {
               const { line } = file.getLineAndCharacterOfPosition(node.getStart(file));
               missing.push(`${filePath}:${line + 1} (${tag} className=${cls})`);
             }
-          } else if (tag === "PopoverMenu") {
-            const attrs = node.attributes.properties.filter(ts.isJsxAttribute);
-            const attrText = (name: string) =>
-              attrs.find((a) => a.name.getText(file) === name)?.initializer?.getText(file) ?? "";
-            const cls = attrText("triggerClassName");
-            const hasTitle = attrs.some((a) => a.name.getText(file) === "triggerTitle");
-            if (iconClasses.some((c) => cls.includes(c)) && !hasTitle) {
-              const { line } = file.getLineAndCharacterOfPosition(node.getStart(file));
-              missing.push(`${filePath}:${line + 1} (${tag} triggerClassName=${cls})`);
-            }
           }
         }
         ts.forEachChild(node, visit);

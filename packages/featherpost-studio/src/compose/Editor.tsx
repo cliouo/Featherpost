@@ -1,5 +1,6 @@
 import { m } from "@featherpost/i18n/messages";
 import { useEffect, useRef, useState } from "react";
+import { AlertDialog } from "../app/Dialog";
 import { Choice } from "../settings/Choice";
 import { Icon } from "../app/Icon";
 import { useStore } from "../host/hooks";
@@ -474,11 +475,8 @@ const CONFIRM_LABELS = {
 } as const;
 function Confirm({ controller }: { controller: ComposeController }) {
   useUiLocale();
-  const { confirm } = useStore(controller.store),
-    ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    ref.current?.querySelector<HTMLButtonElement>("button")?.focus();
-  }, []);
+  const { confirm, busy } = useStore(controller.store);
+  const cancelRef = useRef<HTMLButtonElement>(null);
   const labels = CONFIRM_LABELS;
   if (!confirm) return null;
   const action = () => {
@@ -489,65 +487,48 @@ function Confirm({ controller }: { controller: ComposeController }) {
     else if (selected === "reload") void controller.reload();
     else void controller.send(true);
   };
+  const body =
+    confirm === "resolve"
+      ? m.compose_confirm_resolve_body()
+      : confirm === "reload"
+        ? m.compose_confirm_reload_body()
+        : confirm === "discard"
+          ? m.compose_confirm_discard_body()
+          : m.compose_confirm_send_body();
   return (
-    <div className="sheet-backdrop">
-      <div
-        ref={ref}
-        className="sheet"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="compose-confirm-title"
-        onKeyDown={(e) => {
-          e.stopPropagation();
-          if (e.key === "Escape") {
-            e.preventDefault();
-            controller.confirm(null);
+    <AlertDialog
+      variant="sheet"
+      title={labels[confirm][0]()}
+      description={body}
+      descriptionClassName="sheet-lead"
+      busy={busy}
+      showCloseButton={false}
+      initialFocusRef={cancelRef}
+      onClose={() => controller.confirm(null)}
+    >
+      <div className="sheet-actions">
+        <button
+          ref={cancelRef}
+          type="button"
+          className="text-button"
+          disabled={busy}
+          onClick={() => controller.confirm(null)}
+        >
+          {m.compose_confirm_back()}
+        </button>
+        <button
+          type="button"
+          className={
+            confirm === "discard"
+              ? "primary-button danger-button"
+              : "primary-button"
           }
-          if (e.key === "Tab") {
-            const all = Array.from(
-              ref.current!.querySelectorAll<HTMLButtonElement>("button"),
-            );
-            if (e.shiftKey && document.activeElement === all[0]) {
-              e.preventDefault();
-              all.at(-1)?.focus();
-            } else if (!e.shiftKey && document.activeElement === all.at(-1)) {
-              e.preventDefault();
-              all[0]?.focus();
-            }
-          }
-        }}
-      >
-        <h2 id="compose-confirm-title">{labels[confirm][0]()}</h2>
-        <p className="sheet-lead">
-          {confirm === "resolve"
-            ? m.compose_confirm_resolve_body()
-            : confirm === "reload"
-              ? m.compose_confirm_reload_body()
-              : confirm === "discard"
-                ? m.compose_confirm_discard_body()
-                : m.compose_confirm_send_body()}
-        </p>
-        <div className="sheet-actions">
-          <button
-            type="button"
-            className="text-button"
-            onClick={() => controller.confirm(null)}
-          >
-            {m.compose_confirm_back()}
-          </button>
-          <button
-            type="button"
-            className={
-              confirm === "discard"
-                ? "primary-button danger-button"
-                : "primary-button"
-            }
-            onClick={action}
-          >
-            {labels[confirm][1]()}
-          </button>
-        </div>
+          disabled={busy}
+          onClick={action}
+        >
+          {labels[confirm][1]()}
+        </button>
       </div>
-    </div>
+    </AlertDialog>
   );
 }

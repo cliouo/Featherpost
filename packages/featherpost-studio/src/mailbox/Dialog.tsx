@@ -1,9 +1,7 @@
-import { m } from "@featherpost/i18n/messages";
-import { useEffect, useRef, type ReactNode } from "react";
 import type React from "react";
+import type { ReactNode, RefObject } from "react";
 
-import { useUiLocale } from "../i18n";
-import { closeAllPopovers } from "../app/popover";
+import { StudioDialog, type StudioDialogRole } from "../app/Dialog";
 
 export function Dialog({
   title,
@@ -11,54 +9,33 @@ export function Dialog({
   onClose,
   busy = false,
   onKey,
+  role = "dialog",
+  dismissOnOutsideClick,
+  initialFocusRef,
 }: {
   title: string;
-  children: ReactNode;
+  children?: ReactNode;
   onClose: () => void;
   busy?: boolean;
   /** 对话框内的按键（如「?」再次按下关闭速查）；在阻止冒泡之前调用。 */
-  onKey?: (e: React.KeyboardEvent<HTMLDialogElement>) => void;
+  onKey?: (e: React.KeyboardEvent<HTMLElement>) => void;
+  role?: StudioDialogRole;
+  dismissOnOutsideClick?: boolean;
+  initialFocusRef?: RefObject<HTMLElement | null>;
 }) {
-  useUiLocale();
-  const ref = useRef<HTMLDialogElement>(null),
-    close = useRef(onClose);
-  close.current = onClose;
-  useEffect(() => {
-    closeAllPopovers();
-    const previous = document.activeElement;
-    ref.current?.showModal();
-    return () => {
-      if (previous instanceof HTMLElement && previous.isConnected)
-        previous.focus();
-    };
-  }, []);
   return (
-    <dialog
-      ref={ref}
-      className="mail-dialog"
-      aria-label={title}
-      onCancel={(e) => {
-        e.preventDefault();
-        if (!busy) close.current();
-      }}
-      onKeyDown={(e) => {
-        onKey?.(e);
-        e.stopPropagation();
-      }}
+    <StudioDialog
+      title={title}
+      onClose={onClose}
+      busy={busy}
+      onKeyDown={onKey}
+      role={role}
+      variant="dialog"
+      showCloseButton
+      dismissOnOutsideClick={dismissOnOutsideClick}
+      initialFocusRef={initialFocusRef}
     >
-      <header>
-        <h2>{title}</h2>
-        <button
-          type="button"
-          className="text-button"
-          disabled={busy}
-          onClick={onClose}
-          aria-label={m.mailbox_dialog_close_label()}
-        >
-          {m.mailbox_dialog_close()}
-        </button>
-      </header>
       {children}
-    </dialog>
+    </StudioDialog>
   );
 }

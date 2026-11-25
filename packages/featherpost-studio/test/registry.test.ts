@@ -168,3 +168,81 @@ describe('贡献标题与诊断随界面语言（ADR-0048 决策 8）', () => {
     expect(() => registry.register(mailbox())).toThrow('模块已注册: maild.mailbox');
   });
 });
+
+describe('CommandContribution 可选语义元数据（向后兼容）', () => {
+  it('保留可选 description（含 getter）、inputSchema（防御性克隆）与 risk，且零参数命令保持兼容', () => {
+    const registry = new ContributionRegistry<View>();
+    let locale = 'zh';
+    const schema = {
+      type: 'object',
+      properties: { folder: { type: 'string' } },
+      required: ['folder'],
+    };
+    registry.register({
+      moduleId: 'org.example.semantic',
+      apiVersion: 1,
+      title: 'semantic',
+      commands: [
+        {
+          id: 'org.example.semantic.legacy',
+          title: 'Legacy',
+          locations: ['menu'],
+          execute: () => {},
+        },
+        {
+          id: 'org.example.semantic.move',
+          title: 'Move',
+          get description() {
+            return locale === 'zh' ? '移动邮件' : 'Move message';
+          },
+          inputSchema: schema,
+          risk: 'write',
+          locations: ['toolbar', 'menu'],
+          execute: () => {},
+        },
+      ],
+    });
+
+    const legacy = registry.findCommand('org.example.semantic.legacy');
+    expect(legacy).toBeDefined();
+    expect(legacy?.description).toBeUndefined();
+    expect(legacy?.inputSchema).toBeUndefined();
+    expect(legacy?.risk).toBeUndefined();
+
+    const move = registry.findCommand('org.example.semantic.move');
+    expect(move?.risk).toBe('write');
+    expect(move?.description).toBe('移动邮件');
+    locale = 'en';
+    expect(move?.description).toBe('Move message');
+
+    // Mutating the caller's original schema object must not mutate the registered descriptor.
+    (schema.properties as Record<string, unknown>).folder = { type: 'number' };
+    expect(move?.inputSchema).toEqual({
+      type: 'object',
+      properties: { folder: { type: 'string' } },
+      required: ['folder'],
+    });
+  });
+
+  it('拒绝非法 risk、非对象 inputSchema 或非字符串 description', () => {
+    const registry = new ContributionRegistry<View>();
+    registry.register(mailbox());
+    const before = registry.getSnapshot();
+
+    for (const badCommand of [
+      { id: 'org.example.bad.r', title: 'r', locations: ['menu'], risk: 'sudo', execute: () => {} },
+      { id: 'org.example.bad.s', title: 's', locations: ['menu'], inputSchema: ['not-an-object'], execute: () => {} },
+      { id: 'org.example.bad.d', title: 'd', locations: ['menu'], description: 123, execute: () => {} },
+    ]) {
+      expect(() =>
+        registry.register({
+          moduleId: 'org.example.bad',
+          apiVersion: 1,
+          title: 'bad',
+          commands: [badCommand as unknown as NonNullable<Contributions<View>['commands']>[number]],
+        }),
+      ).toThrow();
+    }
+    expect(registry.getSnapshot()).toBe(before);
+  });
+});

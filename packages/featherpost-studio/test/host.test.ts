@@ -1,14 +1,19 @@
 import { applyEffectiveLocales } from '@featherpost/i18n';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
-import { ComposeController } from '../src/compose/controller';
+import { ComposeController, COMPOSE_VIEW } from '../src/compose/controller';
+import { composeModule } from '../src/compose/module';
 import { Host } from '../src/host/host';
-import type { View } from '../src/host/types';
+import type { HostMailboxContext, View } from '../src/host/types';
+import { studioMailbox } from '../src/mailbox';
 import { MailboxController } from '../src/mailbox/controller';
+import { SettingsController } from '../src/settings/controller';
+import { settingsModule, SETTINGS_VIEW } from '../src/settings/module';
 import { Studio } from '../src/Shell';
-import { FakeBridge, online } from './fakeBridge';
+import { FakeBridge, flush, folder, message, online, summary } from './fakeBridge';
+import { account } from './fakeSettings';
 
 const view = (_id: string) => (() => null) as unknown as View;
 
@@ -183,4 +188,216 @@ it('start 期间先收到握手推送时，迟到的首读快照不会把结论�
 it('mailbox write contributions need a selection and a live daemon connection',()=>{
  const host=new Host(new FakeBridge());host.setSelection({identity:{account:'a',folder:'Inbox',uid:'1'},subject:'test'});
  expect(host.isEnabled('online-message-selected')).toBe(false);host.state.patch({snapshot:{...host.state.getSnapshot().snapshot,phase:'online'}});expect(host.isEnabled('online-message-selected')).toBe(true);host.setSelection(null);expect(host.isEnabled('online-message-selected')).toBe(false);
+});
+
+describe('Host.getContextSnapshot() 只读语义上下文与防泄漏边界', () => {
+  it('无模块提供者时返回基础冻结快照，并随选中和视图更新', () => {
+    const host = new Host(new FakeBridge());
+    core(host);
+    host.state.patch({
+      snapshot: { ...online, principal: 'frontend-secret-principal-xyz' },
+    });
+    host.setSelection({
+      identity: { account: 'demo', folder: 'INBOX', uid: '42' },
+      subject: 'Private Subject Should Not Leak',
+    });
+
+    const snap = host.getContextSnapshot();
+    expect(Object.isFrozen(snap)).toBe(true);
+    expect(Object.isFrozen(snap.accountIds)).toBe(true);
+    expect(Object.isFrozen(snap.selectedMessage)).toBe(true);
+    expect(snap).toEqual({
+      activeViewId: 'maild.mailbox.workspace',
+      online: true,
+      phase: 'online',
+      compat: 'compatible',
+      accountIds: ['demo'],
+      selectedMessage: { account: 'demo', folder: 'INBOX', uid: '42' },
+      selectedThreadId: null,
+      checkedMessages: [],
+      scope: null,
+      activeDraftId: null,
+      activeSettingsSection: null,
+      theme: snap.theme,
+      density: snap.density,
+      mailbox: null,
+      compose: null,
+      settings: null,
+    });
+    const serialized = JSON.stringify(snap);
+    expect(serialized).not.toContain('frontend-secret-principal-xyz');
+    expect(serialized).not.toContain('Private Subject Should Not Leak');
+  });
+
+  it('汇总邮箱/写信/设置模块上下文并严格排除凭据、密码、正文与原始 HTML', async () => {
+    vi.stubGlobal('window', {
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    });
+    const bridge = new FakeBridge();
+    const host = new Host(bridge);
+    const composer = new ComposeController(bridge.compose, (id) => host.openView(id), () => {});
+    const settings = new SettingsController(bridge.settings, () => {});
+    const mailbox = studioMailbox(host, composer, () => {});
+    const bundles = [
+      mailbox.bundle,
+      composeModule(host, composer),
+      settingsModule(host, settings),
+    ];
+
+    try {
+      bundles.forEach((b) => host.registerBuiltin(b));
+      host.finishAssembly();
+      host.state.patch({
+        snapshot: {
+          ...online,
+          principal: 'token-principal-never-leak',
+        },
+      });
+      await flush();
+
+      // Resolve initial folders and rows.
+      for (const req of bridge.folderRequests) {
+        req.d.resolve([folder('INBOX', 'inbox', 1), folder('Archive', 'archive')]);
+      }
+      const row = {
+        ...summary('INBOX', '7', 'Confidential payroll'),
+        sender: 'payroll@example.test',
+        snippet: 'Sensitive snippet content',
+        thread_id: 99,
+      };
+      bridge.mailbox.queries.at(-1)?.d.resolve({ messages: [row], total: 1 });
+      await flush();
+
+      mailbox.controller.selectMessage(row);
+      bridge.detailRequests.at(-1)?.d.resolve(
+        message('INBOX', '7', {
+          thread_id: 99,
+          body: 'Top-secret plaintext body <script>alert(1)</script>',
+          has_html: true,
+        }),
+      );
+      await flush();
+      mailbox.controller.toggle(row);
+
+      // Populate draft with body text and settings with secrets & proxy password.
+      await composer.create('bob@example.test');
+      composer.change('body', '<html><body>Secret draft body</body></html>');
+      settings.beginAccount(account());
+      settings.setSecret('incoming', 'imap-app-password-9999');
+      settings.store.patch({
+        proxyDraft: {
+          mode: 'custom',
+          protocol: 'socks5',
+          host: '127.0.0.1',
+          port: '1080',
+          authEnabled: true,
+          username: 'proxy-user',
+          password: 'proxy-secret-password-8888',
+          clearPassword: false,
+          bypassText: '',
+        },
+      });
+
+      const snap = host.getContextSnapshot();
+      expect(snap.activeViewId).toBe(COMPOSE_VIEW);
+      expect(snap.selectedMessage).toEqual({ account: 'demo', folder: 'INBOX', uid: '7' });
+      expect(snap.selectedThreadId).toBe(99);
+      expect(snap.checkedMessages).toEqual([{ account: 'demo', folder: 'INBOX', uid: '7' }]);
+      expect(snap.scope).toEqual({ kind: 'smart', smartFolder: 'inbox', unreadOnly: false });
+      expect(snap.activeDraftId).toBe('draft-1');
+      expect(snap.activeSettingsSection).toBe('maild.settings.accounts');
+      expect(snap.compose).toMatchObject({ draftId: 'draft-1', dirty: true });
+      expect(snap.settings).toEqual({ section: 'maild.settings.accounts', dirty: true });
+
+      // Search scope summary captures query and account/folder filters cleanly.
+      mailbox.controller.search({ query: 'quarterly', account: 'demo', folder: 'Archive' });
+      expect(host.getContextSnapshot().scope).toEqual({
+        kind: 'search',
+        account: 'demo',
+        folder: 'Archive',
+        searchQuery: 'quarterly',
+      });
+
+      // Unread tab scope summary captures unreadOnly flag.
+      mailbox.controller.exitSearch();
+      mailbox.controller.setUnreadFilter(true);
+      expect(host.getContextSnapshot().scope).toEqual({
+        kind: 'unread',
+        smartFolder: 'inbox',
+        unreadOnly: true,
+      });
+
+      // Switching active view updates activeViewId cleanly.
+      settings.discard();
+      host.openView(SETTINGS_VIEW);
+      expect(host.getContextSnapshot().activeViewId).toBe(SETTINGS_VIEW);
+
+      // Verify NO secrets, credentials, principal, email body, or raw HTML leak anywhere in snapshot.
+      const serialized = JSON.stringify(host.getContextSnapshot());
+      for (const forbidden of [
+        'imap-app-password-9999',
+        'proxy-secret-password-8888',
+        'token-principal-never-leak',
+        'Top-secret plaintext body',
+        'Secret draft body',
+        '<script>',
+        '<html>',
+        'Sensitive snippet content',
+        'Confidential payroll',
+      ]) {
+        expect(serialized).not.toContain(forbidden);
+      }
+
+      // Verify compose built-in commands carry risk metadata and still execute with zero extra args.
+      expect(host.registry.findCommand('maild.compose.new')?.risk).toBe('stage');
+      expect(host.registry.findCommand('maild.compose.open-drafts')?.risk).toBe('read');
+      expect(host.registry.findCommand('maild.compose.reply')?.risk).toBe('stage');
+    } finally {
+      bundles.forEach((b) => b.dispose?.());
+      host.stop();
+      vi.unstubAllGlobals();
+    }
+
+    // After dispose, module providers are cleaned up.
+    expect(host.getContextSnapshot().mailbox).toBeNull();
+    expect(host.getContextSnapshot().compose).toBeNull();
+    expect(host.getContextSnapshot().settings).toBeNull();
+  });
+
+  it('白名单净化会剥离提供者意外混入的秘密与原始 HTML 字段，且坏提供者不拖垮宿主', () => {
+    const host = new Host(new FakeBridge());
+    core(host);
+
+    const stopMailbox = host.registerContextProvider(
+      'mailbox',
+      () =>
+        ({
+          scope: { kind: 'folder', account: 'demo', folder: 'INBOX', rawHtml: '<b>leak</b>' },
+          selectedMessage: { account: 'demo', folder: 'INBOX', uid: '1', body_html: '<p>secret</p>' },
+          selectedThreadId: 12,
+          checkedMessages: [],
+          threadOpen: false,
+          totalMessages: 3,
+          secrets: { incoming: 'leaked-pass' },
+          html: '<div>raw</div>',
+        }) as unknown as HostMailboxContext,
+    );
+    const stopCompose = host.registerContextProvider('compose', () => {
+      throw new Error('provider crashed');
+    });
+
+    const snap = host.getContextSnapshot();
+    expect(snap.selectedMessage).toEqual({ account: 'demo', folder: 'INBOX', uid: '1' });
+    expect(snap.scope).toEqual({ kind: 'folder', account: 'demo', folder: 'INBOX' });
+    expect(snap.compose).toBeNull();
+    const serialized = JSON.stringify(snap);
+    expect(serialized).not.toContain('leaked-pass');
+    expect(serialized).not.toContain('rawHtml');
+    expect(serialized).not.toContain('body_html');
+    expect(serialized).not.toContain('<div>raw</div>');
+
+    stopMailbox();
+    stopCompose();
+  });
 });

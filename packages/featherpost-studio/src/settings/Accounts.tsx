@@ -3,8 +3,13 @@ import { useUiLocale } from "@featherpost/i18n/react";
 import { packageText, providerName } from "../i18n";
 import { AccountReason } from "./AccountReason";
 import { Choice } from "./Choice";
-import { useRef, useState, type ReactNode } from "react";
-import { PopoverMenu } from "../app/PopoverMenu";
+import { useState, type ReactNode } from "react";
+import {
+  StudioDropdownMenu,
+  StudioDropdownMenuItem,
+  StudioDropdownMenuMeta,
+  StudioDropdownMenuSeparator,
+} from "../app/DropdownMenu";
 import { useStore } from "../host/hooks";
 import type { AccountProfile, Endpoint, ProbeStage } from "./types";
 import { SettingsController, newDraft } from "./controller";
@@ -599,32 +604,39 @@ function Editor({ controller }: { controller: SettingsController }) {
 export function AccountMore({ profile, controller, disabled = false }: { profile: AccountProfile; controller: SettingsController; disabled?: boolean }) {
   useUiLocale();
   const s = useStore(controller.store);
-  const [open, setOpen] = useState(false);
-  const openRef = useRef(open);
-  openRef.current = open;
+  const itemDisabled = disabled || !s.online || s.busy || s.closeLocked;
   const confirm = (remove: boolean) => {
     if (disabled || controller.dirty || !s.online || s.busy || s.closeLocked) return;
-    if (openRef.current) setOpen(false);
     // Account actions refresh profile revisions. Never retain an obsolete editor.
     controller.discard();
     controller.confirmAccount(profile, remove);
   };
+  const label = m.studio_account_more_label({ account: accountLabel(profile) });
   return (
-    <PopoverMenu
+    <StudioDropdownMenu
       className="account-more"
-      open={open}
-      onOpenChange={setOpen}
+      contentClassName="account-more-panel"
+      align="end"
       forceClosed={s.closeLocked}
-      triggerLabel={m.studio_account_more_label({ account: accountLabel(profile) })}
-      triggerTitle={m.studio_account_more_label({ account: accountLabel(profile) })}
-      trigger={<>{m.studio_account_more()} <Icon name="more" /></>}
+      trigger={
+        <button type="button" aria-label={label} title={label}>
+          {m.studio_account_more()} <Icon name="more" />
+        </button>
+      }
     >
-      <button type="button" disabled={disabled || !s.online || s.busy || s.closeLocked} onClick={() => confirm(false)}>{profile.enabled ? m.studio_account_pause() : m.studio_account_enable()}</button>
-      <button type="button" className="danger" disabled={disabled || !s.online || s.busy || s.closeLocked} onClick={() => confirm(true)}>{m.studio_account_remove()}</button>
-      {disabled && <small>{m.studio_account_save_first()}</small>}
-      <small>{m.studio_account_id_revision({ id: profile.id, revision: profile.revision })}</small>
-      <small>{profile.credentials.incoming === "saved" ? m.studio_account_credentials_saved() : m.studio_account_credentials_missing()}</small>
-    </PopoverMenu>
+      <StudioDropdownMenuItem disabled={itemDisabled} onSelect={() => confirm(false)}>
+        {profile.enabled ? m.studio_account_pause() : m.studio_account_enable()}
+      </StudioDropdownMenuItem>
+      <StudioDropdownMenuItem tone="danger" disabled={itemDisabled} onSelect={() => confirm(true)}>
+        {m.studio_account_remove()}
+      </StudioDropdownMenuItem>
+      <StudioDropdownMenuSeparator />
+      <StudioDropdownMenuMeta>
+        {disabled && <small>{m.studio_account_save_first()}</small>}
+        <small>{m.studio_account_id_revision({ id: profile.id, revision: profile.revision })}</small>
+        <small>{profile.credentials.incoming === "saved" ? m.studio_account_credentials_saved() : m.studio_account_credentials_missing()}</small>
+      </StudioDropdownMenuMeta>
+    </StudioDropdownMenu>
   );
 }
 

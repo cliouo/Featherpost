@@ -1231,38 +1231,91 @@ kbd {
   background: var(--studio-tint);
   color: var(--studio-text);
 }
-.reader-menu-panel {
-  position: absolute;
-  top: 32px;
-  left: 0;
-  width: 148px;
+.studio-dropdown {
+  z-index: 1000;
+  min-width: 150px;
+  max-width: 280px;
+  max-height: var(--radix-dropdown-menu-content-available-height);
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
   padding: 5px;
-  z-index: 5;
   border: 1px solid var(--studio-border);
   border-radius: 8px;
-  box-shadow: 0 8px 24px #0001;
   background: var(--studio-surface);
-  transform-origin: top left;
+  color: var(--studio-text);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  box-shadow: 0 12px 36px #0002, 0 2px 8px #0001;
+  transform-origin: var(--radix-dropdown-menu-content-transform-origin);
+  outline: none;
+}
+:root[data-studio-theme="dark"] .studio-dropdown {
+  box-shadow: 0 12px 36px #0006, 0 2px 8px #0004;
+}
+.studio-dropdown[data-state="open"] {
   animation: fp-pop-in var(--motion-fast) var(--ease-standard);
 }
-.reader-menu-panel[data-side="top"] {
-  top: auto;
-  bottom: 32px;
-  transform-origin: bottom left;
+.studio-dropdown[data-state="closed"] {
+  animation: fp-pop-out var(--motion-instant) var(--ease-exit);
 }
-.reader-menu-panel button {
-  display: block;
-  text-align: left;
+.reader-menu-panel {
+  width: 156px;
+}
+.account-more-panel {
+  min-width: 164px;
+  padding: 6px;
+  border-radius: 6px;
+}
+.studio-dropdown-item {
+  display: flex;
+  align-items: center;
   width: 100%;
-  padding: 9px;
+  padding: 8px 9px;
   border-radius: 4px;
   font-size: 12px;
+  text-align: left;
+  color: var(--studio-text);
+  cursor: pointer;
+  outline: none;
+  -webkit-user-select: none;
+  user-select: none;
+  transition:
+    background-color var(--motion-instant) var(--ease-standard),
+    color var(--motion-instant) var(--ease-standard);
 }
-@media (hover: hover) {
-  .reader-menu-panel button:hover:not(:disabled) {
-    background: var(--hover-bg);
-    color: var(--studio-text);
-  }
+.studio-dropdown-item[data-highlighted] {
+  background: var(--hover-bg);
+  color: var(--studio-text);
+}
+.studio-dropdown-item[data-disabled] {
+  opacity: 0.42;
+  cursor: default;
+}
+.studio-dropdown-item[data-tone="danger"] {
+  color: var(--studio-danger);
+}
+.studio-dropdown-item[data-tone="danger"][data-highlighted] {
+  background: var(--hover-danger-bg);
+  color: var(--hover-danger-ink);
+}
+.studio-dropdown-separator {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--studio-border);
+}
+.studio-dropdown-meta {
+  -webkit-user-select: text;
+  user-select: text;
+}
+.studio-dropdown-meta small {
+  display: block;
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--studio-muted);
+  padding: 4px 9px;
+  overflow-wrap: anywhere;
 }
 .letter-scroll {
   min-height: 0;
@@ -1616,29 +1669,43 @@ kbd {
 .batch-toolbar button {
   font-size: 11px;
 }
+.dialog-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: #20202b40;
+  backdrop-filter: blur(2px);
+  animation: fp-fade-in var(--motion-base) var(--ease-standard);
+}
+.dialog-positioner {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 30px;
+  pointer-events: none;
+}
 .mail-dialog {
+  pointer-events: auto;
+  outline: none;
   background: var(--studio-surface);
   color: var(--studio-text);
   border: 1px solid var(--studio-border);
   border-radius: 12px;
   padding: 24px calc(24px - var(--scrollbar-size, 10px)) 24px 24px;
   min-width: 360px;
-  max-width: 600px;
+  max-width: min(600px, calc(100vw - 60px));
   max-height: 85vh;
   overflow-y: scroll;
   overflow-x: hidden;
   overscroll-behavior: contain;
   box-shadow: 0 20px 80px #0002;
-}
-.mail-dialog[open] {
   animation: fp-dialog-in var(--motion-base) var(--ease-standard);
 }
-.mail-dialog::backdrop {
-  background: #20202b40;
-  backdrop-filter: blur(2px);
-}
-.mail-dialog[open]::backdrop {
-  animation: fp-fade-in var(--motion-base) var(--ease-standard);
+:root[data-studio-theme="dark"] .mail-dialog,
+:root[data-studio-theme="dark"] .sheet {
+  box-shadow: 0 20px 80px #0006;
 }
 .mail-dialog header {
   display: flex;
@@ -1654,6 +1721,7 @@ kbd {
   font-size: 12px;
   line-height: 1.9;
   margin-bottom: 14px;
+  overflow-wrap: anywhere;
 }
 .mail-dialog footer,
 .dialog-actions {
@@ -1691,17 +1759,9 @@ kbd {
   font-size: 10px;
   color: var(--studio-muted);
 }
-.sheet-backdrop {
-  position: fixed;
-  inset: 0;
-  background: #20202b40;
-  z-index: 60;
-  display: grid;
-  place-items: center;
-  padding: 30px;
-  animation: fp-fade-in var(--motion-base) var(--ease-standard);
-}
 .sheet {
+  pointer-events: auto;
+  outline: none;
   width: min(560px, 100%);
   max-height: 90vh;
   overflow-y: scroll;
@@ -1710,6 +1770,7 @@ kbd {
   border: 1px solid var(--studio-border);
   border-radius: 13px;
   background: var(--studio-surface);
+  color: var(--studio-text);
   padding: 25px calc(25px - var(--scrollbar-size, 10px)) 25px 25px;
   box-shadow: 0 20px 80px #0002;
   animation: fp-dialog-in var(--motion-base) var(--ease-standard);
@@ -1745,6 +1806,7 @@ kbd {
   justify-content: flex-end;
   gap: 8px;
   flex-wrap: wrap;
+  margin-top: 18px;
 }
 .tag {
   font-size: 10px;

@@ -1,11 +1,16 @@
 import type { ComponentType } from 'react';
 
-import type { MessageIdentity } from '../bridge/types';
+import type { ConnectionPhase, MessageIdentity, UiCompat } from '../bridge/types';
+import type { Preferences } from '../preferences';
 
 export type CoreRole = 'mailbox' | 'settings' | 'compose' | 'drafts' | 'activity';
 export type CommandLocation = 'navigation' | 'toolbar' | 'menu';
 /** 受限的声明式条件（UI-EXTENSIONS §5）：只有必要的非秘密布尔上下文，不给插件推全量对象。 */
 export type EnabledWhen = 'always' | 'message-selected' | 'online-message-selected' | 'online';
+/** 声明式操作风险等级，供未来的语义动作编排/确认策略使用。 */
+export type CommandRisk = 'read' | 'stage' | 'write' | 'destructive';
+/** 轻量级 JSON Schema 描述符（零外部校验依赖）。 */
+export type CommandInputSchema = Record<string, unknown>;
 export type IconName =
   | 'inbox' | 'folder' | 'sent' | 'drafts' | 'archive' | 'trash' | 'spam' | 'star'
   | 'search' | 'activity' | 'mail' | 'reply' | 'forward' | 'paperclip' | 'settings' | 'refresh' | 'more' | 'clip' | 'back' | 'puzzle';
@@ -22,11 +27,77 @@ export interface CommandContext {
 export interface CommandContribution {
   id: string;
   title: string;
+  description?: string;
+  inputSchema?: CommandInputSchema;
+  risk?: CommandRisk;
   icon?: IconName;
   locations: readonly CommandLocation[];
   order?: number;
   enabledWhen?: EnabledWhen;
   execute(context: CommandContext): void;
+}
+
+export interface HostScopeSummary {
+  kind: 'smart' | 'folder' | 'unread' | 'search';
+  account?: string;
+  accounts?: readonly string[];
+  folder?: string;
+  smartFolder?: 'inbox' | 'all' | 'unread' | 'starred';
+  groupId?: string;
+  groupName?: string;
+  unreadOnly?: boolean;
+  searchQuery?: string;
+}
+
+export interface HostMailboxContext {
+  scope: HostScopeSummary | null;
+  selectedMessage: MessageIdentity | null;
+  selectedThreadId: number | null;
+  checkedMessages: readonly MessageIdentity[];
+  threadOpen: boolean;
+  totalMessages: number;
+}
+
+export interface HostComposeContext {
+  draftId: string | null;
+  sendState: 'editing' | 'failed' | 'sending' | 'unknown' | 'sent' | null;
+  inline: boolean;
+  collapsed: boolean;
+  dirty: boolean;
+}
+
+export interface HostSettingsContext {
+  section: string | null;
+  dirty: boolean;
+}
+
+export interface HostContextProviders {
+  mailbox: HostMailboxContext;
+  compose: HostComposeContext;
+  settings: HostSettingsContext;
+}
+
+/**
+ * 宿主对外暴露的只读结构化 UI 上下文快照：仅含非秘密视图/选中标识/范围摘要/草稿 ID，
+ * 严格排除凭据、令牌、密码、原始邮件正文与 HTML。
+ */
+export interface HostContextSnapshot {
+  readonly activeViewId: string;
+  readonly online: boolean;
+  readonly phase: ConnectionPhase;
+  readonly compat: UiCompat;
+  readonly accountIds: readonly string[];
+  readonly selectedMessage: Readonly<MessageIdentity> | null;
+  readonly selectedThreadId: number | null;
+  readonly checkedMessages: readonly Readonly<MessageIdentity>[];
+  readonly scope: Readonly<HostScopeSummary> | null;
+  readonly activeDraftId: string | null;
+  readonly activeSettingsSection: string | null;
+  readonly theme: Preferences['theme'];
+  readonly density: Preferences['density'];
+  readonly mailbox: Readonly<HostMailboxContext> | null;
+  readonly compose: Readonly<HostComposeContext> | null;
+  readonly settings: Readonly<HostSettingsContext> | null;
 }
 
 export interface ViewProps {

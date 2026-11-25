@@ -170,28 +170,6 @@
   min-height: 0;
   padding: 6px 8px;
 }
-.account-more > div {
-  position: absolute;
-  right: 0;
-  top: calc(100% + 4px);
-  z-index: 2;
-  padding: 8px;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--r-md);
-  min-width: 140px;
-  transform-origin: top right;
-  animation: fp-pop-in var(--motion-fast) var(--ease-standard);
-}
-.account-more > div[data-side="top"] {
-  top: auto;
-  bottom: calc(100% + 4px);
-  transform-origin: bottom right;
-}
-.account-more > div button {
-  display: flex;
-  width: 100%;
-}
 .settings-empty {
   padding: 20px 0;
 }

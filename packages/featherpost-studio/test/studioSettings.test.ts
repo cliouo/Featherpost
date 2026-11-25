@@ -6,6 +6,7 @@ import {
   Accounts,
   AccountMore,
 } from "../src/settings/Accounts";
+import { StudioDropdownMenuItem } from "../src/app/DropdownMenu";
 import { Appearance } from "../src/settings/Appearance";
 import { settingsModule } from "../src/settings/module";
 import { SettingsController } from "../src/settings/controller";
@@ -203,8 +204,8 @@ it("closes a clean editor before account actions and never drops dirty input", (
       AccountMore({ profile: account(), controller: c }),
     );
     return elements.find(
-      (el) => el.type === "button" && el.props.children === "暂停同步",
-    )!.props.onClick as () => void;
+      (el) => el.type === StudioDropdownMenuItem && el.props.children === "暂停同步",
+    )!.props.onSelect as () => void;
   };
   c.setDisplayName("正在编辑");
   action()();
