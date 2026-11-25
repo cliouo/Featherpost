@@ -1,13 +1,13 @@
 import { m } from "@featherpost/i18n/messages";
-import { compatBlocksWrites } from "../../maild-ui/src/bridge/types";
-import type { UiFolder, UiSummary } from "../../maild-ui/src/bridge/types";
-import type { IconName } from "../../maild-ui/src/host/types";
+import { compatBlocksWrites } from "./bridge/types";
+import type { UiFolder, UiSummary } from "./bridge/types";
+import type { IconName } from "./host/types";
 import {
   messageKey,
   type MailboxController,
   type MailboxState,
-} from "../../maild-ui/src/mailbox/controller";
-import { addressOnly, displayName } from "../../maild-ui/src/mailbox/format";
+} from "./mailbox/controller";
+import { addressOnly, displayName } from "./mailbox/format";
 import { folderIcon, folderNavigationLabels } from "./navigation";
 
 /**

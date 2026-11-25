@@ -54,7 +54,7 @@ jobs:
           dmg="$package_dir/$BRAND_SLUG-$VERSION-macos-universal.dmg"
           mkdir -p "$package_dir"
           chmod 0700 "$package_dir"
-          pnpm --dir packages/maild-ui install --frozen-lockfile
+          pnpm install --frozen-lockfile
           packaging/macos/build-universal.sh --output "$app"
           packaging/macos/verify-bundle.sh "$app"
           packaging/macos/build-preview-dmg.sh --app "$app" --output "$dmg"

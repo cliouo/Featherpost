@@ -1,24 +1,33 @@
 import { m } from "@featherpost/i18n/messages";
 import { Fragment, useEffect } from "react";
-import type { Host } from "../../maild-ui/src/host/host";
-import { useStore } from "../../maild-ui/src/host/hooks";
-import { uiLocale, useUiLocale } from "../../maild-ui/src/i18n";
-import { Icon } from "../../maild-ui/src/app/Icon";
+import type { Host } from "./host/host";
+import { useStore } from "./host/hooks";
+import { uiLocale, useUiLocale } from "./i18n";
+import { Icon } from "./app/Icon";
 import {
   messageKey,
   type MailboxController,
-} from "../../maild-ui/src/mailbox/controller";
-import { useSelectedRowScroll } from "../../maild-ui/src/mailbox/listScroll";
-import { displayName, shortDate } from "../../maild-ui/src/mailbox/format";
-import { Actions } from "../../maild-ui/src/mailbox/Actions";
-import type { DocumentController } from "../../maild-ui/src/mailbox/document";
-import type { ComposeController } from "../../maild-ui/src/compose/controller";
+} from "./mailbox/controller";
+import { useSelectedRowScroll } from "./mailbox/listScroll";
+import { displayName, shortDate } from "./mailbox/format";
+import { Actions } from "./mailbox/Actions";
+import type { DocumentController } from "./mailbox/document";
+import type { ComposeController } from "./compose/controller";
 import { ReadingPane } from "./ReadingPane";
 import { scopeContext, filterUnread } from "./navigation";
 import { ACTIVITY } from "./views";
 import { useContextMenu } from "./ContextMenu";
 import { messageMenu, type MailMenuDeps } from "./menus";
 import { useStudioActions } from "./studioActions";
+
+const SHORTCUT_BLOCKED_SELECTOR =
+  'input,textarea,select,summary,[contenteditable="true"],[data-shortcuts-off],[role="combobox"],[role="listbox"],[role="option"]';
+
+export function isShortcutBlockedTarget(
+  target: { closest?(selector: string): unknown } | null | undefined,
+): boolean {
+  return Boolean(target && typeof target.closest === "function" && target.closest(SHORTCUT_BLOCKED_SELECTOR));
+}
 
 /** Menu actions shared by list rows and the reading pane. */
 export function useMailMenu(
@@ -82,11 +91,9 @@ export function Workspace({
         e.metaKey ||
         e.ctrlKey ||
         e.altKey ||
+        e.isComposing ||
         document.querySelector('dialog[open], [aria-modal="true"]') ||
-        (e.target instanceof HTMLElement &&
-          e.target.closest(
-            'input,textarea,select,summary,[contenteditable="true"],[data-shortcuts-off]',
-          ))
+        (e.target instanceof HTMLElement && isShortcutBlockedTarget(e.target))
       )
         return;
       if (e.key === "ArrowDown" || e.key === "j") {

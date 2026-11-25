@@ -2,7 +2,7 @@ import { m } from "@featherpost/i18n/messages";
 import { useUiLocale } from "@featherpost/i18n/react";
 import * as Select from "@radix-ui/react-select";
 import { Children, Fragment, isValidElement, useEffect, useState, type ReactNode } from "react";
-import type { ChoiceProps } from "../../maild-ui/src/settings/Choice";
+import type { ChoiceProps } from "./settings/Choice";
 
 interface Option { value: string; label: ReactNode; text: string; disabled: boolean }
 function textOf(node: ReactNode): string {

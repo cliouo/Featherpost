@@ -47,7 +47,7 @@ menu_rel="Contents/Library/Helpers/$BRAND_MENU_BUNDLE"
 ui_rel="Contents/Resources/frontends/$ui_id/$BRAND_UI_BUNDLE"
 host_ui_rel="Contents/MacOS/$ui_name"
 icon_rel="Contents/Resources/$BRAND_ICON_NAME.icns"
-versions=("${BRAND_ENV_PREFIX}_BUNDLE_SHORT_VERSION=0.1.0" "${BRAND_ENV_PREFIX}_BUNDLE_BUILD_VERSION=0.1.0")
+versions=("${BRAND_ENV_PREFIX}_BUNDLE_SHORT_VERSION=0.4.0" "${BRAND_ENV_PREFIX}_BUNDLE_BUILD_VERSION=0.4.0")
 
 # Usage: universal_fixture OUTPUT MARKER; an empty MARKER builds an unmarked (dev-form) binary.
 universal_fixture() {
@@ -168,7 +168,7 @@ bad_order="$work/output/bad-order/$app_bundle"
 mkdir -p -- "$(dirname -- "$bad_order")"
 ditto --noqtn --noextattr --noacl "$signed" "$bad_order"
 bad_agent="$bad_order/$agent_rel"
-plutil -replace CFBundleVersion -string 0.1.1 "$bad_agent/Contents/Info.plist"
+plutil -replace CFBundleVersion -string 0.4.1 "$bad_agent/Contents/Info.plist"
 /usr/bin/codesign --force --sign - --options runtime --timestamp=none "$bad_agent" >/dev/null
 if /usr/bin/codesign --verify --deep --strict=all --verbose=4 "$bad_order" \
     >/dev/null 2>&1; then
@@ -176,7 +176,7 @@ if /usr/bin/codesign --verify --deep --strict=all --verbose=4 "$bad_order" \
 fi
 
 if PATH="$hostile_bin:$PATH" "$packaging_dir/verify-release.sh" \
-    --app "$signed" --version 0.1.0 \
+    --app "$signed" --version 0.4.0 \
     >"$work/verify-release.stdout" 2>"$work/verify-release.stderr"; then
     fail 'release verifier accepted a provisional ad hoc bundle'
 fi
@@ -193,23 +193,23 @@ mkdir -p -- \
     "$fixture_repo/crates/maild-menu" \
     "$fixture_repo/crates/maild-ui"
 cp -R -- "$packaging_dir" "$fixture_repo/packaging/macos"
-printf '[package]\nname = "maild"\nversion = "0.1.0"\nedition = "2021"\n' \
+printf '[package]\nname = "maild"\nversion = "0.4.0"\nedition = "2021"\n' \
     >"$fixture_repo/crates/maild/Cargo.toml"
-printf '[package]\nname = "maild-launcher"\nversion = "0.1.0"\nedition = "2021"\n' \
+printf '[package]\nname = "maild-launcher"\nversion = "0.4.0"\nedition = "2021"\n' \
     >"$fixture_repo/crates/maild-launcher/Cargo.toml"
-printf '[package]\nname = "maild-menu"\nversion = "0.1.0"\nedition = "2021"\n' \
+printf '[package]\nname = "maild-menu"\nversion = "0.4.0"\nedition = "2021"\n' \
     >"$fixture_repo/crates/maild-menu/Cargo.toml"
-printf '[package]\nname = "maild-ui"\nversion = "0.1.0"\nedition = "2021"\n' \
+printf '[package]\nname = "maild-ui"\nversion = "0.4.0"\nedition = "2021"\n' \
     >"$fixture_repo/crates/maild-ui/Cargo.toml"
 git -C "$fixture_repo" init -q
 git -C "$fixture_repo" config user.name 'Packaging Test'
 git -C "$fixture_repo" config user.email 'packaging-test@example.invalid'
 git -C "$fixture_repo" add -A
 git -C "$fixture_repo" commit -qm fixture
-git -C "$fixture_repo" tag v0.1.0
+git -C "$fixture_repo" tag v0.4.0
 
 if PATH="$hostile_bin:$PATH" "$fixture_repo/packaging/macos/release-bundle.sh" \
-    --app "$bundle" --version 0.1.0 --preflight-only \
+    --app "$bundle" --version 0.4.0 --preflight-only \
     >"$work/preflight.stdout" 2>"$work/preflight.stderr"; then
     fail 'release preflight accepted provisional identities'
 fi
@@ -220,7 +220,7 @@ grep -F 'provisional App bundle identifier cannot be released' \
 
 printf 'dirty\n' >"$fixture_repo/untracked"
 if "$fixture_repo/packaging/macos/release-bundle.sh" \
-    --app "$bundle" --version 0.1.0 --preflight-only \
+    --app "$bundle" --version 0.4.0 --preflight-only \
     >/dev/null 2>"$work/dirty.stderr"; then
     fail 'release preflight accepted a dirty worktree'
 fi
@@ -228,21 +228,21 @@ grep -F 'release requires a clean worktree' "$work/dirty.stderr" >/dev/null ||
     fail 'dirty worktree failed at the wrong gate'
 rm -- "$fixture_repo/untracked"
 
-git -C "$fixture_repo" tag -d v0.1.0 >/dev/null
-git -C "$fixture_repo" tag release-0.1.0
+git -C "$fixture_repo" tag -d v0.4.0 >/dev/null
+git -C "$fixture_repo" tag release-0.4.0
 if "$fixture_repo/packaging/macos/release-bundle.sh" \
-    --app "$bundle" --version 0.1.0 --preflight-only \
+    --app "$bundle" --version 0.4.0 --preflight-only \
     >/dev/null 2>"$work/tag.stderr"; then
     fail 'release preflight accepted a non-vX.Y.Z tag'
 fi
-grep -F 'HEAD must have the exact release tag v0.1.0' "$work/tag.stderr" >/dev/null ||
+grep -F 'HEAD must have the exact release tag v0.4.0' "$work/tag.stderr" >/dev/null ||
     fail 'non-release tag failed at the wrong gate'
 
 # Freeze non-provisional IDs (what editing brand.toml + sync-brand.sh produces) and rewrite
 # the same-length identity marker in both fixture slices so a successful formal preflight can
 # reach later security gates. The repository identity must still be the provisional
 # dev.<slug>.* namespace, and dev. -> com. keeps every marker the same length.
-git -C "$fixture_repo" tag -d release-0.1.0 >/dev/null
+git -C "$fixture_repo" tag -d release-0.4.0 >/dev/null
 for provisional in "$BRAND_APP_BUNDLE_ID" "$BRAND_AGENT_BUNDLE_ID" "$BRAND_MENU_BUNDLE_ID"; do
     case "$provisional" in
         "dev.$BRAND_SLUG".*) ;;
@@ -264,7 +264,7 @@ git -C "$fixture_repo" add packaging/macos/app-bundle-id.txt \
     packaging/macos/agent-bundle-id.txt packaging/macos/menu-bundle-id.txt \
     packaging/macos/brand.env
 git -C "$fixture_repo" commit -qm 'freeze fixture identities'
-git -C "$fixture_repo" tag v0.1.0
+git -C "$fixture_repo" tag v0.4.0
 
 formal_bundle="$work/output/formal/$app_bundle"
 mkdir -p -- "$(dirname -- "$formal_bundle")"
@@ -287,7 +287,7 @@ chmod 0755 "$formal_bundle/Contents/MacOS/$launcher_name" \
 env "${versions[@]}" \
     "$fixture_repo/packaging/macos/verify-bundle.sh" "$formal_bundle" >/dev/null
 if "$fixture_repo/packaging/macos/release-bundle.sh" \
-    --app "$formal_bundle" --version 0.1.0 --preflight-only \
+    --app "$formal_bundle" --version 0.4.0 --preflight-only \
     >/dev/null 2>"$work/team-unset.stderr"; then
     fail 'release preflight accepted an UNSET trusted Team ID'
 fi
@@ -297,9 +297,9 @@ grep -F 'trusted Team ID is UNSET' "$work/team-unset.stderr" >/dev/null ||
 printf 'ABCDE12345\nSECONDTEAM\n' >"$fixture_repo/packaging/macos/team-id.txt"
 git -C "$fixture_repo" add packaging/macos/team-id.txt
 git -C "$fixture_repo" commit -qm 'add malformed fixture Team ID'
-git -C "$fixture_repo" tag -f v0.1.0 >/dev/null
+git -C "$fixture_repo" tag -f v0.4.0 >/dev/null
 if "$fixture_repo/packaging/macos/release-bundle.sh" \
-    --app "$formal_bundle" --version 0.1.0 --preflight-only \
+    --app "$formal_bundle" --version 0.4.0 --preflight-only \
     >/dev/null 2>"$work/team-lines.stderr"; then
     fail 'release preflight accepted multiple trusted Team ID lines'
 fi
@@ -310,9 +310,9 @@ grep -F 'trusted Team ID manifest must contain exactly one line' \
 printf 'ABCDE12345\n' >"$fixture_repo/packaging/macos/team-id.txt"
 git -C "$fixture_repo" add packaging/macos/team-id.txt
 git -C "$fixture_repo" commit -qm 'freeze fixture Team ID'
-git -C "$fixture_repo" tag -f v0.1.0 >/dev/null
+git -C "$fixture_repo" tag -f v0.4.0 >/dev/null
 "$fixture_repo/packaging/macos/release-bundle.sh" \
-    --app "$formal_bundle" --version 0.1.0 --preflight-only >/dev/null
+    --app "$formal_bundle" --version 0.4.0 --preflight-only >/dev/null
 
 formal_signed="$work/output/formal-signed/$app_bundle"
 mkdir -p -- "$(dirname -- "$formal_signed")"
@@ -335,7 +335,7 @@ ditto --noqtn --noextattr --noacl "$formal_signed" "$formal_unsigned_host"
 /usr/bin/codesign --force --sign - --options runtime --timestamp=none \
     "$formal_signed" >/dev/null
 if "$fixture_repo/packaging/macos/verify-release.sh" \
-    --app "$formal_signed" --version 0.1.0 \
+    --app "$formal_signed" --version 0.4.0 \
     >/dev/null 2>"$work/trusted-team.stderr"; then
     fail 'release verifier accepted a candidate outside the trusted Team ID'
 fi
@@ -348,7 +348,7 @@ grep -F 'TeamIdentifier does not match ABCDE12345' "$work/trusted-team.stderr" >
 /usr/bin/codesign --force --sign - --options runtime --timestamp=none \
     "$formal_unsigned_host" >/dev/null
 if "$fixture_repo/packaging/macos/verify-release.sh" \
-    --app "$formal_unsigned_host" --version 0.1.0 \
+    --app "$formal_unsigned_host" --version 0.4.0 \
     >/dev/null 2>"$work/unsigned-host.stderr"; then
     fail 'release verifier accepted a host UI without its explicit signature'
 fi
@@ -361,67 +361,31 @@ mkdir -p -- "$(dirname -- "$formal_stripped_host")"
 ditto --noqtn --noextattr --noacl "$formal_signed" "$formal_stripped_host"
 /usr/bin/codesign --remove-signature "$formal_stripped_host/$host_ui_rel"
 if "$fixture_repo/packaging/macos/verify-release.sh" \
-    --app "$formal_stripped_host" --version 0.1.0 \
+    --app "$formal_stripped_host" --version 0.4.0 \
     >/dev/null 2>"$work/stripped-host.stderr"; then
     fail 'release verifier accepted a host UI whose signature was stripped after sealing'
 fi
 grep -F "$BRAND_PRODUCT_NAME host UI code signature is invalid" "$work/stripped-host.stderr" >/dev/null ||
     fail 'stripped host UI signature failed at the wrong gate'
 
-# Studio single-host release gate: a Studio bundle must sign Contents/MacOS/featherpost-studio
-# explicitly with hardened runtime + dev.featherpost.studio identifier; skipping it is caught.
-universal_fixture "$work/bin/featherpost-studio" "maild-ui-embedded:dev.featherpost.studio"
-studio_formal="$work/output/formal-studio/$app_bundle"
-env "${versions[@]}" \
-    "$fixture_repo/packaging/macos/build-bundle.sh" \
-        --launcher-bin "$formal_bundle/Contents/MacOS/$launcher_name" \
-        --agent-bin "$formal_agent/Contents/MacOS/$agent_name" \
-        --menu-bin "$formal_menu/Contents/MacOS/$menu_name" \
-        --ui-bin "$work/bin/$ui_name" \
-        --studio-bin "$work/bin/featherpost-studio" \
-        --output "$studio_formal" >/dev/null
-studio_payload_rel="Contents/Resources/frontends/dev.featherpost.studio"
-/usr/bin/codesign --force --sign - --options runtime --timestamp=none \
-    "$studio_formal/$ui_rel" >/dev/null
-/usr/bin/codesign --force --sign - --options runtime --timestamp=none \
-    "$studio_formal/$studio_payload_rel/Featherpost Studio.app" >/dev/null
-"$fixture_repo/packaging/macos/seal-recovery-payload.sh" "$studio_formal"
-/usr/bin/codesign --force --sign - --options runtime --timestamp=none \
-    "$studio_formal/$agent_rel" >/dev/null
-/usr/bin/codesign --force --sign - --options runtime --timestamp=none \
-    "$studio_formal/$menu_rel" >/dev/null
-/usr/bin/codesign --force --sign - --identifier "$ui_id" --options runtime \
-    --timestamp=none "$studio_formal/$host_ui_rel" >/dev/null
-# Leave host Studio with a plain linker-style ad hoc signature (no identifier / no runtime).
-/usr/bin/codesign --force --sign - "$studio_formal/Contents/MacOS/featherpost-studio" >/dev/null
-/usr/bin/codesign --force --sign - --options runtime --timestamp=none \
-    "$studio_formal" >/dev/null
-if "$fixture_repo/packaging/macos/verify-release.sh" \
-    --app "$studio_formal" --version 0.1.0 \
-    >/dev/null 2>"$work/unsigned-host-studio.stderr"; then
-    fail 'release verifier accepted a host Studio without its explicit signature'
-fi
-grep -F "$BRAND_PRODUCT_NAME host Studio" "$work/unsigned-host-studio.stderr" >/dev/null ||
-    fail 'host Studio missing explicit signature failed at the wrong gate'
-
-printf '[package]\nname = "maild-launcher"\nversion = "0.1.1"\nedition = "2021"\n' \
+printf '[package]\nname = "maild-launcher"\nversion = "0.4.1"\nedition = "2021"\n' \
     >"$fixture_repo/crates/maild-launcher/Cargo.toml"
 git -C "$fixture_repo" add crates/maild-launcher/Cargo.toml
 git -C "$fixture_repo" commit -qm 'drift launcher version'
-git -C "$fixture_repo" tag -f v0.1.0 >/dev/null
+git -C "$fixture_repo" tag -f v0.4.0 >/dev/null
 if "$fixture_repo/packaging/macos/release-bundle.sh" \
-    --app "$formal_bundle" --version 0.1.0 --preflight-only \
+    --app "$formal_bundle" --version 0.4.0 --preflight-only \
     >/dev/null 2>"$work/version-drift.stderr"; then
     fail 'release preflight accepted package version drift'
 fi
-grep -F 'package version does not match v0.1.0' "$work/version-drift.stderr" >/dev/null ||
+grep -F 'package version does not match v0.4.0' "$work/version-drift.stderr" >/dev/null ||
     fail 'package version drift failed at the wrong gate'
 
-printf '[package]\nname = "maild-launcher"\nversion = "0.1.0"\nedition = "2021"\n' \
+printf '[package]\nname = "maild-launcher"\nversion = "0.4.0"\nedition = "2021"\n' \
     >"$fixture_repo/crates/maild-launcher/Cargo.toml"
 git -C "$fixture_repo" add crates/maild-launcher/Cargo.toml
 git -C "$fixture_repo" commit -qm 'restore launcher version'
-git -C "$fixture_repo" tag -f v0.1.0 >/dev/null
+git -C "$fixture_repo" tag -f v0.4.0 >/dev/null
 
 credentials="$work/credentials"
 mkdir -m 0700 -- "$credentials"
@@ -431,7 +395,7 @@ chmod 0644 "$credentials/signing.keychain-db"
 chmod 0600 "$credentials/AuthKey_FIXTURE.p8"
 mkdir -m 0700 -- "$work/release-output"
 if "$fixture_repo/packaging/macos/release-bundle.sh" \
-    --app "$formal_bundle" --version 0.1.0 \
+    --app "$formal_bundle" --version 0.4.0 \
     --identity fixture \
     --keychain "$credentials/signing.keychain-db" \
     --notary-key "$credentials/AuthKey_FIXTURE.p8" \
@@ -448,7 +412,7 @@ grep -F 'signing keychain permissions must not allow group/other access' \
 chmod 0600 "$credentials/signing.keychain-db"
 ln -s -- "$credentials/AuthKey_FIXTURE.p8" "$credentials/notary-link.p8"
 if "$fixture_repo/packaging/macos/release-bundle.sh" \
-    --app "$formal_bundle" --version 0.1.0 \
+    --app "$formal_bundle" --version 0.4.0 \
     --identity fixture \
     --keychain "$credentials/signing.keychain-db" \
     --notary-key "$credentials/notary-link.p8" \
@@ -465,7 +429,7 @@ grep -F 'notary API key must not be a symbolic link' \
 mkdir -m 0700 -- "$work/release-real" "$work/release-real/output"
 ln -s -- "$work/release-real" "$work/release-link"
 if "$fixture_repo/packaging/macos/release-bundle.sh" \
-    --app "$formal_bundle" --version 0.1.0 \
+    --app "$formal_bundle" --version 0.4.0 \
     --identity fixture \
     --keychain "$credentials/signing.keychain-db" \
     --notary-key "$credentials/AuthKey_FIXTURE.p8" \

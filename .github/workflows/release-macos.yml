@@ -75,9 +75,10 @@ jobs:
           # Versions come from mise.toml (installed by mise-action above).
           node --version
           pnpm --version
-          pnpm --dir packages/maild-ui install --frozen-lockfile
-          pnpm --dir packages/maild-ui exec tsc --noEmit -p tsconfig.json
-          pnpm --dir packages/maild-ui test
+          pnpm install --frozen-lockfile
+          pnpm --dir packages/featherpost-studio typecheck
+          pnpm --dir packages/featherpost-studio test
+          pnpm --dir packages/featherpost-studio build
       - name: Build universal2 release candidate
         shell: bash
         run: |

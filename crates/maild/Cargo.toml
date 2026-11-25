@@ -1,6 +1,6 @@
 [package]
 name = "maild"
-version = "0.1.0"
+version = "0.4.0"
 edition = "2021"
 description = "maild 守护进程：loader（TOML 声明式配置）+ 配置装配"
 license = "MIT OR Apache-2.0"

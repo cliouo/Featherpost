@@ -21,7 +21,7 @@
 [cordis](https://github.com/cordiverse/cordis) 时空可组合性方法论的 Rust 移植，一切能力——收信、存储、
 规则、通知、前端、第三方服务商——都是可插拔、可热替换的插件。
 
-> 项目早期工作代号为 `maild`：Rust crate 与源码目录（`crates/maild*`、`packages/maild-ui`）仍沿用这个内部
+> 项目早期工作代号为 `maild`：Rust crate 与源码目录（`crates/maild*`）仍沿用这个内部
 > 名字，ADR-0001–0046 也以它书写。所有面向用户与操作系统的名字都来自根目录的
 > [`brand.toml`](brand.toml)，见 [品牌切换指南](docs/BRANDING.md)。
 
@@ -121,12 +121,12 @@ cargo run -p maild --bin featherpostctl -- --config featherpost.toml messages --
 cargo run -p maild --bin featherpostctl -- --config featherpost.toml account discover alice@qq.com
 ```
 
-默认 Tauri 界面在 `crates/maild-ui`（webview 在 `packages/maild-ui`）：
+默认 Tauri 界面（Featherpost Studio，`dev.featherpost.studio`）壳在 `crates/maild-ui`（webview 在 `packages/featherpost-studio`）：
 
 ```sh
-pnpm --dir packages/maild-ui install --frozen-lockfile
+pnpm install --frozen-lockfile
 cargo run -p maild-ui --example dev_stack     # 预置假数据的临时守护进程，打印 socket 路径
-pnpm --dir packages/maild-ui dev &
+pnpm --dir packages/featherpost-studio dev &
 cargo run -p maild-ui -- --socket <dev_stack 打印的路径>
 ```
 
@@ -177,9 +177,9 @@ crates/maild-client/    CLI 与桌面端共用的 JSON-RPC client、传输发现
 crates/maild-paths/     平台目录与配置发现契约
 crates/maild-app/       GUI 无关的连接 actor、视图状态与请求/通知协调
 crates/maild-launcher/  顶层原生启动器：默认配置、打开默认前端、原生修复与后台管理窗口
-crates/maild-ui/        默认 Tauri 前端壳（webview 在 packages/maild-ui）
+crates/maild-ui/        默认 Tauri 前端壳（Studio，dev.featherpost.studio）
 crates/maild-menu/      macOS 菜单栏 companion
-packages/maild-ui/      默认前端 webview（React + TypeScript + Vite，Vitest）
+packages/featherpost-studio/ 默认前端 webview（React + TypeScript + Vite，Vitest）
 plugins/nodeseek-email/ 仓库内第三方 transport provider 插件示例
 packaging/macos/        App bundle 构建、验证、Preview DMG、安装生命周期与签名/公证发布门禁
 docs/                   文档索引、架构决策（ADR）、协议、运维、测试证据与路线图
@@ -196,7 +196,7 @@ docs/                   文档索引、架构决策（ADR）、协议、运维�
 - [docs/testing/README.md](docs/testing/README.md) — 真实服务、平台兼容与资源基准证据
 - [docs/BRANDING.md](docs/BRANDING.md) — 品牌切换指南
 - [docs/decisions/](docs/decisions/) — 架构决策记录，最新为
-  [ADR-0047 品牌解耦与开源就绪](docs/decisions/0047-decoupled-brand-and-open-source-readiness.md)
+  [ADR-0049 退役原版界面、以 Studio 为唯一内置前端](docs/decisions/0049-retire-legacy-ui-studio-sole-builtin.md)
 
 ## 致谢
 

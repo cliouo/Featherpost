@@ -484,7 +484,7 @@ SQLite 邮件总量、单封原始邮件大小和长期日志目前没有全局�
 ```sh
 bash scripts/sync-brand.sh --check        # brand.toml 与全部派生文件一致（需 python3 ≥ 3.11）
 pnpm install --frozen-lockfile
-pnpm --dir packages/maild-ui typecheck && pnpm --dir packages/maild-ui test && pnpm --dir packages/maild-ui build
+pnpm --dir packages/featherpost-studio typecheck && pnpm --dir packages/featherpost-studio test && pnpm --dir packages/featherpost-studio build
 CARGO_INCREMENTAL=0 cargo test --workspace --all-targets --locked
 CARGO_INCREMENTAL=0 cargo clippy --workspace --all-targets --locked -- -D warnings
 CARGO_INCREMENTAL=0 cargo clippy --workspace --all-targets --target x86_64-pc-windows-gnu --locked -- -D warnings

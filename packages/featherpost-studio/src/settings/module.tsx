@@ -6,23 +6,23 @@ import {
   permissionLabel,
   uiLocale,
   useUiLocale,
-} from "../../../maild-ui/src/i18n";
+} from "../i18n";
 import { useEffect, useState } from "react";
-import { SettingsController } from "../../../maild-ui/src/settings/controller";
+import { SettingsController } from "./controller";
 import { Accounts } from "./Accounts";
-import { Addresses } from "../../../maild-ui/src/settings/Addresses";
-import { NetworkProxy } from "../../../maild-ui/src/settings/NetworkProxy";
-import { Notifications } from "../../../maild-ui/src/settings/Notifications";
-import { Extensions as ManagedExtensions } from "../../../maild-ui/src/settings/Extensions";
-import { Dialog } from "../../../maild-ui/src/mailbox/Dialog";
+import { Addresses } from "./Addresses";
+import { NetworkProxy } from "./NetworkProxy";
+import { Notifications } from "./Notifications";
+import { Extensions as ManagedExtensions } from "./Extensions";
+import { Dialog } from "../mailbox/Dialog";
 
-import type { Host } from "../../../maild-ui/src/host/host";
-import { useExternal, useStore } from "../../../maild-ui/src/host/hooks";
-import type { Bundle, ViewProps } from "../../../maild-ui/src/host/types";
+import type { Host } from "../host/host";
+import { useExternal, useStore } from "../host/hooks";
+import type { Bundle, ViewProps } from "../host/types";
 import { Appearance } from "./Appearance";
-import { LanguageController } from "../../../maild-ui/src/settings/language";
-import { Icon } from "../../../maild-ui/src/app/Icon";
-import { BRAND } from "../../../maild-ui/src/brand";
+import { LanguageController } from "./language";
+import { Icon } from "../app/Icon";
+import { BRAND } from "../brand";
 
 export const SETTINGS_VIEW = "maild.settings.page";
 

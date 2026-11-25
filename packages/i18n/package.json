@@ -1,6 +1,6 @@
 {
   "name": "@featherpost/i18n",
-  "version": "0.1.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "description": "默认前端（maild-ui 与 featherpost-studio）共用的界面消息与语言协商（ADR-0048 决策 8）",

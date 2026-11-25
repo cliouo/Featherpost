@@ -39,7 +39,7 @@ fixture "$work/bin/$BRAND_UI_BIN" "maild-ui-embedded:$BRAND_UI_BUNDLE_ID"
 
 bundle="$work/output/$BRAND_APP_BUNDLE"
 HOME="$work/home" \
-    env "${BRAND_ENV_PREFIX}_BUNDLE_SHORT_VERSION=0.1.0" \
+    env "${BRAND_ENV_PREFIX}_BUNDLE_SHORT_VERSION=0.4.0" \
     "${BRAND_ENV_PREFIX}_BUNDLE_BUILD_VERSION=1" \
     "$script_dir/build-bundle.sh" \
         --launcher-bin "$work/bin/$BRAND_LAUNCHER_BIN" \
@@ -47,7 +47,7 @@ HOME="$work/home" \
         --output "$bundle" >/dev/null
 
 HOME="$work/home" \
-    env "${BRAND_ENV_PREFIX}_BUNDLE_SHORT_VERSION=0.1.0" \
+    env "${BRAND_ENV_PREFIX}_BUNDLE_SHORT_VERSION=0.4.0" \
     "${BRAND_ENV_PREFIX}_BUNDLE_BUILD_VERSION=1" \
     "$script_dir/verify-bundle.sh" "$bundle" >/dev/null
 

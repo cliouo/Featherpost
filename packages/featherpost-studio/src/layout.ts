@@ -2,7 +2,7 @@ import { m } from "@featherpost/i18n/messages";
 import {
   queryOf,
   type MailboxState,
-} from "../../maild-ui/src/mailbox/controller";
+} from "./mailbox/controller";
 
 export type StudioView = "standard" | "unified";
 type ViewStorage = Pick<Storage, "getItem" | "setItem">;

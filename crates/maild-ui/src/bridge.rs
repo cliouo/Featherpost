@@ -28,10 +28,7 @@ use crate::documents::{Document, DocumentIdentity, DocumentStore, ProtocolBase};
 use crate::html::{self, LinkKind};
 
 /// 本前端在受管目录与 manifest 里的 id（`package/frontend.toml`），来自 `brand.toml`。
-#[cfg(not(feature = "studio"))]
 pub const FRONTEND_ID: &str = maild_brand::BUNDLED_FRONTEND_ID;
-#[cfg(feature = "studio")]
-pub const FRONTEND_ID: &str = "dev.featherpost.studio";
 /// 连接快照事件；载荷是 [`UiSnapshot`]。
 pub const STATE_EVENT: &str = "maild://state";
 /// 导航意图事件；载荷是 `OpenIntent`（ADR-0014 seam 的消费侧）。
@@ -142,7 +139,7 @@ struct CompatRecord {
 /// webview 能看到的全部错误信息。`message` 是固定的中文文案，不是 daemon 原文。
 ///
 /// ADR-0048 决策 3：`reason` 是稳定的原因码（snake_case），webview 据此按当前界面语言成文
-/// （`packages/maild-ui/src/bridge/errors.ts`）；`message` 只作诊断与兜底，不是协议契约。
+/// （`packages/featherpost-studio/src/bridge/errors.ts`）；`message` 只作诊断与兜底，不是协议契约。
 /// 新增 reason 时同步在 webview 的映射表与两种语言的消息里登记，前端测试会核对。
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct UiError {

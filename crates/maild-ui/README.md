@@ -1,20 +1,20 @@
 # maild-ui
 
-默认前端的 Tauri 后端（ADR-0024 / ADR-0031）。产品名、前端 id、CLI 名与阅读器协议名全部来自仓库根的
-`brand.toml`（Rust 侧经 `maild_brand::*`，webview 侧经 `packages/maild-ui/src/brand.ts`），源码里不写死。webview 侧在 `packages/maild-ui`。
+默认前端（Featherpost Studio）的 Tauri 后端（ADR-0024 / ADR-0031 / ADR-0049）。产品名、前端 id、CLI 名与阅读器协议名全部来自仓库根的
+`brand.toml`（Rust 侧经 `maild_brand::*`，webview 侧经 `brand.ts`），源码里不写死。webview 入口在 `packages/featherpost-studio`。
 
 ## 形态
 
 | 形态 | 命令 | 说明 |
 |---|---|---|
-| 开发 | `pnpm --dir packages/maild-ui dev` + `cargo run -p maild-ui` | 从 Vite 开发服务器加载，HMR |
-| 内嵌 | `pnpm --dir packages/maild-ui build` + `cargo run -p maild-ui --features embedded` | 产物编进二进制；交付形态 |
+| 开发 | `pnpm --dir packages/featherpost-studio dev` + `cargo run -p maild-ui` | 从 Vite 开发服务器加载，HMR |
+| 内嵌 | `pnpm --dir packages/featherpost-studio build` + `cargo run -p maild-ui --features embedded` | 产物编进二进制；交付形态 |
 
 `cargo test --workspace` 编译的是默认形态，**不需要 Node**。
 
 ## 身份
 
-壳以 `frontend:<bundled_frontend_id>`（当前为 `frontend:dev.featherpost.ui`）主体连接 daemon，bootstrap 之后不持有 `user` 连接（ADR-0030 决策 6）。
+壳以 `frontend:<bundled_frontend_id>`（当前为 `frontend:dev.featherpost.studio`）主体连接 daemon，bootstrap 之后不持有 `user` 连接（ADR-0030 决策 6）。
 它必须先被 daemon 认识：
 
 ```sh

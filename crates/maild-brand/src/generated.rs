@@ -19,7 +19,7 @@ pub const AGENT_BIN: &str = "featherpost-agent";
 /// Menu-bar companion binary.
 pub const MENU_BIN: &str = "featherpost-menu";
 /// Default Tauri frontend binary.
-pub const UI_BIN: &str = "featherpost-ui";
+pub const UI_BIN: &str = "featherpost-studio";
 /// Main macOS app bundle.
 pub const APP_BUNDLE_NAME: &str = "Featherpost.app";
 /// Nested Agent bundle.
@@ -27,7 +27,7 @@ pub const AGENT_BUNDLE_NAME: &str = "Featherpost Agent.app";
 /// Nested menu-bar bundle.
 pub const MENU_BUNDLE_NAME: &str = "Featherpost Menu.app";
 /// Nested default frontend bundle.
-pub const UI_BUNDLE_NAME: &str = "Featherpost UI.app";
+pub const UI_BUNDLE_NAME: &str = "Featherpost Studio.app";
 /// Icon file stem (`<ICON_NAME>.icns`).
 pub const ICON_NAME: &str = "Featherpost";
 /// Main app bundle identifier.
@@ -37,9 +37,9 @@ pub const AGENT_BUNDLE_ID: &str = "dev.featherpost.agent";
 /// Menu-bar bundle identifier.
 pub const MENU_BUNDLE_ID: &str = "dev.featherpost.menu";
 /// Default frontend bundle identifier.
-pub const UI_BUNDLE_ID: &str = "dev.featherpost.ui";
+pub const UI_BUNDLE_ID: &str = "dev.featherpost.studio";
 /// Frontend package id of the bundled default UI (= `UI_BUNDLE_ID`).
-pub const BUNDLED_FRONTEND_ID: &str = "dev.featherpost.ui";
+pub const BUNDLED_FRONTEND_ID: &str = "dev.featherpost.studio";
 /// Isolated mail reader URI scheme.
 pub const URI_SCHEME: &str = "featherpost-mail";
 /// Keychain service holding account credentials.
@@ -127,6 +127,6 @@ macro_rules! menu_id_contract {
 #[macro_export]
 macro_rules! ui_embedded_contract {
     () => {
-        "\0maild-ui-embedded:dev.featherpost.ui\0"
+        "\0maild-ui-embedded:dev.featherpost.studio\0"
     };
 }

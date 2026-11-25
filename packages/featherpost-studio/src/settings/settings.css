@@ -1,4 +1,4 @@
-/* Studio owns its settings surface. Legacy dev.featherpost.ui is unchanged. */
+/* Studio settings surface. */
 body[data-studio-settings] {
   overflow: hidden;
 }

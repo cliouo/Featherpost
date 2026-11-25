@@ -183,7 +183,7 @@ pub(crate) fn main_window_pid_for(frontend_id: &str) -> Option<Option<i32>> {
     let paths = maild_paths::AppPaths::discover().ok()?;
     find_main_window_pid(
         &paths.runtime_dir,
-        frontend_id == maild::recovery::STUDIO_FRONTEND_ID,
+        frontend_id == maild::recovery::BUNDLED_FRONTEND_ID,
     )
 }
 

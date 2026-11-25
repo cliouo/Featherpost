@@ -1,10 +1,10 @@
 import { m } from "@featherpost/i18n/messages";
-import { folderLabel, uiLocale } from "../../maild-ui/src/i18n";
-import type { UiFolder } from "../../maild-ui/src/bridge/types";
-import type { MailboxController } from "../../maild-ui/src/mailbox/controller";
-import { queryOf } from "../../maild-ui/src/mailbox/controller";
-import type { Scope } from "../../maild-ui/src/mailbox/types";
-import type { IconName } from "../../maild-ui/src/host/types";
+import { folderLabel, uiLocale } from "./i18n";
+import type { UiFolder } from "./bridge/types";
+import type { MailboxController } from "./mailbox/controller";
+import { queryOf } from "./mailbox/controller";
+import type { Scope } from "./mailbox/types";
+import type { IconName } from "./host/types";
 
 export interface FolderNode {
   folder: UiFolder;

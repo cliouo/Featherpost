@@ -2,7 +2,7 @@
   "name": "featherpost",
   "private": true,
   "license": "MIT OR Apache-2.0",
-  "description": "Featherpost workspace root: the default frontend webview lives in packages/maild-ui",
+  "description": "Featherpost workspace root: the default frontend webview lives in packages/featherpost-studio",
   "scripts": {
     "i18n:compile": "pnpm --dir packages/i18n compile",
     "i18n:lint": "pnpm --dir packages/i18n lint",
@@ -10,11 +10,12 @@
     "i18n:watch": "pnpm --dir packages/i18n watch",
     "studio:dev": "pnpm --dir packages/featherpost-studio dev",
     "studio:build": "pnpm --dir packages/featherpost-studio build",
-    "studio:macos": "bash packaging/macos/build-studio.sh",
-    "ui:dev": "pnpm --dir packages/maild-ui dev",
-    "ui:build": "pnpm --dir packages/maild-ui build",
-    "ui:test": "pnpm --dir packages/maild-ui test",
-    "ui:typecheck": "pnpm --dir packages/maild-ui typecheck"
+    "studio:test": "pnpm --dir packages/featherpost-studio test",
+    "studio:typecheck": "pnpm --dir packages/featherpost-studio typecheck",
+    "ui:dev": "pnpm --dir packages/featherpost-studio dev",
+    "ui:build": "pnpm --dir packages/featherpost-studio build",
+    "ui:test": "pnpm --dir packages/featherpost-studio test",
+    "ui:typecheck": "pnpm --dir packages/featherpost-studio typecheck"
   },
   "packageManager": "pnpm@11.21.0"
 }

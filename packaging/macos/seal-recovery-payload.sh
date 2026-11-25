@@ -16,25 +16,17 @@ script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
 
 [ "$#" -eq 1 ] || die "usage: seal-recovery-payload.sh PATH/$BRAND_APP_BUNDLE"
 bundle=$1
-. "$script_dir/studio-payload.sh"
 [ "$(basename -- "$bundle")" = "$BRAND_APP_BUNDLE" ] || die "invalid bundle name"
 [ ! -e "$bundle/Contents/_CodeSignature" ] || die "outer app already signed"
-for id in "$BRAND_UI_BUNDLE_ID" "$STUDIO_FRONTEND_ID"; do
-    payload="$bundle/Contents/Resources/frontends/$id"
-    if [ "$id" = "$STUDIO_FRONTEND_ID" ]; then
-        [ -e "$payload" ] || [ -L "$payload" ] || continue
-        executable="$payload/$STUDIO_APP/Contents/MacOS/$STUDIO_BIN"
-    else
-        executable="$payload/$BRAND_UI_BUNDLE/Contents/MacOS/$BRAND_UI_BIN"
-    fi
-    checksum="$payload/recovery.sha256"
-    [ ! -L "$payload" ] && [ -d "$payload" ] || die "invalid payload: $payload"
-    [ ! -L "$executable" ] && [ -f "$executable" ] || die "missing executable: $executable"
-    [ ! -L "$checksum" ] || die "checksum must not be a symbolic link"
-    digest=$(/usr/bin/shasum -a 256 "$executable" | awk '{print $1}')
-    printf '%s\n' "$digest" | LC_ALL=C grep -Eq '^[0-9a-f]{64}$' || die 'cannot compute digest'
-    temporary=$(mktemp "$payload/.recovery.sha256.XXXXXX") || die 'cannot stage checksum'
-    printf '%s\n' "$digest" >"$temporary"
-    chmod 0644 "$temporary"
-    mv -f -- "$temporary" "$checksum"
-done
+payload="$bundle/Contents/Resources/frontends/$BRAND_UI_BUNDLE_ID"
+executable="$payload/$BRAND_UI_BUNDLE/Contents/MacOS/$BRAND_UI_BIN"
+checksum="$payload/recovery.sha256"
+[ ! -L "$payload" ] && [ -d "$payload" ] || die "invalid payload: $payload"
+[ ! -L "$executable" ] && [ -f "$executable" ] || die "missing executable: $executable"
+[ ! -L "$checksum" ] || die "checksum must not be a symbolic link"
+digest=$(/usr/bin/shasum -a 256 "$executable" | awk '{print $1}')
+printf '%s\n' "$digest" | LC_ALL=C grep -Eq '^[0-9a-f]{64}$' || die 'cannot compute digest'
+temporary=$(mktemp "$payload/.recovery.sha256.XXXXXX") || die 'cannot stage checksum'
+printf '%s\n' "$digest" >"$temporary"
+chmod 0644 "$temporary"
+mv -f -- "$temporary" "$checksum"

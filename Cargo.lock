@@ -1160,7 +1160,7 @@ dependencies = [
 
 [[package]]
 name = "cordis"
-version = "0.1.0"
+version = "0.4.0"
 dependencies = [
  "futures",
 ]
@@ -3429,7 +3429,7 @@ checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
 name = "maild"
-version = "0.1.0"
+version = "0.4.0"
 dependencies = [
  "async-imap",
  "axum",
@@ -3474,7 +3474,7 @@ dependencies = [
 
 [[package]]
 name = "maild-app"
-version = "0.1.0"
+version = "0.4.0"
 dependencies = [
  "maild-brand",
  "maild-client",
@@ -3486,11 +3486,11 @@ dependencies = [
 
 [[package]]
 name = "maild-brand"
-version = "0.1.0"
+version = "0.4.0"
 
 [[package]]
 name = "maild-client"
-version = "0.1.0"
+version = "0.4.0"
 dependencies = [
  "base64 0.22.1",
  "getrandom 0.4.3",
@@ -3507,11 +3507,11 @@ dependencies = [
 
 [[package]]
 name = "maild-l10n"
-version = "0.1.0"
+version = "0.4.0"
 
 [[package]]
 name = "maild-launcher"
-version = "0.1.0"
+version = "0.4.0"
 dependencies = [
  "block2 0.6.2",
  "clap",
@@ -3533,7 +3533,7 @@ dependencies = [
 
 [[package]]
 name = "maild-menu"
-version = "0.1.0"
+version = "0.4.0"
 dependencies = [
  "maild-brand",
  "maild-client",
@@ -3546,7 +3546,7 @@ dependencies = [
 
 [[package]]
 name = "maild-paths"
-version = "0.1.0"
+version = "0.4.0"
 dependencies = [
  "directories",
  "maild-brand",
@@ -3583,7 +3583,7 @@ dependencies = [
 
 [[package]]
 name = "maild-proxy"
-version = "0.1.0"
+version = "0.4.0"
 dependencies = [
  "base64 0.22.1",
  "core-foundation 0.10.1",
@@ -3608,7 +3608,7 @@ dependencies = [
 
 [[package]]
 name = "maild-ui"
-version = "0.1.0"
+version = "0.4.0"
 dependencies = [
  "base64 0.22.1",
  "block2 0.6.2",

@@ -1,32 +1,30 @@
 # Featherpost Studio
 
-A new React presentation for Featherpost, installed as `dev.featherpost.studio` alongside the original `dev.featherpost.ui`. The original UI, recovery payload, and default macOS app build remain unchanged.
+The sole built-in React frontend for Featherpost (`dev.featherpost.studio`, see [ADR-0049](../../docs/decisions/0049-retire-legacy-ui-studio-sole-builtin.md)). Third-party pluggable frontends remain supported through the managed frontend catalog.
 
-Studio owns the shell, navigation, inbox, search, message list, reading layout, toolbar, and onboarding. It shares the existing typed daemon bridge, state controllers, secure HTML document renderer, account forms, draft editor, and package-management controls. This is not a rewrite of the mail engine or its authorization boundary.
+Studio owns the shell, navigation, inbox, search, message list, reading layout, toolbar, onboarding, settings, compose, and typed daemon bridge without changing the mail engine or its authorization boundary.
 
-## Install on macOS
+## Build on macOS
 
-Open the existing Featherpost app, unpack the universal ZIP, and double-click **安装 Studio.command**. The installer registers the frontend, switches the default only after installation succeeds, then opens the managed application. **切回原版.command** restores the original default without removing either frontend or touching mail data.
+Studio is built and bundled directly into `Featherpost.app` (single-Dock host + recovery payload):
 
 ```sh
 pnpm install --frozen-lockfile
-bash packaging/macos/build-studio.sh
+packaging/macos/build-universal.sh --output "$PWD/dist/macos/Featherpost.app"
 ```
-
-Output: `dist/studio/featherpost-studio-macos-universal.zip`. Requires the repository-pinned Rust toolchain and both macOS targets. The archive includes the CLI, which older DMGs do not provide. It is ad-hoc signed, not notarized.
 
 ## Development
 
 ```sh
 pnpm --dir packages/featherpost-studio dev
-# In another terminal, use the existing daemon after registering the Studio package:
-TAURI_CONFIG="$(cat crates/maild-ui/tauri.studio.conf.json)" cargo run -p maild-ui --features studio
+# In another terminal, use the existing daemon after registering crates/maild-ui/package:
+cargo run -p maild-ui
 ```
 
-For an isolated seeded daemon, run the following, then pass its printed `--socket` argument to the UI command above. Production data is not required. The fixture includes offline cached mail and a local fake SMTP/IMAP account.
+For an isolated seeded daemon, run the following, then pass its printed `--socket` argument to `cargo run -p maild-ui -- --socket <path>`. Production data is not required. The fixture includes offline cached mail and a local fake SMTP/IMAP account.
 
 ```sh
-TAURI_CONFIG="$(cat crates/maild-ui/tauri.studio.conf.json)" cargo run -p maild-ui --example dev_stack --features studio
+cargo run -p maild-ui --example dev_stack
 ```
 
 ## Design reference

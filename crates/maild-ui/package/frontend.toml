@@ -9,10 +9,10 @@
 #   <cli_ctl> plugin install --frontend crates/maild-ui/package
 schema_version = 3
 protocol_version = 1
-id = "dev.featherpost.ui"
+id = "dev.featherpost.studio"
 name = "Featherpost"
 description = "Read, write and organize your mail"
-version = "0.1.0"
+version = "0.4.0"
 lifecycle = "independent"
 capabilities = ["inbox", "message", "compose", "settings", "background"]
 # ADR-0030 的授权词。每一个都对应「设置」里用户能看见的一段功能；少一个那段就是灰的，

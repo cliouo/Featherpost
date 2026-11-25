@@ -1,12 +1,13 @@
 {
   "name": "@featherpost/studio",
-  "version": "0.1.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "pnpm --dir ../i18n compile && vite --host 127.0.0.1 --port 1421 --strictPort",
-    "build": "pnpm --dir ../i18n compile && tsc --noEmit && vite build",
-    "typecheck": "pnpm --dir ../i18n compile && tsc --noEmit"
+    "build": "pnpm --dir ../i18n compile && tsc --noEmit -p tsconfig.json && vite build",
+    "typecheck": "pnpm --dir ../i18n compile && tsc --noEmit -p tsconfig.json",
+    "test": "pnpm --dir ../i18n compile && vitest run"
   },
   "dependencies": {
     "@featherpost/i18n": "workspace:*",
@@ -21,6 +22,7 @@
     "@types/react-dom": "^19.1.9",
     "@vitejs/plugin-react": "^5.0.3",
     "typescript": "^5.9.2",
-    "vite": "^7.1.5"
+    "vite": "^7.1.5",
+    "vitest": "^3.2.4"
   }
 }
