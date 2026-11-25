@@ -465,27 +465,29 @@ fi
 plutil -replace CFBundleVersion -string "$build_version_value" "$agent_plist"
 "$packaging_dir/verify-bundle.sh" "$bundle" >/dev/null
 
-# ADR-0048 decision 8: the UI bundle declares both UI languages, falling back to zh-Hans.
-ui_plist="$bundle/$payload_rel/$BRAND_UI_BUNDLE/Contents/Info.plist"
-[ "$(plutil -extract CFBundleLocalizations json -o - "$ui_plist")" = '["en","zh-Hans"]' ] ||
-    fail 'generated UI bundle does not declare en and zh-Hans'
-[ "$(plutil -extract CFBundleDevelopmentRegion raw "$ui_plist")" = zh-Hans ] ||
-    fail 'generated UI bundle does not fall back to zh-Hans'
-plutil -replace CFBundleLocalizations -json '["zh-Hans"]' "$ui_plist"
-if "$packaging_dir/verify-bundle.sh" "$bundle" >/dev/null 2>&1; then
-    fail 'verifier accepted a UI bundle without the en localization'
-fi
-plutil -remove CFBundleLocalizations "$ui_plist"
-if "$packaging_dir/verify-bundle.sh" "$bundle" >/dev/null 2>&1; then
-    fail 'verifier accepted a UI bundle without CFBundleLocalizations'
-fi
-plutil -insert CFBundleLocalizations -json '["en","zh-Hans"]' "$ui_plist"
-plutil -replace CFBundleDevelopmentRegion -string en "$ui_plist"
-if "$packaging_dir/verify-bundle.sh" "$bundle" >/dev/null 2>&1; then
-    fail 'verifier accepted a UI bundle whose development region is not zh-Hans'
-fi
-plutil -replace CFBundleDevelopmentRegion -string zh-Hans "$ui_plist"
-"$packaging_dir/verify-bundle.sh" "$bundle" >/dev/null
+# ADR-0048 decision 8: both the top-level app (which hosts UI/Studio in place) and the UI bundle
+# declare both UI languages, falling back to zh-Hans.
+for localized_plist in "$main_plist" "$bundle/$payload_rel/$BRAND_UI_BUNDLE/Contents/Info.plist"; do
+    [ "$(plutil -extract CFBundleLocalizations json -o - "$localized_plist")" = '["en","zh-Hans"]' ] ||
+        fail "generated plist does not declare en and zh-Hans: $localized_plist"
+    [ "$(plutil -extract CFBundleDevelopmentRegion raw "$localized_plist")" = zh-Hans ] ||
+        fail "generated plist does not fall back to zh-Hans: $localized_plist"
+    plutil -replace CFBundleLocalizations -json '["zh-Hans"]' "$localized_plist"
+    if "$packaging_dir/verify-bundle.sh" "$bundle" >/dev/null 2>&1; then
+        fail "verifier accepted a plist without the en localization: $localized_plist"
+    fi
+    plutil -remove CFBundleLocalizations "$localized_plist"
+    if "$packaging_dir/verify-bundle.sh" "$bundle" >/dev/null 2>&1; then
+        fail "verifier accepted a plist without CFBundleLocalizations: $localized_plist"
+    fi
+    plutil -insert CFBundleLocalizations -json '["en","zh-Hans"]' "$localized_plist"
+    plutil -replace CFBundleDevelopmentRegion -string en "$localized_plist"
+    if "$packaging_dir/verify-bundle.sh" "$bundle" >/dev/null 2>&1; then
+        fail "verifier accepted a plist whose development region is not zh-Hans: $localized_plist"
+    fi
+    plutil -replace CFBundleDevelopmentRegion -string zh-Hans "$localized_plist"
+    "$packaging_dir/verify-bundle.sh" "$bundle" >/dev/null
+done
 
 # Rebrand without touching a script: a copy of packaging/macos with another brand.env (what
 # `scripts/sync-brand.sh` writes after a brand.toml edit) must build and verify a bundle whose
@@ -582,8 +584,49 @@ fixture "$work/bin/featherpost-studio" 'maild-ui-embedded:dev.featherpost.studio
 "${unset_versions[@]}" "$packaging_dir/verify-bundle.sh" "$studio_bundle" >/dev/null
 studio_payload="$studio_bundle/Contents/Resources/frontends/dev.featherpost.studio"
 studio_exe="$studio_payload/Featherpost Studio.app/Contents/MacOS/featherpost-studio"
+host_studio="$studio_bundle/Contents/MacOS/featherpost-studio"
 [ -f "$studio_bundle/$payload_rel/frontend.toml" ] || fail 'Studio displaced legacy recovery'
 cmp "$work/bin/featherpost-studio" "$studio_exe" || fail 'Studio executable changed during unsigned packaging'
+cmp "$work/bin/featherpost-studio" "$host_studio" || fail 'single-host Studio executable was not copied byte-for-byte'
+[ "$(stat -f '%Lp' "$host_studio")" = 755 ] || fail 'single-host Studio executable is not 0755'
+# A bundle without a Studio payload must not carry a stray single-host Studio executable.
+cp -X -- "$work/bin/featherpost-studio" "$bundle/Contents/MacOS/featherpost-studio"
+chmod 0755 "$bundle/Contents/MacOS/featherpost-studio"
+if "$packaging_dir/verify-bundle.sh" "$bundle" >/dev/null 2>&1; then
+    fail 'verifier accepted a stray Contents/MacOS/featherpost-studio without Studio payload'
+fi
+rm -- "$bundle/Contents/MacOS/featherpost-studio"
+# Single-host Studio: missing, symlinked, non-executable, wrong-identity or dev-form binaries are rejected.
+cp -X -- "$host_studio" "$work/host-studio-original"
+rm -- "$host_studio"
+if "${unset_versions[@]}" "$packaging_dir/verify-bundle.sh" "$studio_bundle" >/dev/null 2>&1; then
+    fail 'verifier accepted a Studio bundle without Contents/MacOS/featherpost-studio'
+fi
+cp -X -- "$work/bin/$ui_name" "$host_studio"
+chmod 0755 "$host_studio"
+if "${unset_versions[@]}" "$packaging_dir/verify-bundle.sh" "$studio_bundle" >/dev/null 2>&1; then
+    fail 'verifier accepted legacy UI binary at Contents/MacOS/featherpost-studio'
+fi
+cp -X -- "$work/bin/$ui_name-dev-form" "$host_studio"
+chmod 0755 "$host_studio"
+if "${unset_versions[@]}" "$packaging_dir/verify-bundle.sh" "$studio_bundle" >/dev/null 2>"$work/host-studio-dev.stderr"; then
+    fail 'verifier accepted non-embedded Contents/MacOS/featherpost-studio'
+fi
+grep -F 'Studio (host)' "$work/host-studio-dev.stderr" >/dev/null ||
+    fail 'non-embedded host Studio failed at the wrong gate'
+rm -- "$host_studio"
+ln -s -- "../Resources/frontends/dev.featherpost.studio/Featherpost Studio.app/Contents/MacOS/featherpost-studio" "$host_studio"
+if "${unset_versions[@]}" "$packaging_dir/verify-bundle.sh" "$studio_bundle" >/dev/null 2>&1; then
+    fail 'verifier accepted a symlinked Contents/MacOS/featherpost-studio'
+fi
+rm -- "$host_studio"
+cp -X -- "$work/host-studio-original" "$host_studio"
+chmod 0644 "$host_studio"
+if "${unset_versions[@]}" "$packaging_dir/verify-bundle.sh" "$studio_bundle" >/dev/null 2>&1; then
+    fail 'verifier accepted a non-executable Contents/MacOS/featherpost-studio'
+fi
+chmod 0755 "$host_studio"
+"${unset_versions[@]}" "$packaging_dir/verify-bundle.sh" "$studio_bundle" >/dev/null
 if "${unset_versions[@]}" "$packaging_dir/build-bundle.sh" \
     --launcher-bin "$work/bin/$launcher_name" --agent-bin "$work/bin/$agent_name" \
     --studio-bin "$work/bin/$ui_name" --output "$work/output/wrong-studio/$BRAND_APP_BUNDLE" \

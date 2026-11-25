@@ -20,7 +20,7 @@ use crate::agent_lifecycle::AgentLifecycleLock;
 use crate::store::{DatabaseLock, StoreConfig};
 
 pub const BUNDLED_FRONTEND_ID: &str = maild_brand::BUNDLED_FRONTEND_ID;
-pub const STUDIO_FRONTEND_ID: &str = "dev.featherpost.studio";
+pub const STUDIO_FRONTEND_ID: &str = maild_client::STUDIO_FRONTEND_ID;
 
 #[derive(Clone, Copy)]
 pub(crate) struct BundledIdentity {
@@ -36,7 +36,7 @@ pub(crate) const LEGACY_PAYLOAD: BundledIdentity = BundledIdentity {
 pub(crate) const STUDIO_PAYLOAD: BundledIdentity = BundledIdentity {
     id: STUDIO_FRONTEND_ID,
     app: "Featherpost Studio.app",
-    binary: "featherpost-studio",
+    binary: maild_client::STUDIO_BIN,
 };
 const STATE: &str = ".default.json";
 const BACKUPS: &str = ".repair-backups";

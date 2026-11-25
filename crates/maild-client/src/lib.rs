@@ -60,10 +60,14 @@ pub const LEGACY_EGUI_FRONTEND: &str = "builtin-egui";
 pub const BUILTIN_RECOVERY_FRONTEND: &str = "builtin-repair";
 /// The bundled Tauri frontend, installed and managed like any other frontend package.
 pub const DEFAULT_FRONTEND: &str = maild_brand::BUNDLED_FRONTEND_ID;
+/// The bundled Studio frontend package identifier.
+pub const STUDIO_FRONTEND_ID: &str = "dev.featherpost.studio";
+/// The bundled Studio frontend executable name (in-place and standalone).
+pub const STUDIO_BIN: &str = "featherpost-studio";
 mod native_recovery;
 pub use native_recovery::{
-    claim_main_ui, native_child_command, open_native_recovery, running_main_ui, system_home,
-    MainUiClaim, MainUiLock, NativeAppLayout, MAIN_UI_LOCK,
+    claim_main_ui, configured_default_frontend, native_child_command, open_native_recovery,
+    running_main_ui, system_home, MainUiClaim, MainUiLock, NativeAppLayout, MAIN_UI_LOCK,
 };
 
 pub fn is_builtin_frontend(id: &str) -> bool {

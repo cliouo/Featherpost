@@ -3533,7 +3533,7 @@ async fn resync_builtin_frontend(
     tokio::task::spawn_blocking(move || {
         let _transaction = transaction;
         let _directory_lease = directory_lease;
-        let outcome = match source.refresh(&root) {
+        let legacy_outcome = match source.refresh(&root) {
             Ok(outcome) => outcome,
             Err(error) => {
                 // A failure past the backup rename can leave the package missing on disk; never
@@ -3542,16 +3542,52 @@ async fn resync_builtin_frontend(
                 return Err(transaction_error(error));
             }
         };
-        let replaced = !matches!(
-            outcome,
+        let legacy_replaced = !matches!(
+            legacy_outcome,
             crate::recovery::RefreshOutcome::Absent | crate::recovery::RefreshOutcome::Kept
         );
+        let mut ids = vec![crate::recovery::BUNDLED_FRONTEND_ID];
+        let mut replaced_ids = Vec::new();
+        if legacy_replaced {
+            replaced_ids.push(crate::recovery::BUNDLED_FRONTEND_ID);
+        }
+        let studio = match source.studio() {
+            Ok(studio) => studio,
+            Err(error) => {
+                if legacy_replaced {
+                    let _ = broker.reload_from_disk(Some(&root));
+                }
+                return Err(transaction_error(error));
+            }
+        };
+        if let Some(studio) = studio {
+            ids.push(crate::recovery::STUDIO_FRONTEND_ID);
+            let studio_outcome = match studio.refresh(&root) {
+                Ok(outcome) => outcome,
+                Err(error) => {
+                    let _ = broker.reload_from_disk(Some(&root));
+                    return Err(transaction_error(error));
+                }
+            };
+            if !matches!(
+                studio_outcome,
+                crate::recovery::RefreshOutcome::Absent | crate::recovery::RefreshOutcome::Kept
+            ) {
+                replaced_ids.push(crate::recovery::STUDIO_FRONTEND_ID);
+            }
+        }
+        let replaced = !replaced_ids.is_empty();
         if replaced {
             broker.reload_from_disk(Some(&root)).map_err(|_| {
                 transaction_error("前端已同步到磁盘，后台目录刷新失败，请重启后台".into())
             })?;
         }
-        Ok(json!({"id": crate::recovery::BUNDLED_FRONTEND_ID, "replaced": replaced}))
+        Ok(json!({
+            "id": crate::recovery::BUNDLED_FRONTEND_ID,
+            "ids": ids,
+            "replaced": replaced,
+            "replaced_ids": replaced_ids,
+        }))
     })
     .await
     .map_err(|_| transaction_error("同步执行中断，磁盘状态不确定，请检查后台后再操作".into()))?

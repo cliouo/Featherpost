@@ -23,7 +23,7 @@
 
 | 模板 | 渲染到 |
 | --- | --- |
-| `templates/App.Info.plist.in` | `Contents/Info.plist`（`LSUIElement = true`） |
+| `templates/App.Info.plist.in` | `Contents/Info.plist`（`LSUIElement = true`，`CFBundleLocalizations = [en, zh-Hans]`，开发区域 `zh-Hans`） |
 | `templates/Agent.Info.plist.in` | `Contents/Library/LoginItems/<Agent>.app/Contents/Info.plist`（`LSUIElement = true`） |
 | `templates/Menu.Info.plist.in` | `Contents/Library/Helpers/<Menu>.app/Contents/Info.plist`（`LSUIElement = true`） |
 | `templates/UI.Info.plist.in` | 恢复副本 `<UI>.app/Contents/Info.plist`（`CFBundleLocalizations = [en, zh-Hans]`，开发区域 `zh-Hans`） |
@@ -48,24 +48,31 @@ Featherpost.app/
 └── Contents/
     ├── Info.plist
     ├── MacOS/
-    │   ├── featherpost-launcher   CFBundleExecutable；就地 exec 同目录 featherpost-ui 承载主窗口
-    │   └── featherpost-ui         embedded 形态 UI（与恢复副本同源），单宿主 → Dock 只有一个图标
+    │   ├── featherpost-launcher   CFBundleExecutable；就地 exec 同目录 featherpost-studio / featherpost-ui 承载主窗口
+    │   ├── featherpost-studio     （携带 `--studio-bin` 时）embedded 形态 Studio，单宿主 → Dock 只有一个图标
+    │   └── featherpost-ui         embedded 形态原版 UI（与恢复副本同源），单宿主 → Dock 只有一个图标
     ├── Library/
     │   ├── LoginItems/Featherpost Agent.app/Contents/{Info.plist,MacOS/featherpost-agent}
     │   └── Helpers/Featherpost Menu.app/Contents/{Info.plist,MacOS/featherpost-menu}
     └── Resources/
         ├── Featherpost.icns       CFBundleIconFile = Featherpost；源文件 assets/AppIcon.icns
-        └── frontends/dev.featherpost.ui/
-            ├── frontend.toml      由 templates/frontend.toml.in 渲染，禁止手改
-            ├── recovery.sha256    恢复副本 UI 可执行文件的 SHA-256（64 位小写十六进制 + 换行）
-            └── Featherpost UI.app/Contents/{Info.plist,MacOS/featherpost-ui}
+        └── frontends/
+            ├── dev.featherpost.ui/
+            │   ├── frontend.toml      由 templates/frontend.toml.in 渲染，禁止手改
+            │   ├── recovery.sha256    恢复副本 UI 可执行文件的 SHA-256（64 位小写十六进制 + 换行）
+            │   └── Featherpost UI.app/Contents/{Info.plist,MacOS/featherpost-ui}
+            └── dev.featherpost.studio/（携带 `--studio-bin` 时）
+                ├── frontend.toml      Studio 前端清单
+                ├── recovery.sha256    恢复副本 Studio 可执行文件的 SHA-256
+                └── Featherpost Studio.app/Contents/{Info.plist,MacOS/featherpost-studio,Resources/Featherpost.icns}
 ```
 
-单宿主布局（消除 Dock 双图标，ADR-0044）：主窗口不以独立的 UI bundle 身份启动，而是由启动器在顶层
-App 的 bundle 身份下就地 `exec` 顶层 `Contents/MacOS/${BRAND_UI_BIN}`。生成器把同一个已校验的 embedded
-UI 同时安装到这里和恢复载荷中；验证器要求顶层副本是非符号链接的可执行常规文件、架构与 launcher 一致，
-并且每个 slice 都带 `maild-ui-embedded:${BRAND_UI_BUNDLE_ID}` 编译期标记，防止把加载 devUrl 的开发构建
-放进主窗口位置。
+单宿主布局（消除 Dock 双图标，ADR-0044）：主窗口不以独立的 UI/Studio bundle 身份启动，而是由启动器在顶层
+App 的 bundle 身份下就地 `exec` 顶层 `Contents/MacOS/featherpost-studio`（默认 Studio 且与随包版本一致时）或
+`Contents/MacOS/${BRAND_UI_BIN}`（默认原版 UI 时）；若用户安装了其他版本的独立 Studio，则仍回退激活受管目录中的
+`Featherpost Studio.app`。生成器把已校验的 embedded 二进制同时安装到 `Contents/MacOS/` 和恢复载荷中；验证器要求
+顶层副本是非符号链接的可执行常规文件、架构与 launcher 一致，并且每个 slice 都带对应的 `maild-ui-embedded:<id>`
+编译期标记，防止把加载 devUrl 的开发构建放进主窗口位置。
 
 Agent 启动时在前端目录租约下把这份副本 no-clobber 预装到用户前端目录，只做一次（标记文件
 `.preinstalled-<ui_bundle_id>`）；用户移除后不会自动装回，只能从原生修复窗口显式恢复。
@@ -111,10 +118,10 @@ Spotlight 仍显示应用图标并可正常双击启动；只有窗口存在期�
 `Accessory`，Dock 仍会按 plist 把它记入最近使用区，因此 `verify-bundle.sh` 要求顶层 plist 含布尔值
 `LSUIElement=true`，缺失、为 `false` 或非布尔值都会被拒绝。
 
-两个前端 bundle（UI 模板与 `studio/Info.plist`）固定声明 `CFBundleLocalizations = [en, zh-Hans]`、
-`CFBundleDevelopmentRegion = zh-Hans`：WebKit 右键菜单、打开/保存面板、标准按钮等系统画的文字按它与本 app
+顶层 App 与两个前端 bundle（`App.Info.plist.in`、`UI.Info.plist.in` 与 `studio/Info.plist`）固定声明 `CFBundleLocalizations = [en, zh-Hans]`、
+`CFBundleDevelopmentRegion = zh-Hans`：顶层 App 就地承载 UI / Studio 时，WebKit 右键菜单、打开/保存面板、标准按钮等系统画的文字按顶层 bundle 声明与本 app
 偏好域的 `AppleLanguages` 选语言，壳把用户的显式语言镜像到这个键，下次启动生效；协商不出结果时回落简体中文，
-与前端和内核一致（ADR-0048 决策 8）。`verify-bundle.sh` 对两份 plist 都核对这两个键。
+与前端和内核一致（ADR-0048 决策 8）。`verify-bundle.sh` 对三份 plist 都核对这两个键。
 
 ### Bundle identity
 
@@ -185,10 +192,10 @@ Cargo 包名（`-p maild`、`-p maild-launcher` 等）是内部稳定名，`--bi
 会让发布和生产安装门禁 fail-closed，冻结时必须随正式 identity 一同评审提交，不能从候选签名或 workflow
 参数自证。发布产物名为 `${BRAND_PRODUCT_NAME}-vX.Y.Z-universal2.zip`（及 `.sha256`、`-notary.plist`）。
 
-发布链固定为：内置 UI bundle 签名 → `seal-recovery-payload.sh` 按签名后的字节重写 `recovery.sha256` →
-Agent 与 Menu 内层签名 → 顶层 `Contents/MacOS/${BRAND_UI_BIN}` 以同一 Developer ID、
-`--identifier "$BRAND_UI_BUNDLE_ID" --options runtime --timestamp` 单独签名 → 顶层 App 签名 →
-Developer ID/Team/runtime/timestamp/无 entitlements 校验（顶层 UI、Agent、Menu、内置 UI、App 逐一校验）→
+发布链固定为：内置 UI / Studio bundle 签名 → `seal-recovery-payload.sh` 按签名后的字节重写 `recovery.sha256` →
+Agent 与 Menu 内层签名 → 顶层 `Contents/MacOS/${BRAND_UI_BIN}`（与存在时的 `Contents/MacOS/featherpost-studio`）以同一 Developer ID、
+`--identifier <frontend_id> --options runtime --timestamp` 单独签名 → 顶层 App 签名 →
+Developer ID/Team/runtime/timestamp/无 entitlements 校验（顶层 UI、顶层 Studio、Agent、Menu、内置 UI、内置 Studio、App 逐一校验）→
 ZIP 公证并等待 `Accepted` → staple/validate → Gatekeeper → 重建最终 ZIP → 解包复验 → SHA-256。签名不使用
 `codesign --deep`；`--deep` 只用于最终的递归验证。
 
@@ -219,8 +226,8 @@ Actions cache 或 artifact，直接将 `${BRAND_SLUG}-<version>-macos-universal.
 对应的 GitHub Release（同名文件覆盖）；Release 不存在时创建，版本含 `-` 时标记为 prerelease。
 这些体验包仅 ad-hoc 签名、未经公证，不代替正式的 Developer ID 发布流程；私有仓库会跳过该 job。
 
-本地体验包在 verified bundle 基础上做 inside-out ad-hoc 签名（原版 UI → Studio → reseal 两份校验和 → Agent → Menu → 顶层 UI →
-顶层 App，最后校验顶层 UI 的 identifier 与 runtime 标志）并生成只读压缩 DMG；它不使用 Developer ID、没有
+本地体验包在 verified bundle 基础上做 inside-out ad-hoc 签名（原版 UI → Studio → reseal 两份校验和 → Agent → Menu → 顶层 UI → 顶层 Studio →
+顶层 App，最后校验顶层 UI 与顶层 Studio 的 identifier 与 runtime 标志）并生成只读压缩 DMG；它不使用 Developer ID、没有
 notarize，不能作为正式发布产物：
 
 ```sh

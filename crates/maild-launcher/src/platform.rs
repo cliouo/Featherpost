@@ -166,16 +166,36 @@ fn activation_policy(beside_main_window: bool) -> objc2_app_kit::NSApplicationAc
     }
 }
 
-/// `true` while another process holds `runtime_dir/.main-ui.lock`.
-#[cfg(target_os = "macos")]
-fn main_window_running() -> bool {
-    main_window_pid().is_some()
+/// `true` while any main mail window holds `runtime_dir/.main-ui.lock` (or an older standalone
+/// Studio holds `runtime_dir/studio/.main-ui.lock`). Used by `--repair` to pick `Accessory`
+/// activation policy and by recovery's "Open Mailbox" check.
+pub(crate) fn main_window_running() -> bool {
+    maild_paths::AppPaths::discover()
+        .ok()
+        .is_some_and(|paths| find_main_window_pid(&paths.runtime_dir, true).is_some())
 }
 
-/// `Some(pid)` while a main mail window holds its lock (`pid` unreadable → `Some(None)`).
-pub(crate) fn main_window_pid() -> Option<Option<i32>> {
+/// `Some(pid)` while a main mail window for `frontend_id` is running. Probes the unified
+/// `runtime_dir/.main-ui.lock` first and, for Studio, also checks the legacy
+/// `runtime_dir/studio/.main-ui.lock` slot (read-only) so older standalone Studio instances
+/// still wake cleanly.
+pub(crate) fn main_window_pid_for(frontend_id: &str) -> Option<Option<i32>> {
     let paths = maild_paths::AppPaths::discover().ok()?;
-    maild_client::running_main_ui(&paths.runtime_dir)
+    find_main_window_pid(
+        &paths.runtime_dir,
+        frontend_id == maild::recovery::STUDIO_FRONTEND_ID,
+    )
+}
+
+fn find_main_window_pid(
+    runtime_dir: &std::path::Path,
+    check_legacy_studio: bool,
+) -> Option<Option<i32>> {
+    maild_client::running_main_ui(runtime_dir).or_else(|| {
+        check_legacy_studio
+            .then(|| maild_client::running_main_ui(&runtime_dir.join("studio")))
+            .flatten()
+    })
 }
 
 #[cfg(target_os = "macos")]
@@ -246,5 +266,42 @@ mod tests {
             super::activation_policy(false),
             NSApplicationActivationPolicy::Regular
         );
+    }
+
+    #[test]
+    fn find_main_window_pid_detects_unified_and_legacy_studio_locks() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let root = tempfile::tempdir().unwrap();
+        let runtime = root.path().join("run");
+        let legacy_studio = runtime.join("studio");
+        std::fs::create_dir(&runtime).unwrap();
+        std::fs::set_permissions(&runtime, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::create_dir(&legacy_studio).unwrap();
+        std::fs::set_permissions(&legacy_studio, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        assert_eq!(super::find_main_window_pid(&runtime, false), None);
+        assert_eq!(super::find_main_window_pid(&runtime, true), None);
+
+        // Legacy studio lock is only detected when `check_legacy_studio` is enabled.
+        let maild_client::MainUiClaim::Acquired(studio_lock) =
+            maild_client::claim_main_ui(&legacy_studio).unwrap()
+        else {
+            panic!("legacy studio lock should acquire");
+        };
+        let me = std::process::id() as i32;
+        assert_eq!(super::find_main_window_pid(&runtime, false), None);
+        assert_eq!(super::find_main_window_pid(&runtime, true), Some(Some(me)));
+
+        // Unified lock takes precedence and is visible to both queries.
+        let maild_client::MainUiClaim::Acquired(main_lock) =
+            maild_client::claim_main_ui(&runtime).unwrap()
+        else {
+            panic!("main lock should acquire");
+        };
+        assert_eq!(super::find_main_window_pid(&runtime, false), Some(Some(me)));
+        assert_eq!(super::find_main_window_pid(&runtime, true), Some(Some(me)));
+        drop(main_lock);
+        drop(studio_lock);
+        assert_eq!(super::find_main_window_pid(&runtime, true), None);
     }
 }

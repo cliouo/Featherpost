@@ -1,7 +1,7 @@
-import { createElement } from "react";
+import { createElement, type ReactElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { applyEffectiveLocales } from "@featherpost/i18n";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { Accounts } from "../src/settings/Accounts";
 import {
   currentSystemOffsetMinutes,
@@ -15,17 +15,67 @@ import { settingsModule } from "../src/settings/module";
 import { FakeBridge, online } from "./fakeBridge";
 import { BRAND } from "../src/brand";
 
-it("offers native recovery online and directs disconnected users to the installed app", () => {
-  const host = new Host(new FakeBridge());
+it("offers native recovery online and enables daemon-independent offline recovery when supported", async () => {
+  const bridge = new FakeBridge();
+  const host = new Host(bridge);
   const bundle = settingsModule(host);
-  const Connection = bundle.settings!.find(section => section.id === "maild.settings.connection")!.render;
-  const offline = renderToStaticMarkup(createElement(Connection, { active: true }));
-  expect(offline).toContain(`后台未连接，请打开 ${BRAND.appBundleName} 的修复入口。`);
-  expect(offline).toMatch(/<button[^>]*disabled=""[^>]*>打开修复窗口<\/button>/);
+  const Connection = bundle.settings!.find(
+    section => section.id === "maild.settings.connection",
+  )!.render as (props: { active: boolean }) => ReactNode;
+  // Without daemon-independent openRecovery (older/non-Tauri bridge), offline button stays disabled.
+  const offlineWithoutCmd = renderToStaticMarkup(createElement(Connection, { active: true }));
+  expect(offlineWithoutCmd).toContain(`后台未连接，请打开 ${BRAND.appBundleName} 的修复入口。`);
+  expect(offlineWithoutCmd).toMatch(/<button[^>]*disabled=""[^>]*>打开修复窗口<\/button>/);
+
+  // With openRecovery (Tauri shell), offline button is enabled and invokes openRecovery directly.
+  const openRecovery = vi.fn(async () => {});
+  bridge.settings.openRecovery = openRecovery;
+  let captured: ReactNode = null;
+  function Probe() {
+    captured = createElement(Connection, { active: true });
+    return captured;
+  }
+  const offlineWithCmd = renderToStaticMarkup(createElement(Probe));
+  expect(offlineWithCmd).not.toMatch(/<button[^>]*disabled=""[^>]*>打开修复窗口<\/button>/);
+  const findButton = (node: ReactNode): ReactElement<Record<string, unknown>> | null => {
+    if (Array.isArray(node)) {
+      for (const child of node) {
+        const hit = findButton(child);
+        if (hit) return hit;
+      }
+      return null;
+    }
+    if (!node || typeof node !== "object" || !("props" in node)) return null;
+    const el = node as ReactElement<Record<string, unknown>>;
+    if (el.type === "button" && el.props.children === "打开修复窗口") return el;
+    return findButton(el.props.children as ReactNode);
+  };
+  let renderedRoot: ReactNode = null;
+  function CaptureConnection() {
+    renderedRoot = Connection({ active: true });
+    return renderedRoot;
+  }
+  renderToStaticMarkup(createElement(CaptureConnection));
+  const button = findButton(renderedRoot);
+  expect(button).not.toBeNull();
+  expect(button!.props.disabled).toBe(false);
+  (button!.props.onClick as () => void)();
+  await Promise.resolve();
+  expect(openRecovery).toHaveBeenCalledTimes(1);
+  expect(bridge.settings.packageWrites).toEqual([]);
+
+  // Online: uses packageAction({ action: "recovery" }) and falls back to openRecovery on error.
   host.state.patch({ snapshot: online });
   const connected = renderToStaticMarkup(createElement(Connection, { active: true }));
   expect(connected).toContain("在独立原生窗口恢复内置前端、启动或停止后台。");
   expect(connected).not.toMatch(/<button[^>]*disabled=""[^>]*>打开修复窗口<\/button>/);
+  bridge.settings.packageAction = async () => {
+    throw new Error("agent recovery unavailable");
+  };
+  renderToStaticMarkup(createElement(CaptureConnection));
+  (findButton(renderedRoot)!.props.onClick as () => void)();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(openRecovery).toHaveBeenCalledTimes(2);
   bundle.dispose?.();
 });
 

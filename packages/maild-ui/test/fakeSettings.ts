@@ -113,6 +113,7 @@ export class FakeSettings implements SettingsBridge {
   proxyHandlers = new Set<(event: ProxyPreferenceEvent) => void>();
   discoverProvider?: SettingsBridge["discoverProvider"];
   openExternalUrl?: SettingsBridge["openExternalUrl"];
+  openRecovery?: SettingsBridge["openRecovery"];
   async profiles() {
     return structuredClone(this.profileRows);
   }

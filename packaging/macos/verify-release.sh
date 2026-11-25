@@ -54,7 +54,7 @@ read_trusted_team_id() {
     printf '%s' "$value"
 }
 
-validate_signed_code() {
+validate_signed_structure() {
     local label=$1
     local code=$2
     local expected_identifier=$3
@@ -66,15 +66,9 @@ validate_signed_code() {
         die "cannot inspect $label code signature"
     printf '%s\n' "$details" | LC_ALL=C grep -Fqx "Identifier=$expected_identifier" ||
         die "$label signing identifier does not match $expected_identifier"
-    printf '%s\n' "$details" | LC_ALL=C grep -Fqx "TeamIdentifier=$team_id" ||
-        die "$label TeamIdentifier does not match $team_id"
-    printf '%s\n' "$details" | LC_ALL=C grep -Eq '^Authority=Developer ID Application:' ||
-        die "$label is not signed with a Developer ID Application certificate"
     printf '%s\n' "$details" | LC_ALL=C grep -Eq \
         '^CodeDirectory .* flags=.*[(].*runtime.*[)]' ||
         die "$label does not enable the hardened runtime"
-    printf '%s\n' "$details" | LC_ALL=C grep -Eq '^Timestamp=' ||
-        die "$label does not contain a secure timestamp"
 
     entitlements=$(mktemp "${TMPDIR:-/tmp}/$BRAND_SLUG-entitlements.XXXXXX") ||
         die "cannot create entitlements inspection file for $label"
@@ -94,6 +88,21 @@ validate_signed_code() {
         die "$label must not contain entitlements"
     fi
     rm -f -- "$entitlements"
+}
+
+validate_release_authority() {
+    local label=$1
+    local code=$2
+    local details
+
+    details=$(/usr/bin/codesign --display --verbose=4 "$code" 2>&1) ||
+        die "cannot inspect $label code signature"
+    printf '%s\n' "$details" | LC_ALL=C grep -Fqx "TeamIdentifier=$team_id" ||
+        die "$label TeamIdentifier does not match $team_id"
+    printf '%s\n' "$details" | LC_ALL=C grep -Eq '^Authority=Developer ID Application:' ||
+        die "$label is not signed with a Developer ID Application certificate"
+    printf '%s\n' "$details" | LC_ALL=C grep -Eq '^Timestamp=' ||
+        die "$label does not contain a secure timestamp"
 }
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
@@ -180,19 +189,42 @@ expected_architectures='arm64 x86_64'
 [ "$(normalize_architectures "$menu_executable")" = "$expected_architectures" ] ||
     die "$BRAND_MENU_BIN release must contain exactly arm64 and x86_64"
 
-team_id=$(read_trusted_team_id)
-# The single-host UI is checked first: a linker ad-hoc signature (no runtime, no Team ID)
-# still passes `codesign --verify --deep`, so only this explicit gate catches it.
-validate_signed_code "$BRAND_PRODUCT_NAME host UI" "$host_ui_executable" "$BRAND_UI_BUNDLE_ID"
-validate_signed_code "$BRAND_PRODUCT_NAME Agent" "$agent" "$agent_id"
-validate_signed_code "$BRAND_PRODUCT_NAME Menu" "$menu" "$menu_id"
-validate_signed_code "$BRAND_PRODUCT_NAME UI" "$ui" "$BRAND_UI_BUNDLE_ID"
 . "$script_dir/studio-payload.sh"
 studio_payload=$(studio_payload_path "$app")
 if [ -d "$studio_payload" ]; then
-    validate_signed_code Studio "$studio_payload/$STUDIO_APP" "$STUDIO_FRONTEND_ID"
+    [ "$(normalize_architectures "$studio_payload/$STUDIO_APP/Contents/MacOS/$STUDIO_BIN")" = "$expected_architectures" ] ||
+        die "$STUDIO_BIN release must contain exactly arm64 and x86_64"
+    [ "$(normalize_architectures "$(studio_host_path "$app")")" = "$expected_architectures" ] ||
+        die "host $STUDIO_BIN release must contain exactly arm64 and x86_64"
 fi
-validate_signed_code "$BRAND_PRODUCT_NAME" "$app" "$app_id"
+
+team_id=$(read_trusted_team_id)
+# Check structural signature invariants (validity, signing identifier, hardened runtime, and
+# forbidden entitlements) across all components before verifying Developer ID trust, so any
+# missing explicit single-host signature is caught by component name.
+validate_signed_structure "$BRAND_PRODUCT_NAME host UI" "$host_ui_executable" "$BRAND_UI_BUNDLE_ID"
+if [ -d "$studio_payload" ]; then
+    validate_signed_structure "$BRAND_PRODUCT_NAME host Studio" "$(studio_host_path "$app")" "$STUDIO_FRONTEND_ID"
+fi
+validate_signed_structure "$BRAND_PRODUCT_NAME Agent" "$agent" "$agent_id"
+validate_signed_structure "$BRAND_PRODUCT_NAME Menu" "$menu" "$menu_id"
+validate_signed_structure "$BRAND_PRODUCT_NAME UI" "$ui" "$BRAND_UI_BUNDLE_ID"
+if [ -d "$studio_payload" ]; then
+    validate_signed_structure Studio "$studio_payload/$STUDIO_APP" "$STUDIO_FRONTEND_ID"
+fi
+validate_signed_structure "$BRAND_PRODUCT_NAME" "$app" "$app_id"
+
+validate_release_authority "$BRAND_PRODUCT_NAME host UI" "$host_ui_executable"
+if [ -d "$studio_payload" ]; then
+    validate_release_authority "$BRAND_PRODUCT_NAME host Studio" "$(studio_host_path "$app")"
+fi
+validate_release_authority "$BRAND_PRODUCT_NAME Agent" "$agent"
+validate_release_authority "$BRAND_PRODUCT_NAME Menu" "$menu"
+validate_release_authority "$BRAND_PRODUCT_NAME UI" "$ui"
+if [ -d "$studio_payload" ]; then
+    validate_release_authority Studio "$studio_payload/$STUDIO_APP"
+fi
+validate_release_authority "$BRAND_PRODUCT_NAME" "$app"
 /usr/bin/codesign --verify --deep --strict=all --verbose=4 "$app" >/dev/null 2>&1 ||
     die 'nested code signature verification failed'
 

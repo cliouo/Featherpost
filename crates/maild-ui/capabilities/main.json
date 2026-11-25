@@ -74,6 +74,7 @@
     "allow-ui-fetch-server-message",
     "allow-ui-settings-discover-provider",
     "allow-ui-discover-provider",
-    "allow-ui-open-external-url"
+    "allow-ui-open-external-url",
+    "allow-ui-open-native-recovery"
   ]
 }

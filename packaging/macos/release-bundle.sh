@@ -142,6 +142,14 @@ validate_source_preflight() {
     [ "$(normalize_architectures "$menu/Contents/MacOS/$BRAND_MENU_BIN")" = \
         "$expected_architectures" ] ||
         die "$BRAND_MENU_BIN release must contain exactly arm64 and x86_64"
+    if [ -d "$studio_payload" ]; then
+        [ "$(normalize_architectures "$studio_payload/$STUDIO_APP/Contents/MacOS/$STUDIO_BIN")" = \
+            "$expected_architectures" ] ||
+            die "$STUDIO_BIN release must contain exactly arm64 and x86_64"
+        [ "$(normalize_architectures "$(studio_host_path "$app")")" = \
+            "$expected_architectures" ] ||
+            die "host $STUDIO_BIN release must contain exactly arm64 and x86_64"
+    fi
 }
 
 validate_private_file() {
@@ -301,6 +309,7 @@ staged_host_ui="$staged_app/Contents/MacOS/$BRAND_UI_BIN"
     --options runtime --timestamp "$staged_ui"
 . "$script_dir/studio-payload.sh"
 studio_payload=$(studio_payload_path "$staged_app")
+staged_host_studio=$(studio_host_path "$staged_app")
 if [ -d "$studio_payload" ]; then
     /usr/bin/codesign --force --keychain "$keychain" --sign "$identity" \
         --options runtime --timestamp "$studio_payload/$STUDIO_APP"
@@ -310,10 +319,14 @@ fi
     --options runtime --timestamp "$staged_agent"
 /usr/bin/codesign --force --keychain "$keychain" --sign "$identity" \
     --options runtime --timestamp "$staged_menu"
-# Signing the app seals only its CFBundleExecutable; the single-host UI sibling needs its
-# own Developer ID + hardened runtime + timestamp signature or notary rejects it.
+# Signing the app seals only its CFBundleExecutable; the single-host UI siblings need their
+# own Developer ID + hardened runtime + timestamp signature or notary rejects them.
 /usr/bin/codesign --force --keychain "$keychain" --sign "$identity" \
     --identifier "$BRAND_UI_BUNDLE_ID" --options runtime --timestamp "$staged_host_ui"
+if [ -d "$studio_payload" ]; then
+    /usr/bin/codesign --force --keychain "$keychain" --sign "$identity" \
+        --identifier "$STUDIO_FRONTEND_ID" --options runtime --timestamp "$staged_host_studio"
+fi
 /usr/bin/codesign --force --keychain "$keychain" --sign "$identity" \
     --options runtime --timestamp "$staged_app"
 "$script_dir/verify-release.sh" \
