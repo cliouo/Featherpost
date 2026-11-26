@@ -7,7 +7,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { AlertDialog, StudioDialog } from "../src/app/Dialog";
 import { StudioDropdownMenu, StudioDropdownMenuItem } from "../src/app/DropdownMenu";
-import { closeAllPopovers } from "../src/app/popover";
+import { closeAllPopovers, usePersistentOverlay } from "../src/ui";
 import { ComposeController } from "../src/compose/controller";
 import { Editor } from "../src/compose/Editor";
 import { composeModule } from "../src/compose/module";
@@ -89,6 +89,14 @@ function flushTimers() {
   });
 }
 
+function flushPaint() {
+  return act(async () => {
+    await new Promise((resolve) =>
+      requestAnimationFrame(() => setTimeout(resolve, 0)),
+    );
+  });
+}
+
 function keydown(target: EventTarget, key: string, init: KeyboardEventInit = {}) {
   const event = new KeyboardEvent("keydown", {
     key,
@@ -116,6 +124,25 @@ function pointerDown(target: EventTarget, init: PointerEventInit = {}) {
   });
 }
 
+function pointerUp(target: EventTarget, init: PointerEventInit = {}) {
+  act(() => {
+    target.dispatchEvent(
+      new PointerEvent("pointerup", {
+        bubbles: true,
+        cancelable: true,
+        button: 0,
+        pointerType: "mouse",
+        ...init,
+      }),
+    );
+  });
+}
+
+function outsideClick(target: EventTarget, init: PointerEventInit = {}) {
+  pointerDown(target, init);
+  pointerUp(target, init);
+}
+
 afterEach(() => {
   while (mountedRoots.length) {
     const entry = mountedRoots.pop()!;
@@ -128,14 +155,14 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-describe("Unified Radix StudioDialog / Dialog / AlertDialog", () => {
-  it("moves initial focus in, traps Tab cycling, closes on Escape, and restores focus to invoker", async () => {
+describe("Unified @ui-sdk StudioDialog / Dialog / AlertDialog", () => {
+  it("moves initial focus in, traps Tab cycling, marks background inert, closes on Escape, and restores focus to invoker", async () => {
     function Harness() {
       const [open, setOpen] = useState(false);
       const firstInputRef = useRef<HTMLInputElement>(null);
       return h(
         "div",
-        null,
+        { className: "app-shell" },
         h(
           "button",
           {
@@ -166,35 +193,52 @@ describe("Unified Radix StudioDialog / Dialog / AlertDialog", () => {
       invoker.focus();
       invoker.click();
     });
-    await flushTimers();
+    await flushPaint();
 
-    // Uses Radix portal (no native <dialog>) with modal & shortcut-gating attributes.
+    // Uses @ui-sdk portal (no native <dialog>, no .dialog-positioner) with modal & shortcut-gating attributes.
     expect(document.body.querySelector("dialog")).toBeNull();
+    expect(document.body.querySelector(".dialog-positioner")).toBeNull();
     const dialog = document.body.querySelector<HTMLElement>('[role="dialog"]')!;
+    const overlay = document.body.querySelector<HTMLElement>(".dialog-overlay")!;
     expect(dialog).not.toBeNull();
+    expect(overlay).not.toBeNull();
     expect(dialog.getAttribute("aria-modal")).toBe("true");
     expect(dialog.hasAttribute("data-shortcuts-off")).toBe(true);
     expect(dialog.getAttribute("data-tauri-drag-region")).toBe("false");
+    expect(overlay.hasAttribute("data-shortcuts-off")).toBe(true);
+    expect(overlay.getAttribute("data-tauri-drag-region")).toBe("false");
     expect(isShortcutBlockedTarget(dialog)).toBe(true);
+
+    // Background content is marked inert while modal dialog is open.
+    expect(invoker.closest("[inert]")).not.toBeNull();
 
     // Initial focus respects initialFocusRef.
     const input = dialog.querySelector<HTMLInputElement>("input")!;
+    const closeBtn = dialog.querySelector<HTMLButtonElement>("header button")!;
+    const saveBtn = dialog.querySelector<HTMLButtonElement>("button.save-btn")!;
     expect(document.activeElement).toBe(input);
 
-    // Focus trap keeps focus inside the dialog if focus attempts to leave to background DOM.
+    // Tab wraps from the last tabbable element back to the first, and Shift+Tab wraps back to the last.
     act(() => {
-      invoker.focus();
+      saveBtn.focus();
     });
-    expect(dialog.contains(document.activeElement)).toBe(true);
+    const tabForward = keydown(saveBtn, "Tab");
+    expect(tabForward.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(closeBtn);
 
-    // Escape closes the dialog and returns focus to the invoker.
+    const tabBackward = keydown(closeBtn, "Tab", { shiftKey: true });
+    expect(tabBackward.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(saveBtn);
+
+    // Escape closes the dialog, clears inert on background, and returns focus to the invoker.
     keydown(dialog, "Escape");
     await flushTimers();
     expect(document.body.querySelector('[role="dialog"]')).toBeNull();
+    expect(invoker.closest("[inert]")).toBeNull();
     expect(document.activeElement).toBe(invoker);
   });
 
-  it("dismisses Dialog on outside pointerdown, while AlertDialog ignores outside clicks", async () => {
+  it("dismisses Dialog on outside click (not drag-out), while AlertDialog ignores outside clicks", async () => {
     const onDialogClose = vi.fn();
     const first = mount(
       h(
@@ -205,9 +249,18 @@ describe("Unified Radix StudioDialog / Dialog / AlertDialog", () => {
     );
     await flushTimers();
 
+    const dialog = document.body.querySelector<HTMLElement>('[role="dialog"]')!;
     const overlay = document.body.querySelector<HTMLElement>(".dialog-overlay")!;
     expect(overlay).not.toBeNull();
-    pointerDown(overlay);
+
+    // Dragging a text selection from inside the dialog onto the backdrop does not dismiss.
+    pointerDown(dialog);
+    pointerUp(overlay);
+    await flushTimers();
+    expect(onDialogClose).not.toHaveBeenCalled();
+
+    // A full outside click (pointerdown + pointerup on backdrop) dismisses the dialog.
+    outsideClick(overlay);
     await flushTimers();
     expect(onDialogClose).toHaveBeenCalledTimes(1);
     first.unmount();
@@ -225,7 +278,7 @@ describe("Unified Radix StudioDialog / Dialog / AlertDialog", () => {
     const alertDialog = document.body.querySelector<HTMLElement>('[role="alertdialog"]')!;
     expect(alertDialog).not.toBeNull();
     const alertOverlay = document.body.querySelector<HTMLElement>(".dialog-overlay")!;
-    pointerDown(alertOverlay);
+    outsideClick(alertOverlay);
     await flushTimers();
     expect(onAlertClose).not.toHaveBeenCalled();
 
@@ -255,7 +308,7 @@ describe("Unified Radix StudioDialog / Dialog / AlertDialog", () => {
       closeBtn.click();
     });
     keydown(dialog, "Escape");
-    pointerDown(overlay);
+    outsideClick(overlay);
     await flushTimers();
     expect(onClose).not.toHaveBeenCalled();
 
@@ -274,9 +327,99 @@ describe("Unified Radix StudioDialog / Dialog / AlertDialog", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it("supports nested StudioSelect inside Dialog without portal or dismiss conflicts", async () => {
+  it("allocates paired monotonic z-index for stacked dialogs in Safari 16 fallback and handles layer-by-layer Escape & busy guard", async () => {
+    function StackedHarness({ secondBusy = false }: { secondBusy?: boolean }) {
+      const [firstOpen, setFirstOpen] = useState(true);
+      const [secondOpen, setSecondOpen] = useState(false);
+      return h(
+        "div",
+        null,
+        firstOpen &&
+          h(
+            StudioDialog,
+            {
+              title: "Outer Dialog",
+              contentClassName: "outer-dialog",
+              overlayClassName: "outer-overlay",
+              onClose: () => setFirstOpen(false),
+            },
+            h(
+              "button",
+              {
+                type: "button",
+                className: "open-inner",
+                onClick: () => setSecondOpen(true),
+              },
+              "Open Inner",
+            ),
+            secondOpen &&
+              h(
+                StudioDialog,
+                {
+                  title: "Inner Dialog",
+                  contentClassName: "inner-dialog",
+                  overlayClassName: "inner-overlay",
+                  busy: secondBusy,
+                  onClose: () => setSecondOpen(false),
+                },
+                h("p", null, "Nested content"),
+              ),
+          ),
+      );
+    }
+
+    const view = mount(h(StackedHarness, { secondBusy: true }));
+    await flushTimers();
+
+    const outerDialog = document.body.querySelector<HTMLElement>(".outer-dialog")!;
+    const outerOverlay = document.body.querySelector<HTMLElement>(".outer-overlay")!;
+    const openInner = outerDialog.querySelector<HTMLButtonElement>("button.open-inner")!;
+
+    act(() => {
+      openInner.click();
+    });
+    await flushTimers();
+
+    const innerDialog = document.body.querySelector<HTMLElement>(".inner-dialog")!;
+    const innerOverlay = document.body.querySelector<HTMLElement>(".inner-overlay")!;
+    expect(innerDialog).not.toBeNull();
+    expect(innerOverlay).not.toBeNull();
+
+    // Paired monotonic z-index: backdrop1 < dialog1 < backdrop2 < dialog2 (and below toast=2000).
+    const zBackdrop1 = Number(outerOverlay.style.zIndex);
+    const zDialog1 = Number(outerDialog.style.zIndex);
+    const zBackdrop2 = Number(innerOverlay.style.zIndex);
+    const zDialog2 = Number(innerDialog.style.zIndex);
+    expect(zBackdrop1).toBeGreaterThan(1000);
+    expect(zDialog1).toBeGreaterThan(zBackdrop1);
+    expect(zBackdrop2).toBeGreaterThan(zDialog1);
+    expect(zDialog2).toBeGreaterThan(zBackdrop2);
+    expect(zDialog2).toBeLessThan(2000);
+
+    // While Inner Dialog is busy, Escape closes neither Inner nor Outer Dialog.
+    keydown(innerDialog, "Escape");
+    await flushTimers();
+    expect(document.body.querySelector(".inner-dialog")).not.toBeNull();
+    expect(document.body.querySelector(".outer-dialog")).not.toBeNull();
+
+    // Once busy clears, Escape closes Inner Dialog first, leaving Outer Dialog open.
+    view.rerender(h(StackedHarness, { secondBusy: false }));
+    await flushTimers();
+    keydown(innerDialog, "Escape");
+    await flushTimers();
+    expect(document.body.querySelector(".inner-dialog")).toBeNull();
+    expect(document.body.querySelector(".outer-dialog")).not.toBeNull();
+
+    // Second Escape closes Outer Dialog.
+    keydown(outerDialog, "Escape");
+    await flushTimers();
+    expect(document.body.querySelector(".outer-dialog")).toBeNull();
+  });
+
+  it("supports nested StudioSelect and StudioDropdownMenu inside Dialog without Escape leak or inert trap", async () => {
     const onClose = vi.fn();
     const onChoose = vi.fn();
+    const onMenuAction = vi.fn();
     function MoveHarness() {
       const [folder, setFolder] = useState("Archive");
       return h(
@@ -300,14 +443,22 @@ describe("Unified Radix StudioDialog / Dialog / AlertDialog", () => {
               ],
             },
           ),
+          h(
+            StudioDropdownMenu,
+            {
+              trigger: h("button", { type: "button", className: "nested-menu-trigger" }, "Options"),
+            },
+            h(StudioDropdownMenuItem, { onSelect: onMenuAction }, "Menu Action"),
+          ),
         ),
       );
     }
 
     mount(h(MoveHarness));
-    await flushTimers();
+    await flushPaint();
 
     const dialog = document.body.querySelector<HTMLElement>('[role="dialog"]')!;
+    const dialogZ = Number(dialog.style.zIndex);
     const combobox = dialog.querySelector<HTMLButtonElement>('[role="combobox"]')!;
     expect(combobox).not.toBeNull();
 
@@ -320,6 +471,8 @@ describe("Unified Radix StudioDialog / Dialog / AlertDialog", () => {
 
     const listbox = document.body.querySelector<HTMLElement>('[role="listbox"]')!;
     expect(listbox).not.toBeNull();
+    expect(listbox.closest("[inert]")).toBeNull();
+    expect(Number(listbox.style.zIndex)).toBeGreaterThan(dialogZ);
     const options = [...listbox.querySelectorAll<HTMLElement>('[role="option"]')];
     expect(options).toHaveLength(2);
 
@@ -348,6 +501,90 @@ describe("Unified Radix StudioDialog / Dialog / AlertDialog", () => {
     expect(onChoose).toHaveBeenCalledWith("Receipts");
     expect(onClose).not.toHaveBeenCalled();
     expect(document.body.querySelector('[role="dialog"]')).not.toBeNull();
+
+    // Open nested StudioDropdownMenu inside Dialog: not inert, stacked above dialog, Escape closes only menu.
+    const menuTrigger = dialog.querySelector<HTMLButtonElement>("button.nested-menu-trigger")!;
+    pointerDown(menuTrigger);
+    await flushTimers();
+    const nestedMenu = document.body.querySelector<HTMLElement>('[role="menu"]:not([hidden])')!;
+    expect(nestedMenu).not.toBeNull();
+    expect(nestedMenu.closest("[inert]")).toBeNull();
+    expect(Number(nestedMenu.style.zIndex)).toBeGreaterThan(dialogZ);
+
+    keydown(nestedMenu, "Escape");
+    await flushTimers();
+    expect(document.body.querySelector('[role="menu"]:not([hidden])')).toBeNull();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(document.body.querySelector('[role="dialog"]')).not.toBeNull();
+  });
+
+  it("keeps .toast non-inert and non-dismissing alongside an open modal Dialog", async () => {
+    const onClose = vi.fn();
+    function ToastHarness() {
+      const toastRef = useRef<HTMLDivElement>(null);
+      usePersistentOverlay(toastRef);
+      return h(
+        "div",
+        { className: "studio" },
+        h("main", { className: "studio-workspace" }, h("button", { type: "button", className: "bg-btn" }, "Background")),
+        h(
+          "div",
+          {
+            ref: toastRef,
+            className: "toast show",
+            role: "status",
+            "aria-live": "polite",
+          },
+          "Copied link",
+        ),
+        h(StudioDialog, { title: "Link Details", onClose }, h("p", null, "Details")),
+      );
+    }
+
+    const { container } = mount(h(ToastHarness));
+    await flushPaint();
+
+    const bgBtn = container.querySelector<HTMLButtonElement>("button.bg-btn")!;
+    const toast = container.querySelector<HTMLElement>(".toast")!;
+    expect(bgBtn.closest("[inert]")).not.toBeNull();
+    expect(toast.closest("[inert]")).toBeNull();
+
+    // Clicking on the persistent toast must not dismiss the open modal Dialog.
+    outsideClick(toast);
+    await flushTimers();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(document.body.querySelector('[role="dialog"]')).not.toBeNull();
+  });
+
+  it("promotes .toast into native top-layer with popover='manual' when supportsTopLayer() is true", () => {
+    const showPopover = vi.fn();
+    const hidePopover = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, "showPopover", {
+      configurable: true,
+      value: showPopover,
+    });
+    Object.defineProperty(HTMLElement.prototype, "hidePopover", {
+      configurable: true,
+      value: hidePopover,
+    });
+    try {
+      function TopLayerToastHarness() {
+        const toastRef = useRef<HTMLDivElement>(null);
+        usePersistentOverlay(toastRef);
+        return h("div", { ref: toastRef, className: "toast", role: "status" }, "Saved");
+      }
+
+      const view = mount(h(TopLayerToastHarness));
+      const toast = view.container.querySelector<HTMLElement>(".toast")!;
+      expect(toast.getAttribute("popover")).toBe("manual");
+      expect(showPopover).toHaveBeenCalledTimes(1);
+
+      view.unmount();
+      expect(hidePopover).toHaveBeenCalledTimes(1);
+    } finally {
+      delete (HTMLElement.prototype as { showPopover?: unknown }).showPopover;
+      delete (HTMLElement.prototype as { hidePopover?: unknown }).hidePopover;
+    }
   });
 
   it("closes an open StudioDropdownMenu when a Dialog opens and blocks Cmd+N global shortcut", async () => {
@@ -388,14 +625,14 @@ describe("Unified Radix StudioDialog / Dialog / AlertDialog", () => {
       const menuTrigger = container.querySelector<HTMLButtonElement>("button.menu-trigger")!;
       pointerDown(menuTrigger);
       await flushTimers();
-      expect(document.body.querySelector('[role="menu"]')).not.toBeNull();
+      expect(document.body.querySelector('[role="menu"]:not([hidden])')).not.toBeNull();
 
       act(() => {
         container.querySelector<HTMLButtonElement>("button.open-modal")!.click();
       });
       await flushTimers();
       expect(document.body.querySelector('[role="dialog"]')).not.toBeNull();
-      expect(document.body.querySelector('[role="menu"]')).toBeNull();
+      expect(document.body.querySelector('[role="menu"]:not([hidden])')).toBeNull();
 
       // Cmd+N must not trigger compose while modal dialog is open.
       keydown(window, "n", { metaKey: true });
@@ -469,7 +706,7 @@ describe("LinkSheet migration", () => {
 
     // Outside click dismisses LinkSheet and restores focus to invoker.
     const overlay = document.body.querySelector<HTMLElement>(".dialog-overlay")!;
-    pointerDown(overlay);
+    outsideClick(overlay);
     await flushTimers();
     expect(dismissSpy).toHaveBeenCalledTimes(1);
     expect(document.body.querySelector(".sheet")).toBeNull();
@@ -518,7 +755,7 @@ describe("Compose Editor Confirm migration", () => {
       expect(document.activeElement?.textContent).toBe("返回编辑");
 
       // Outside click must NOT dismiss AlertDialog.
-      pointerDown(document.body.querySelector<HTMLElement>(".dialog-overlay")!);
+      outsideClick(document.body.querySelector<HTMLElement>(".dialog-overlay")!);
       await flushTimers();
       expect(controller.store.getSnapshot().confirm).toBe("discard");
 

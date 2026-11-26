@@ -48,18 +48,21 @@
 .settings-actions > select {
   width: auto;
 }
-.settings-page fieldset {
+.settings-page fieldset,
+body[data-studio-settings] .mail-dialog fieldset {
   border: 0;
   padding: 0;
   margin: 0;
   min-width: 0;
 }
-.settings-page h3 {
+.settings-page h3,
+body[data-studio-settings] .mail-dialog h3 {
   font-size: 15px;
   font-weight: 600;
   margin: 28px 0 12px;
 }
-.settings-page h4 {
+.settings-page h4,
+body[data-studio-settings] .mail-dialog h4 {
   font-size: 12px;
   margin: 20px 0 8px;
 }
@@ -162,7 +165,8 @@
     color: var(--ink);
   }
 }
-.account-more > button[aria-expanded="true"] {
+.account-more > button[aria-expanded="true"],
+.account-more > button[data-open] {
   background: var(--selected);
   color: var(--ink);
 }
@@ -427,7 +431,8 @@
   font-size: 12px;
   margin-bottom: 16px;
 }
-.settings-page .setting-copy {
+.settings-page .setting-copy,
+body[data-studio-settings] .mail-dialog .setting-copy {
   overflow-wrap: anywhere;
 }
 /* Network & Proxy settings */

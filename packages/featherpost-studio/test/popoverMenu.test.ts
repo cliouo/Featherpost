@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
-import { createElement as h, type ReactNode } from "react";
+import { createElement as h, useRef, useState, type ReactNode } from "react";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
+import { StudioDialog } from "../src/app/Dialog";
 import {
   StudioDropdownMenu,
   StudioDropdownMenuItem,
@@ -11,11 +12,12 @@ import {
   StudioDropdownMenuSeparator,
 } from "../src/app/DropdownMenu";
 import {
+  acquireFallbackLayer,
   attachWindowDismissal,
   closeAllPopovers,
   type WindowDismissDocumentLike,
   type WindowDismissWindowLike,
-} from "../src/app/popover";
+} from "../src/ui";
 import { ReaderMoreMenu } from "../src/ReadingPane";
 import { AccountMore } from "../src/settings/Accounts";
 import { SettingsController } from "../src/settings/controller";
@@ -119,6 +121,10 @@ function keydown(target: EventTarget, key: string, init: KeyboardEventInit = {})
   });
 }
 
+function openMenu(): HTMLElement | null {
+  return document.body.querySelector<HTMLElement>('[role="menu"]:not([hidden])');
+}
+
 afterEach(() => {
   while (mountedRoots.length) {
     const entry = mountedRoots.pop()!;
@@ -202,8 +208,8 @@ describe("window-lifecycle dismissal helper", () => {
   });
 });
 
-describe("StudioDropdownMenu (Radix DropdownMenu)", () => {
-  it("supports keyboard open, ArrowUp/ArrowDown/Home/End roving focus, and Escape focus return", async () => {
+describe("StudioDropdownMenu (@ui-sdk/react/menu)", () => {
+  it("supports keyboard open, ArrowUp/ArrowDown/Home/End roving focus, typeahead, disabled protection, and Escape focus return", async () => {
     const onSelect = vi.fn();
     const { container } = mount(
       h(
@@ -230,7 +236,7 @@ describe("StudioDropdownMenu (Radix DropdownMenu)", () => {
     await flushTimers();
 
     expect(trigger.getAttribute("aria-expanded")).toBe("true");
-    const menu = document.body.querySelector<HTMLElement>('[role="menu"]')!;
+    const menu = openMenu()!;
     expect(menu).not.toBeNull();
     expect(menu.hasAttribute("data-shortcuts-off")).toBe(true);
     expect(menu.getAttribute("data-tauri-drag-region")).toBe("false");
@@ -240,10 +246,26 @@ describe("StudioDropdownMenu (Radix DropdownMenu)", () => {
     expect(items.map((el) => el.textContent)).toEqual(["Alpha", "Disabled", "Beta", "Gamma"]);
     expect(document.activeElement).toBe(items[0]);
 
-    // ArrowDown skips the disabled item to Beta.
+    // ArrowDown moves to Disabled (focusable per WAI-ARIA APG with aria-disabled="true"),
+    // and activating it does not fire onSelect or close the menu.
     keydown(items[0], "ArrowDown");
     await flushTimers();
+    expect(document.activeElement).toBe(items[1]);
+    expect(items[1].getAttribute("aria-disabled")).toBe("true");
+    keydown(items[1], "Enter");
+    await flushTimers();
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(openMenu()).not.toBeNull();
+
+    // ArrowDown continues to Beta.
+    keydown(items[1], "ArrowDown");
+    await flushTimers();
     expect(document.activeElement).toBe(items[2]);
+
+    // Typeahead jumps directly to Gamma.
+    keydown(items[2], "g");
+    await flushTimers();
+    expect(document.activeElement).toBe(items[3]);
 
     // End moves to Gamma; ArrowDown loops back to Alpha.
     keydown(items[2], "End");
@@ -264,7 +286,7 @@ describe("StudioDropdownMenu (Radix DropdownMenu)", () => {
     // Escape closes the menu and restores focus to the trigger.
     keydown(items[0], "Escape");
     await flushTimers();
-    expect(document.body.querySelector('[role="menu"]')).toBeNull();
+    expect(openMenu()).toBeNull();
     expect(trigger.getAttribute("aria-expanded")).toBe("false");
     expect(document.activeElement).toBe(trigger);
   });
@@ -298,7 +320,7 @@ describe("StudioDropdownMenu (Radix DropdownMenu)", () => {
 
     pointerOpen(first);
     await flushTimers();
-    expect(document.body.querySelectorAll('[role="menu"]')).toHaveLength(1);
+    expect(document.body.querySelectorAll('[role="menu"]:not([hidden])')).toHaveLength(1);
     expect(document.body.textContent).toContain("First Item");
 
     // Outside click dismisses the open menu.
@@ -308,7 +330,7 @@ describe("StudioDropdownMenu (Radix DropdownMenu)", () => {
       );
     });
     await flushTimers();
-    expect(document.body.querySelector('[role="menu"]')).toBeNull();
+    expect(openMenu()).toBeNull();
 
     // Opening the second menu while the first is open leaves only the second open.
     pointerOpen(first);
@@ -319,12 +341,13 @@ describe("StudioDropdownMenu (Radix DropdownMenu)", () => {
     await flushTimers();
     expect(first.getAttribute("aria-expanded")).toBe("false");
     expect(second.getAttribute("aria-expanded")).toBe("true");
-    const menus = document.body.querySelectorAll('[role="menu"]');
+    const menus = document.body.querySelectorAll('[role="menu"]:not([hidden])');
     expect(menus).toHaveLength(1);
     expect(menus[0].textContent).toContain("Second Item");
   });
 
-  it("dismisses on window blur, pagehide, and hidden visibilitychange without stealing focus back to the trigger", async () => {
+  it("dismisses once on window blur (without double-firing), pagehide, hidden visibilitychange, and closeAllPopovers without stealing focus", async () => {
+    const onOpenChange = vi.fn();
     const { container } = mount(
       h(
         "div",
@@ -333,6 +356,7 @@ describe("StudioDropdownMenu (Radix DropdownMenu)", () => {
         h(
           StudioDropdownMenu,
           {
+            onOpenChange,
             trigger: h("button", { type: "button", className: "trigger" }, "Menu"),
           },
           h(StudioDropdownMenuItem, null, "Item"),
@@ -350,10 +374,14 @@ describe("StudioDropdownMenu (Radix DropdownMenu)", () => {
         document.dispatchEvent(new Event("visibilitychange"));
         Object.defineProperty(document, "hidden", { value: false, configurable: true });
       },
+      () => closeAllPopovers(),
     ]) {
+      onOpenChange.mockClear();
       pointerOpen(trigger);
       await flushTimers();
-      expect(document.body.querySelector('[role="menu"]')).not.toBeNull();
+      expect(openMenu()).not.toBeNull();
+      expect(onOpenChange).toHaveBeenCalledWith(true);
+      onOpenChange.mockClear();
 
       act(() => {
         other.focus();
@@ -362,9 +390,106 @@ describe("StudioDropdownMenu (Radix DropdownMenu)", () => {
         fire();
       });
       await flushTimers();
-      expect(document.body.querySelector('[role="menu"]')).toBeNull();
+      expect(openMenu()).toBeNull();
+      // Exactly one false transition (no duplicate firing between @ui-sdk window-blur and windowDismiss).
+      expect(onOpenChange).toHaveBeenCalledTimes(1);
+      expect(onOpenChange).toHaveBeenCalledWith(false);
       // Must not steal focus back to trigger (e.g. when user clicked into reading-pane iframe).
       expect(document.activeElement).not.toBe(trigger);
+    }
+  });
+
+  it("hands focus from a menu item cleanly to an opened Dialog without stealing focus back, and restores trigger focus after Dialog closes", async () => {
+    function HandoffHarness() {
+      const [dialogOpen, setDialogOpen] = useState(false);
+      const cancelRef = useRef<HTMLButtonElement>(null);
+      return h(
+        "div",
+        null,
+        h(
+          StudioDropdownMenu,
+          {
+            trigger: h("button", { type: "button", className: "menu-trigger" }, "Account"),
+          },
+          h(
+            StudioDropdownMenuItem,
+            { onSelect: () => setDialogOpen(true) },
+            "Remove account",
+          ),
+        ),
+        dialogOpen &&
+          h(
+            StudioDialog,
+            {
+              title: "Remove account?",
+              initialFocusRef: cancelRef,
+              onClose: () => setDialogOpen(false),
+            },
+            h(
+              "button",
+              {
+                ref: cancelRef,
+                type: "button",
+                className: "dialog-cancel",
+                onClick: () => setDialogOpen(false),
+              },
+              "Cancel",
+            ),
+          ),
+      );
+    }
+
+    const { container } = mount(h(HandoffHarness));
+    const trigger = container.querySelector<HTMLButtonElement>("button.menu-trigger")!;
+    act(() => {
+      trigger.focus();
+    });
+    keydown(trigger, "ArrowDown");
+    await flushTimers();
+
+    const item = openMenu()!.querySelector<HTMLElement>('[role="menuitem"]')!;
+    act(() => {
+      item.click();
+    });
+    await flushTimers();
+
+    expect(openMenu()).toBeNull();
+    const dialog = document.body.querySelector<HTMLElement>('[role="dialog"]')!;
+    expect(dialog).not.toBeNull();
+    const cancelBtn = dialog.querySelector<HTMLButtonElement>("button.dialog-cancel")!;
+    // Menu close must NOT steal focus back to the trigger; focus stays on the Dialog's initialFocus target.
+    expect(document.activeElement).toBe(cancelBtn);
+
+    // Closing the Dialog via Escape restores focus to the original Menu trigger.
+    keydown(dialog, "Escape");
+    await flushTimers();
+    expect(document.body.querySelector('[role="dialog"]')).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it("allocates monotonic Safari 16 fallback inline zIndex when supportsTopLayer() is false", async () => {
+    const baseLayer = acquireFallbackLayer();
+    try {
+      const { container } = mount(
+        h(
+          StudioDropdownMenu,
+          {
+            trigger: h("button", { type: "button", className: "z-trigger" }, "Layer"),
+          },
+          h(StudioDropdownMenuItem, null, "Item"),
+        ),
+      );
+      pointerOpen(container.querySelector<HTMLButtonElement>("button.z-trigger")!);
+      await flushTimers();
+
+      const menu = openMenu()!;
+      expect(menu).not.toBeNull();
+      const z = Number(menu.style.zIndex);
+      expect(Number.isFinite(z)).toBe(true);
+      expect(z).toBeGreaterThan(baseLayer.content);
+      expect(z).toBeLessThan(2000);
+    } finally {
+      baseLayer.release();
     }
   });
 
@@ -383,20 +508,20 @@ describe("StudioDropdownMenu (Radix DropdownMenu)", () => {
     const trigger = view.container.querySelector<HTMLButtonElement>("button.trigger")!;
     pointerOpen(trigger);
     await flushTimers();
-    expect(document.body.querySelector('[role="menu"]')).not.toBeNull();
+    expect(openMenu()).not.toBeNull();
 
     view.rerender(renderMenu(true));
     await flushTimers();
-    expect(document.body.querySelector('[role="menu"]')).toBeNull();
+    expect(openMenu()).toBeNull();
 
     pointerOpen(trigger);
     await flushTimers();
-    expect(document.body.querySelector('[role="menu"]')).toBeNull();
+    expect(openMenu()).toBeNull();
   });
 });
 
 describe("ReaderMoreMenu and AccountMore integration", () => {
-  it("renders ReaderMoreMenu over Radix DropdownMenu with keyboard navigation and action callbacks", async () => {
+  it("renders ReaderMoreMenu over @ui-sdk Menu with keyboard navigation and action callbacks", async () => {
     const onToggleSeen = vi.fn();
     const onOpenThread = vi.fn();
     const { container } = mount(
@@ -420,7 +545,7 @@ describe("ReaderMoreMenu and AccountMore integration", () => {
     keydown(trigger, "ArrowDown");
     await flushTimers();
 
-    const items = [...document.body.querySelectorAll<HTMLElement>('[role="menuitem"]')];
+    const items = [...openMenu()!.querySelectorAll<HTMLElement>('[role="menuitem"]')];
     expect(items).toHaveLength(2);
     expect(items[0].textContent).toBe("标为未读");
     expect(items[1].textContent).toBe("查看会话");
@@ -435,7 +560,7 @@ describe("ReaderMoreMenu and AccountMore integration", () => {
     await flushTimers();
     expect(onOpenThread).toHaveBeenCalledTimes(1);
     expect(onToggleSeen).not.toHaveBeenCalled();
-    expect(document.body.querySelector('[role="menu"]')).toBeNull();
+    expect(openMenu()).toBeNull();
   });
 
   it("renders AccountMore with danger styling, confirmation trigger, and selectable non-menu metadata", async () => {
@@ -473,7 +598,9 @@ describe("ReaderMoreMenu and AccountMore integration", () => {
     });
     await flushTimers();
     expect(c.store.getSnapshot().confirm?.title).toContain("移除");
-    c.cancelConfirmation();
+    act(() => {
+      c.cancelConfirmation();
+    });
     c.dispose();
   });
 

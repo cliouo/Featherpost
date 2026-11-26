@@ -15,6 +15,7 @@ import { readStudioView, saveStudioView, type StudioView } from "./layout";
 import { ContextMenuHost, useContextMenu } from "./ContextMenu";
 import { folderMenu, selectionMenu } from "./menus";
 import { SyncCount } from "./SyncCount";
+import { usePersistentOverlay } from "./ui";
 import {
   StudioActionsContext,
   clipboardCopier,
@@ -105,7 +106,9 @@ export function Studio({
     if (state.toast) setToastText(state.toast);
   }, [state.toast]);
   const searchInput = useRef<HTMLInputElement>(null),
-    navigation = useRef<NavigationHandle>(null);
+    navigation = useRef<NavigationHandle>(null),
+    toastRef = useRef<HTMLDivElement>(null);
+  usePersistentOverlay(toastRef);
   const searchContext = scopeContext(mailbox, searchScope);
   const searchText =
     mail.scope.kind === "search" ? (mail.scope.query.query ?? "") : "";
@@ -401,6 +404,7 @@ export function Studio({
         {View && <View active />}
       </main>
       <div
+        ref={toastRef}
         className={`toast${state.toast ? " show" : ""}`}
         role="status"
         aria-live="polite"

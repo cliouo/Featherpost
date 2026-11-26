@@ -97,7 +97,11 @@ describe("UI SDK architectural boundary", () => {
           violations.push(`${rel}:${line} imports forbidden stylesheet ${specifier}`);
           continue;
         }
-        if (specifier.includes("@radix-ui/react-select")) {
+        if (
+          specifier.includes("@radix-ui/react-select") ||
+          specifier.includes("@radix-ui/react-dialog") ||
+          specifier.includes("@radix-ui/react-dropdown-menu")
+        ) {
           violations.push(`${rel}:${line} still imports retired ${specifier}`);
           continue;
         }
@@ -132,12 +136,14 @@ describe("UI SDK architectural boundary", () => {
     expect(violations).toEqual([]);
   });
 
-  it("pins exact @ui-sdk versions and removes @radix-ui/react-select in package.json", () => {
+  it("pins exact @ui-sdk versions and removes retired Radix Select/Dialog/DropdownMenu in package.json", () => {
     const deps = studioPkg.dependencies as Record<string, string>;
     expect(deps["@ui-sdk/core"]).toBe("0.1.0-beta.17");
     expect(deps["@ui-sdk/react"]).toBe("0.1.0-beta.17");
     expect(deps["@ui-sdk/core"]).not.toMatch(/^[~^]/);
     expect(deps["@ui-sdk/react"]).not.toMatch(/^[~^]/);
     expect(deps["@radix-ui/react-select"]).toBeUndefined();
+    expect(deps["@radix-ui/react-dialog"]).toBeUndefined();
+    expect(deps["@radix-ui/react-dropdown-menu"]).toBeUndefined();
   });
 });
