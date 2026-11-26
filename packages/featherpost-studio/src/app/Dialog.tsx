@@ -182,15 +182,33 @@ export function StudioDialog({
               restoreFocus();
             }}
             onEscapeKeyDown={(event) => {
+              if (
+                typeof document !== "undefined" &&
+                document.querySelector('[data-slot="select-content"][data-open]')
+              ) {
+                event.preventDefault();
+                closeAllPopovers();
+                return;
+              }
               if (busyRef.current) event.preventDefault();
             }}
             onPointerDownOutside={(event) => {
-              if (busyRef.current || !allowOutsideClickRef.current) {
+              const target = event.target as Element | null;
+              if (
+                busyRef.current ||
+                !allowOutsideClickRef.current ||
+                target?.closest?.('[data-slot="select-content"]')
+              ) {
                 event.preventDefault();
               }
             }}
             onInteractOutside={(event) => {
-              if (busyRef.current || !allowOutsideClickRef.current) {
+              const target = event.target as Element | null;
+              if (
+                busyRef.current ||
+                !allowOutsideClickRef.current ||
+                target?.closest?.('[data-slot="select-content"]')
+              ) {
                 event.preventDefault();
               }
             }}

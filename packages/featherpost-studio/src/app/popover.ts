@@ -33,6 +33,8 @@ export interface WindowDismissWindowLike {
 export interface WindowDismissOptions {
   /** Called at most once per open session when the window blurs/hides or an external modal closes popovers. */
   onDismiss(reason: WindowDismissReason): void;
+  /** Whether to attach a `window` `blur` listener (default `true`; set `false` when the primitive already handles `window-blur`). */
+  listenWindowBlur?: boolean;
   doc?: WindowDismissDocumentLike;
   win?: WindowDismissWindowLike;
 }
@@ -56,6 +58,7 @@ export function closeAllPopovers(): void {
  */
 export function attachWindowDismissal({
   onDismiss,
+  listenWindowBlur = true,
   doc = typeof document !== "undefined"
     ? (document as unknown as WindowDismissDocumentLike)
     : undefined,
@@ -80,14 +83,14 @@ export function attachWindowDismissal({
   };
 
   doc?.addEventListener("visibilitychange", onVisibility);
-  win?.addEventListener("blur", onBlur);
+  if (listenWindowBlur) win?.addEventListener("blur", onBlur);
   win?.addEventListener("pagehide", onPageHide);
 
   return () => {
     closed = true;
     openDismissers.delete(externalDismiss);
     doc?.removeEventListener("visibilitychange", onVisibility);
-    win?.removeEventListener("blur", onBlur);
+    if (listenWindowBlur) win?.removeEventListener("blur", onBlur);
     win?.removeEventListener("pagehide", onPageHide);
   };
 }
