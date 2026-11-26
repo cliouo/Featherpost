@@ -323,11 +323,26 @@ describe("Unified Radix StudioDialog / Dialog / AlertDialog", () => {
     const options = [...listbox.querySelectorAll<HTMLElement>('[role="option"]')];
     expect(options).toHaveLength(2);
 
-    // Selecting an option updates state without closing the parent Dialog.
-    keydown(options[0], "ArrowDown");
+    // Pressing Escape while Select is open closes only Select, keeping the parent Dialog open.
+    keydown(options[0], "Escape");
     await flushTimers();
+    expect(document.body.querySelector('[role="listbox"]:not([hidden])')).toBeNull();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(document.body.querySelector('[role="dialog"]')).not.toBeNull();
+
+    // Reopen and select via pointerdown + click without closing the parent Dialog.
     act(() => {
-      options[1].click();
+      combobox.focus();
+    });
+    keydown(combobox, "ArrowDown");
+    await flushTimers();
+    const reopened = document.body.querySelector<HTMLElement>('[role="listbox"]:not([hidden])')!;
+    const reopenedOptions = [...reopened.querySelectorAll<HTMLElement>('[role="option"]')];
+    keydown(reopenedOptions[0], "ArrowDown");
+    await flushTimers();
+    pointerDown(reopenedOptions[1]);
+    act(() => {
+      reopenedOptions[1].click();
     });
     await flushTimers();
     expect(onChoose).toHaveBeenCalledWith("Receipts");

@@ -48,6 +48,12 @@
   --scrollbar-thumb-container-hover: oklch(26% 0.018 155 / 0.24);
   --scrollbar-thumb-hover: oklch(26% 0.018 155 / 0.38);
   --scrollbar-thumb-active: oklch(26% 0.018 155 / 0.52);
+  /* Shared overlay stacking tokens (Safari 16 fallback when top-layer is unavailable). */
+  --z-dialog-backdrop: 60;
+  --z-dialog: 65;
+  --z-toast: 80;
+  --z-skip-link: 100;
+  --z-popover: 1000;
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
   font-size: 13px;
   line-height: 1.55;

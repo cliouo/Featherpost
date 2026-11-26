@@ -1,3 +1,7 @@
+[data-slot][hidden]:not([hidden="until-found"]) {
+  display: none;
+}
+
 .studio-picker,
 .studio-settings button.studio-picker {
   display: inline-flex; align-items: center; justify-content: space-between; gap: 12px;
@@ -13,33 +17,35 @@
 }
 .studio-picker > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .studio-picker-chevron { display: flex; flex-shrink: 0; color: var(--studio-secondary); transition: transform var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard); }
-.studio-picker[data-state="open"] .studio-picker-chevron { transform: rotate(180deg); color: var(--studio-text); }
+.studio-picker[data-open] .studio-picker-chevron { transform: rotate(180deg); color: var(--studio-text); }
 @media (hover: hover) {
   .studio-picker:not([data-disabled]):hover,
   .studio-settings button.studio-picker:not([data-disabled]):hover { background: var(--hover-surface); border-color: var(--hover-border); }
   .studio-search .studio-picker:not([data-disabled]):hover { background: var(--hover-bg); border-color: var(--studio-border); color: var(--studio-text); }
   .studio-search .studio-picker:not([data-disabled]):hover .studio-picker-chevron { color: var(--studio-text); }
-  .studio-picker-scroll:hover { background: var(--hover-bg); color: var(--studio-text); }
 }
 .studio-picker:focus-visible,
-.studio-picker[data-state="open"] { outline: 2px solid var(--studio-mark); outline-offset: 2px; }
+.studio-picker[data-open] { outline: 2px solid var(--studio-mark); outline-offset: 2px; }
 .studio-picker[data-disabled],
 .studio-settings button.studio-picker[data-disabled] { opacity: .5; cursor: default; }
 .studio-picker-menu {
-  z-index: 1000; min-width: var(--radix-select-trigger-width);
-  max-width: min(440px, var(--radix-select-content-available-width));
-  max-height: min(320px, var(--radix-select-content-available-height));
-  overflow: hidden; padding: 4px;
+  z-index: var(--z-popover, 1000);
+  min-width: var(--anchor-width);
+  max-width: min(440px, var(--available-width, calc(100vw - 24px)));
+  max-height: min(320px, var(--available-height, calc(100vh - 24px)));
+  overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain;
+  padding: 4px;
   border: 1px solid var(--studio-border); border-radius: 9px;
   background: var(--studio-surface); color: var(--studio-text);
-  font-family: inherit; font-size: 12px; line-height: 18px;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", sans-serif;
+  font-size: 12px; line-height: 18px;
   box-shadow: 0 12px 36px #0002, 0 2px 8px #0001;
-  transform-origin: var(--radix-select-content-transform-origin);
+  transform-origin: var(--transform-origin);
 }
-.studio-picker-menu[data-state="open"] {
+.studio-picker-menu[data-open] {
   animation: fp-pop-in var(--motion-fast) var(--ease-standard);
 }
-.studio-picker-menu[data-state="closed"] {
+.studio-picker-menu[data-closed] {
   animation: fp-pop-out var(--motion-instant) var(--ease-exit);
 }
 :root[data-studio-theme="dark"] .studio-picker-menu { box-shadow: 0 12px 36px #0006, 0 2px 8px #0004; }
@@ -47,15 +53,15 @@
   display: flex; align-items: center; justify-content: space-between; gap: 16px;
   min-height: 34px; padding: 8px 10px; border-radius: 5px;
   cursor: pointer; outline: none; user-select: none; overflow-wrap: anywhere;
+  color: var(--studio-text);
   transition:
     background-color var(--motion-instant) var(--ease-standard),
     color var(--motion-instant) var(--ease-standard);
 }
 .studio-picker-option[data-highlighted] { background: var(--studio-tint); }
-.studio-picker-option[data-state="checked"] { font-weight: 550; }
+.studio-picker-option[data-selected] { font-weight: 550; }
 .studio-picker-option[data-disabled] { color: var(--studio-muted); opacity: .5; cursor: default; }
 .studio-picker-check { flex-shrink: 0; color: var(--studio-text); }
-.studio-picker-scroll { display: flex; align-items: center; justify-content: center; height: 22px; color: var(--studio-secondary); border-radius: 4px; cursor: pointer; transition: background-color var(--motion-instant) var(--ease-standard), color var(--motion-instant) var(--ease-standard); }
 .studio-activity .activity-account-filter .studio-picker { width: 220px; max-width: 100%; }
 .studio-settings .settings-actions > .studio-picker { width: auto; min-width: 160px; }
 .studio-settings .setting-row > .studio-picker {

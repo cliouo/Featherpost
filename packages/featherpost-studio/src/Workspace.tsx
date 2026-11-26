@@ -88,6 +88,7 @@ export function Workspace({
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       if (
+        e.defaultPrevented ||
         e.metaKey ||
         e.ctrlKey ||
         e.altKey ||
