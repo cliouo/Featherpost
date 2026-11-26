@@ -14,6 +14,7 @@ import { Host } from "../src/host/host";
 import { settingsModule } from "../src/settings/module";
 import { FakeBridge, online } from "./fakeBridge";
 import { BRAND } from "../src/brand";
+import { Switch } from "../src/ui";
 
 it("offers native recovery online and enables daemon-independent offline recovery when supported", async () => {
   const bridge = new FakeBridge();
@@ -160,6 +161,8 @@ function renderNotifications(controller: SettingsController) {
       props?: {
         children?: unknown;
         onClick?: () => void;
+        onCheckedChange?: (checked: boolean) => void;
+        checked?: boolean;
         disabled?: boolean;
         role?: string;
         "aria-label"?: string;
@@ -174,6 +177,16 @@ function renderNotifications(controller: SettingsController) {
         role: el.props.role,
         disabled: el.props.disabled,
         onClick: el.props.onClick,
+      });
+    } else if (el.type === Switch && el.props) {
+      const current = Boolean(el.props.checked);
+      buttons.push({
+        text: "",
+        ariaLabel: el.props["aria-label"],
+        ariaChecked: current,
+        role: "switch",
+        disabled: el.props.disabled,
+        onClick: () => el.props?.onCheckedChange?.(!current),
       });
     }
     walk(el.props?.children);

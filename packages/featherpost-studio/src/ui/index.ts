@@ -1,4 +1,10 @@
 export {
+  Checkbox,
+  type CheckboxChangeDetails,
+  type CheckboxCheckedState,
+  type UiCheckboxProps,
+} from "./Checkbox";
+export {
   ContextMenuHost,
   useContextMenu,
   type ContextMenuHostProps,
@@ -20,7 +26,34 @@ export {
   type StudioDropdownMenuItemProps,
   type StudioDropdownMenuProps,
 } from "./Menu";
+export {
+  StudioPopover,
+  StudioPopoverArrow,
+  StudioPopoverClose,
+  StudioPopoverDescription,
+  StudioPopoverTitle,
+  type StudioPopoverProps,
+} from "./Popover";
 export { Select, type SelectOption, type UiSelectProps } from "./Select";
+export {
+  Switch,
+  type SwitchChangeDetails,
+  type UiSwitchProps,
+} from "./Switch";
+export {
+  StudioTabs,
+  StudioTabsIndicator,
+  StudioTabsList,
+  StudioTabsPanel,
+  StudioTabsTab,
+  type StudioTabsIndicatorProps,
+  type StudioTabsListProps,
+  type StudioTabsPanelProps,
+  type StudioTabsProps,
+  type StudioTabsTabProps,
+  type TabsOrientation,
+  type TabsValueChangeReason,
+} from "./Tabs";
 export {
   attachWindowDismissal,
   closeAllPopovers,

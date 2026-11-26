@@ -6,6 +6,7 @@ import { useStore } from "../host/hooks";
 import type { SettingsController } from "./controller";
 import type { PackageKind, PackagePreview } from "./types";
 import { BRAND } from "../brand";
+import { Switch } from "../ui";
 export { permissionLabels as permissions } from "../i18n";
 export function PermissionList({ values }: { values: string[] }) {
   useUiLocale();
@@ -211,23 +212,18 @@ export function Extensions({
                     </p>
                   )}
                 </div>
-                <button
-                  className="toggle"
-                  type="button"
-                  role="switch"
-                  aria-checked={p.enabled}
+                <Switch
+                  checked={p.enabled}
                   aria-label={m.extensions_toggle_label({ name: packageText(p).name })}
                   disabled={s.busy || !s.online}
-                  onClick={() =>
+                  onCheckedChange={(next) =>
                     controller.confirmPackage(
                       "plugin",
                       p.id,
-                      p.enabled ? "disable" : "enable",
+                      next ? "enable" : "disable",
                     )
                   }
-                >
-                  <span className="toggle-track" />
-                </button>
+                />
               </div>
               <details>
                 <summary>{m.extensions_details()}</summary>

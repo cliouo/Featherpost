@@ -6,6 +6,7 @@ import { useUiLocale } from "../i18n";
 import { Field } from "./Field";
 import type { SettingsController } from "./controller";
 import { BRAND } from "../brand";
+import { Switch } from "../ui";
 
 export function formatUtcOffset(minutes: number): string {
   if (!Number.isFinite(minutes) || minutes === 0) return "UTC+0";
@@ -105,17 +106,12 @@ export function Notifications({
                     : m.settings_notifications_new_mail_unsupported()}
                 </p>
               </div>
-              <button
-                type="button"
-                className="toggle"
-                role="switch"
-                aria-checked={notifyNewMail}
+              <Switch
+                checked={notifyNewMail}
                 aria-label={m.settings_notifications_new_mail()}
                 disabled={!supportsNewMail}
-                onClick={() => edit({ notify_new_mail: !notifyNewMail })}
-              >
-                <span className="toggle-track" />
-              </button>
+                onCheckedChange={(next) => edit({ notify_new_mail: next })}
+              />
             </div>
             <h3>{m.settings_notifications_mute_title()}</h3>
             <p className="group-note">
@@ -160,16 +156,11 @@ export function Notifications({
                 <strong>{m.settings_notifications_sensitive()}</strong>
                 <p>{m.settings_notifications_sensitive_note()}</p>
               </div>
-              <button
-                type="button"
-                className="toggle"
-                role="switch"
-                aria-checked={r.show_sensitive}
+              <Switch
+                checked={r.show_sensitive}
                 aria-label={m.settings_notifications_sensitive()}
-                onClick={() => edit({ show_sensitive: !r.show_sensitive })}
-              >
-                <span className="toggle-track" />
-              </button>
+                onCheckedChange={(next) => edit({ show_sensitive: next })}
+              />
             </div>
             <Field
               label={m.settings_notifications_keywords()}
@@ -196,18 +187,13 @@ export function Notifications({
                   <strong>{m.settings_quiet_hours_follow()}</strong>
                   <p>{m.settings_quiet_hours_follow_hint()}</p>
                 </div>
-                <button
-                  type="button"
-                  className="toggle"
-                  role="switch"
-                  aria-checked={followSystemTz}
+                <Switch
+                  checked={followSystemTz}
                   aria-label={m.settings_quiet_hours_follow()}
-                  onClick={() =>
-                    edit({ follow_system_timezone: !followSystemTz })
+                  onCheckedChange={(next) =>
+                    edit({ follow_system_timezone: next })
                   }
-                >
-                  <span className="toggle-track" />
-                </button>
+                />
               </div>
             )}
             {showTzMismatch && (

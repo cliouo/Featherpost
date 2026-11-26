@@ -5,6 +5,7 @@ import { useStore } from "../host/hooks";
 import { useUiLocale } from "../i18n";
 import { Field } from "./Field";
 import { Choice } from "./Choice";
+import { Switch } from "../ui";
 import type { SettingsController } from "./controller";
 import {
   PROXY_PROTOCOLS,
@@ -254,18 +255,13 @@ export function NetworkProxy({
                         <strong>{m.settings_proxy_auth_toggle()}</strong>
                         <p>{m.settings_proxy_auth_toggle_hint()}</p>
                       </div>
-                      <button
-                        type="button"
-                        className="toggle"
-                        role="switch"
-                        aria-checked={draft.authEnabled}
+                      <Switch
+                        checked={draft.authEnabled}
                         aria-label={m.settings_proxy_auth_toggle()}
-                        onClick={() =>
-                          controller.toggleProxyAuth(!draft.authEnabled)
+                        onCheckedChange={(next) =>
+                          controller.toggleProxyAuth(next)
                         }
-                      >
-                        <span className="toggle-track" />
-                      </button>
+                      />
                     </div>
 
                     {draft.authEnabled && (
