@@ -1018,10 +1018,16 @@ pub struct SearchRequest<'a> {
     pub folder: Option<&'a str>,
     /// 发件人子串，大小写不敏感。
     pub from: Option<&'a str>,
+    /// 收件人（`recipient` 或 `cc`）子串，大小写不敏感。
+    pub to: Option<&'a str>,
+    /// 主题子串，大小写不敏感。
+    pub subject: Option<&'a str>,
     /// 时间范围按列表显示的那个时间（`sort_at`）。
     pub since: Option<u64>,
     pub until: Option<u64>,
     pub has_attachments: Option<bool>,
+    pub seen: Option<bool>,
+    pub flagged: Option<bool>,
     pub limit: u64,
     pub offset: u64,
 }
@@ -2760,22 +2766,34 @@ impl RpcClient {
     }
 
     /// `searchMessages`：本地全文检索 + 结构化过滤（ADR-0029）。
+    ///
+    /// 新增字段 `to` / `subject` / `seen` / `flagged` 仅在 `Some(...)` 时写入请求体，
+    /// 保证未启用新筛选时与拒绝未知键的旧 `maild` 完全兼容。
     pub async fn search(&self, request: &SearchRequest<'_>) -> Result<SearchResult, ClientError> {
-        self.call_typed(
-            "searchMessages",
-            json!({
-                "query": request.query,
-                "account": request.account,
-                "folder": request.folder,
-                "from": request.from,
-                "since": request.since,
-                "until": request.until,
-                "hasAttachments": request.has_attachments,
-                "limit": request.limit.clamp(1, 200),
-                "offset": request.offset,
-            }),
-        )
-        .await
+        let mut params = json!({
+            "query": request.query,
+            "account": request.account,
+            "folder": request.folder,
+            "from": request.from,
+            "since": request.since,
+            "until": request.until,
+            "hasAttachments": request.has_attachments,
+            "limit": request.limit.clamp(1, 200),
+            "offset": request.offset,
+        });
+        if let Some(to) = request.to {
+            params["to"] = json!(to);
+        }
+        if let Some(subject) = request.subject {
+            params["subject"] = json!(subject);
+        }
+        if let Some(seen) = request.seen {
+            params["seen"] = json!(seen);
+        }
+        if let Some(flagged) = request.flagged {
+            params["flagged"] = json!(flagged);
+        }
+        self.call_typed("searchMessages", params).await
     }
 
     /// `searchMessages` 的服务器侧变体：走账户那条 IMAP 连接的 `SEARCH`，
@@ -6038,6 +6056,88 @@ mod tests {
         assert_eq!(result["message_count"], 0);
         server.await.unwrap();
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn search_omits_new_filter_keys_when_none_for_legacy_daemon_compat() {
+        static NEXT_SEARCH_SOCKET: AtomicU64 = AtomicU64::new(0);
+        let suffix = NEXT_SEARCH_SOCKET.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "maild-client-search-{}-{suffix}.sock",
+            std::process::id()
+        ));
+        let listener = tokio::net::UnixListener::bind(&path).unwrap();
+        let server = tokio::spawn(async move {
+            let mut captured = Vec::new();
+            for _ in 0..2 {
+                let (stream, _) = listener.accept().await.unwrap();
+                let (read, mut write) = tokio::io::split(stream);
+                let mut read = BufReader::new(read);
+                let mut line = String::new();
+                read.read_line(&mut line).await.unwrap();
+                let request: Value = serde_json::from_str(&line).unwrap();
+                assert_eq!(request["method"], "searchMessages");
+                captured.push(request["params"].clone());
+                let response = json!({
+                    "jsonrpc": "2.0",
+                    "result": { "messages": [], "total": 0, "scope": "local" },
+                    "id": request["id"],
+                });
+                write
+                    .write_all(format!("{response}\n").as_bytes())
+                    .await
+                    .unwrap();
+            }
+            captured
+        });
+
+        let client = RpcClient::new(Endpoint::Unix { path: path.clone() }).unwrap();
+        // 1. 未设置新筛选时，线缆上绝不出现 to / subject / seen / flagged 键（连 null 都不发）。
+        client
+            .search(&SearchRequest {
+                query: "发票",
+                from: Some("zhang@example.test"),
+                limit: 50,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        // 2. 显式设置新筛选（含 seen = Some(false)）时，按值发出。
+        client
+            .search(&SearchRequest {
+                query: "",
+                to: Some("alice@example.test"),
+                subject: Some("预算"),
+                seen: Some(false),
+                flagged: Some(true),
+                limit: 25,
+                offset: 10,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        let captured = server.await.unwrap();
+        std::fs::remove_file(path).unwrap();
+
+        let legacy_params = captured[0].as_object().unwrap();
+        for new_key in ["to", "subject", "seen", "flagged"] {
+            assert!(
+                !legacy_params.contains_key(new_key),
+                "旧 daemon 兼容：未设置 `{new_key}` 时不得发出该键: {legacy_params:?}"
+            );
+        }
+        assert_eq!(legacy_params["query"], "发票");
+        assert_eq!(legacy_params["from"], "zhang@example.test");
+
+        let extended_params = captured[1].as_object().unwrap();
+        assert_eq!(extended_params["to"], "alice@example.test");
+        assert_eq!(extended_params["subject"], "预算");
+        assert_eq!(extended_params["seen"], false);
+        assert_eq!(extended_params["flagged"], true);
+        assert_eq!(extended_params["limit"], 25);
+        assert_eq!(extended_params["offset"], 10);
     }
 
     /// ADR-0032：一个按脚本应答 `readAttachment` 的假 daemon。`RpcClient::call` 在 IPC 上每请求

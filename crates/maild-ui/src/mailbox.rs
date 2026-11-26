@@ -19,6 +19,8 @@ pub struct MailboxQuery {
     pub flagged: Option<bool>,
     pub query: Option<String>,
     pub from: Option<String>,
+    pub to: Option<String>,
+    pub subject: Option<String>,
     pub since: Option<u64>,
     pub until: Option<u64>,
     pub has_attachments: Option<bool>,
@@ -113,10 +115,15 @@ impl Bridge {
             }
         }
         let method = if q.search {
-            if q.role.is_some() || q.seen.is_some() || q.flagged.is_some() {
+            if q.role.is_some() {
                 return Err(UiError::invalid("search_with_filter", "搜索不接受列表筛选。"));
             }
-            for (k, v) in [("query", q.query), ("from", q.from)] {
+            for (k, v) in [
+                ("query", q.query),
+                ("from", q.from),
+                ("to", q.to),
+                ("subject", q.subject),
+            ] {
                 if let Some(v) = v {
                     params[k] = json!(v);
                 }
@@ -126,13 +133,21 @@ impl Bridge {
                     params[k] = json!(v);
                 }
             }
-            if let Some(v) = q.has_attachments {
-                params["hasAttachments"] = json!(v);
+            for (k, v) in [
+                ("hasAttachments", q.has_attachments),
+                ("seen", q.seen),
+                ("flagged", q.flagged),
+            ] {
+                if let Some(v) = v {
+                    params[k] = json!(v);
+                }
             }
             "searchMessages"
         } else {
             if q.query.is_some()
                 || q.from.is_some()
+                || q.to.is_some()
+                || q.subject.is_some()
                 || q.since.is_some()
                 || q.until.is_some()
                 || q.has_attachments.is_some()

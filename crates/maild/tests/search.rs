@@ -167,6 +167,254 @@ fn structured_filters_narrow_the_result_without_entering_the_match_expression() 
 }
 
 #[test]
+fn extended_structured_filters_match_recipient_cc_subject_flags_literals_and_legacy_rows() {
+    let store = Store::open("").unwrap();
+
+    // 1. To 命中、含 % 和 _ 字面量、未读且星标。
+    store
+        .insert_message(&MailMessage {
+            uid: "1".into(),
+            sender: "boss_100%@example.test".into(),
+            recipient: "Alice_Team <alice_50%@example.test>".into(),
+            cc: String::new(),
+            subject: "Q4_Budget 100% Final".into(),
+            received_at: BASE,
+            date_at: Some(BASE),
+            seen: false,
+            flagged: true,
+            ..message("1", "Q4_Budget 100% Final", "body one")
+        })
+        .unwrap();
+
+    // 2. 仅 Cc 命中、已读且未星标、不含 % / _ 字面量。
+    store
+        .insert_message(&MailMessage {
+            uid: "2".into(),
+            sender: "ops@example.test".into(),
+            recipient: "primary@example.test".into(),
+            cc: "Bob <bob@example.test>, Carol <carol@example.test>".into(),
+            subject: "Q4XBudget 1000 Final".into(),
+            received_at: BASE + 100,
+            date_at: Some(BASE + 100),
+            seen: true,
+            flagged: false,
+            ..message("2", "Q4XBudget 1000 Final", "body two")
+        })
+        .unwrap();
+
+    // 3. 兼容旧库空字段行（recipient / cc / subject 均为空串）、已读且星标。
+    store
+        .insert_message(&MailMessage {
+            uid: "3".into(),
+            sender: "legacy@example.test".into(),
+            recipient: String::new(),
+            cc: String::new(),
+            subject: String::new(),
+            received_at: BASE + 200,
+            date_at: Some(BASE + 200),
+            seen: true,
+            flagged: true,
+            ..message("3", "", "legacy body")
+        })
+        .unwrap();
+
+    // 4. 仅 Cc 命中且同时满足未读 + 星标，用于验证括号优先级：
+    //    `((recipient) OR (cc)) AND seen = 0 AND flagged = 1` 不得因缺括号泄漏 OR。
+    store
+        .insert_message(&MailMessage {
+            uid: "4".into(),
+            sender: "ops@example.test".into(),
+            recipient: "nobody@example.test".into(),
+            cc: "Bob <bob@example.test>".into(),
+            subject: "季度复盘".into(),
+            received_at: BASE + 300,
+            date_at: Some(BASE + 300),
+            seen: false,
+            flagged: true,
+            ..message("4", "季度复盘", "body four")
+        })
+        .unwrap();
+
+    // `to` 匹配 recipient（大小写不敏感）。
+    assert_eq!(
+        uids(
+            &store,
+            &SearchQuery {
+                recipient: Some("ALICE_50%".into()),
+                ..query("")
+            }
+        ),
+        vec!["1".to_string()]
+    );
+
+    // `to` 仅命中 Cc（不漏抄送，且空旧行不会被误命中）。
+    assert_eq!(
+        uids(
+            &store,
+            &SearchQuery {
+                recipient: Some("BOB@EXAMPLE.TEST".into()),
+                ..query("")
+            }
+        ),
+        vec!["4".to_string(), "2".to_string()]
+    );
+
+    // `to` 与 `seen` / `flagged` 组合 AND：验证 `recipient OR cc` 被正确括号包裹。
+    assert_eq!(
+        uids(
+            &store,
+            &SearchQuery {
+                recipient: Some("bob@example.test".into()),
+                seen: Some(false),
+                flagged: Some(true),
+                ..query("")
+            }
+        ),
+        vec!["4".to_string()]
+    );
+    assert_eq!(
+        uids(
+            &store,
+            &SearchQuery {
+                recipient: Some("bob@example.test".into()),
+                seen: Some(true),
+                flagged: Some(false),
+                ..query("")
+            }
+        ),
+        vec!["2".to_string()]
+    );
+
+    // `subject` 字面子串：`_` 与 `%` 按字面匹配，不当作 SQL LIKE 通配符。
+    assert_eq!(
+        uids(
+            &store,
+            &SearchQuery {
+                subject: Some("q4_budget 100%".into()),
+                ..query("")
+            }
+        ),
+        vec!["1".to_string()],
+        "uid 2 的 Q4XBudget 1000 不应被 _ 或 % 通配命中"
+    );
+    assert_eq!(
+        uids(
+            &store,
+            &SearchQuery {
+                subject: Some("复盘".into()),
+                ..query("")
+            }
+        ),
+        vec!["4".to_string()]
+    );
+
+    // `seen` 与 `flagged` 独立过滤（空 query 跳过 FTS）。
+    assert_eq!(
+        uids(
+            &store,
+            &SearchQuery {
+                seen: Some(false),
+                ..query("")
+            }
+        ),
+        vec!["4".to_string(), "1".to_string()]
+    );
+    assert_eq!(
+        uids(
+            &store,
+            &SearchQuery {
+                seen: Some(true),
+                ..query("")
+            }
+        ),
+        vec!["3".to_string(), "2".to_string()]
+    );
+    assert_eq!(
+        uids(
+            &store,
+            &SearchQuery {
+                flagged: Some(true),
+                ..query("")
+            }
+        ),
+        vec!["4".to_string(), "3".to_string(), "1".to_string()]
+    );
+    assert_eq!(
+        uids(
+            &store,
+            &SearchQuery {
+                flagged: Some(false),
+                ..query("")
+            }
+        ),
+        vec!["2".to_string()]
+    );
+
+    // 分页下 COUNT 与分页 SELECT 共用同一谓词。
+    let (page, total) = store
+        .search_messages(&SearchQuery {
+            flagged: Some(true),
+            limit: 2,
+            offset: 1,
+            ..query("")
+        })
+        .unwrap();
+    assert_eq!(total, 3);
+    assert_eq!(
+        page.into_iter().map(|s| s.uid).collect::<Vec<_>>(),
+        vec!["3".to_string(), "1".to_string()]
+    );
+
+    // 空旧行不匹配任何非空 `to` / `subject` 筛选；纯空白筛选不影响空旧行。
+    assert!(uids(
+        &store,
+        &SearchQuery {
+            recipient: Some("%".into()),
+            ..query("")
+        }
+    )
+    .iter()
+    .all(|uid| uid != "3"));
+    assert_eq!(
+        uids(
+            &store,
+            &SearchQuery {
+                recipient: Some("   ".into()),
+                subject: Some("   ".into()),
+                ..query("")
+            }
+        ),
+        vec!["4".to_string(), "3".to_string(), "2".to_string(), "1".to_string()]
+    );
+
+    // 乐观删除/移动（pending_removal = 1）在纯结构化过滤下同样不可见。
+    store
+        .queue_move_ops("acc", "INBOX", &["4".into()], "Trash", BASE + 400)
+        .unwrap();
+    assert_eq!(
+        uids(
+            &store,
+            &SearchQuery {
+                recipient: Some("bob@example.test".into()),
+                ..query("")
+            }
+        ),
+        vec!["2".to_string()]
+    );
+    assert_eq!(
+        uids(
+            &store,
+            &SearchQuery {
+                seen: Some(false),
+                flagged: Some(true),
+                ..query("")
+            }
+        ),
+        vec!["1".to_string()]
+    );
+}
+
+#[test]
 fn results_are_ordered_by_the_same_key_as_the_list() {
     let store = Store::open("").unwrap();
     for (uid, date_at) in [("old", BASE), ("new", BASE + 86_400), ("mid", BASE + 3_600)] {

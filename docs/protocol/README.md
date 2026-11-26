@@ -52,7 +52,7 @@
 | `setReadingPolicy` | `{remote_content?, trust?, untrust?}` | `{policy, persisted}` | 无（配置文件方式启动） |
 | `getLocalePreference` | `{}` | `{preference, effective, persisted}` | 无（配置文件方式启动） |
 | `setLocalePreference` | `{mode, languages?}` | `{preference, effective, persisted}` | 无（配置文件方式启动） |
-| `searchMessages` | `{query?, account?, folder?, from?, since?, until?, hasAttachments?, limit?, offset?, scope?}` | `{messages, total, scope, truncated?}` | `store`（`scope=server` 另需该账户在线） |
+| `searchMessages` | `{query?, account?, folder?, from?, to?, subject?, since?, until?, hasAttachments?, seen?, flagged?, limit?, offset?, scope?}` | `{messages, total, scope, truncated?}` | `store`（`scope=server` 另需该账户在线） |
 | `getThread` | `{account, uid?, threadId?, folder?, limit?, offset?}` | `{threadId, messages, total}` | `store` |
 | `getSearchIndexStatus` | `{}` | `{pending, done}` | `store` |
 | `markMessages` | `{account, folder, uids, flag, value}` | `{ok, queued, queued_uids, unchanged_uids, missing_uids}` | `store` |
@@ -543,9 +543,12 @@ addr-spec，小写后先比地址、再比**精确**域名（`news.example.com` 
 
 **`query` 是纯文本，不是查询语法。** 内核自己切词并构造 FTS5 表达式：`"`、`*`、`-`、`(`、
 `:`、`NEAR`、`AND`/`OR`/`NOT` 都被当成普通字符，既不会引发语法错误，也不会跨列检索。
-需要精确控制的维度以结构化参数暴露：`from`（发件人子串，大小写不敏感）、`since` / `until`
-（unix 秒，按列表显示的那个时间即 `sort_at`）、`hasAttachments`、`folder`、`account`。
-省略 `query` 或只给空白时退化为纯过滤查询。
+需要精确控制的维度以结构化参数暴露：`from`（发件人子串，大小写不敏感）、`to`（收件人 `recipient`
+或 `cc` 子串，大小写不敏感，字面匹配，不解析 `%`/`_` 通配符）、`subject`（主题子串，
+大小写不敏感）、`since` / `until`（unix 秒，按列表显示的那个时间即 `sort_at`，须不超过
+`i64::MAX` 且 `since <= until`）、`hasAttachments`（布尔）、`seen`（布尔，`false` 表示未读、
+`true` 表示已读）、`flagged`（布尔）、`folder`、`account`。文本筛选字段受 512 字节上限约束，
+空串或超长返回 `-32602`，仅含空白的字符串按省略处理；省略 `query` 或只给空白时退化为纯过滤查询。
 
 中文按**逐字切分 + 短语**索引（ADR-0029 决策 3）：「发票」能命中「发票已开具」，
 但不会命中「发货……票据」——短语要求字符相邻，等价于原文子串。查询词之间是 `AND`。
@@ -556,7 +559,8 @@ addr-spec，小写后先比地址、再比**精确**域名（`news.example.com` 
 `scope: "server"` 改走该账户 IMAP 连接上的 `UID SEARCH`，用于本地索引覆盖不到的历史
 （超出 64 个同步文件夹的信箱、未同步的信箱、回填未完成的窗口）。它必须同时给出
 `account`、`folder` 与非空 `query`，最多返回 200 条，**结果不落库**（只有摘要，没有正文与
-附件）。账户离线立即返回错误，不排队。
+附件）；且不接受非空的 `to`、`subject`、`seen`、`flagged` 筛选字段（提供时直接返回
+`-32602`，不静默忽略也不在 200 条截断后做客户端过滤）。账户离线立即返回错误，不排队。
 
 `getThread` 返回一条会话的全部消息，**时间正序**且**跨文件夹**——收件箱里的来信与已发送里的
 回复本来就是同一条会话。线程只按 `Message-ID` / `In-Reply-To` / `References` 判定，

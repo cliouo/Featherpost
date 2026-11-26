@@ -1016,10 +1016,15 @@ async fn mailbox_workspace_queries_writes_threads_and_large_activity_use_fronten
         }
         let mut root = seeded("a", "Incoming", "7", "印刷确认", 1000);
         root.message_id = "press-root@test".into();
+        root.recipient = "team@example.test".into();
+        root.seen = false;
         store.insert_message(&root).unwrap();
         let mut reply = seeded("a", "Sent", "7", "Re: 印刷确认", 1100);
         reply.message_id = "press-reply@test".into();
         reply.in_reply_to = "press-root@test".into();
+        reply.recipient = "editor@example.test".into();
+        reply.cc = "observer@example.test".into();
+        reply.seen = true;
         store.insert_message(&reply).unwrap();
         store
             .insert_message(&seeded("b", "INBOX", "7", "另一个账户", 1050))
@@ -1108,6 +1113,70 @@ async fn mailbox_workspace_queries_writes_threads_and_large_activity_use_fronten
         .unwrap();
     assert_eq!(starred.total, 1);
     assert_eq!(starred.messages[0].account, "a");
+
+    // 扩展搜索过滤：search=true 允许 to（含 Cc 仅命中）、subject、seen=Some(false)、flagged=Some(true)。
+    let unread_flagged = bridge
+        .mailbox_query(
+            MailboxQuery {
+                search: true,
+                to: Some("team@example.test".into()),
+                subject: Some("印刷".into()),
+                seen: Some(false),
+                flagged: Some(true),
+                ..Default::default()
+            },
+            0,
+        )
+        .await
+        .unwrap();
+    assert_eq!(unread_flagged.total, 1);
+    assert_eq!(unread_flagged.messages[0].folder, "Incoming");
+
+    let cc_search = bridge
+        .mailbox_query(
+            MailboxQuery {
+                search: true,
+                to: Some("observer@example.test".into()),
+                seen: Some(true),
+                ..Default::default()
+            },
+            0,
+        )
+        .await
+        .unwrap();
+    assert_eq!(cc_search.total, 1);
+    assert_eq!(cc_search.messages[0].folder, "Sent");
+
+    // search=true 仍然拒绝 role。
+    let role_in_search = bridge
+        .mailbox_query(
+            MailboxQuery {
+                search: true,
+                role: Some("inbox".into()),
+                ..Default::default()
+            },
+            0,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(role_in_search.code, UiErrorCode::Invalid);
+    assert_eq!(role_in_search.reason, "search_with_filter");
+
+    // search=false（列表）显式拒绝 to / subject。
+    for bad_list in [
+        MailboxQuery {
+            to: Some("team@example.test".into()),
+            ..Default::default()
+        },
+        MailboxQuery {
+            subject: Some("印刷".into()),
+            ..Default::default()
+        },
+    ] {
+        let err = bridge.mailbox_query(bad_list, 0).await.unwrap_err();
+        assert_eq!(err.code, UiErrorCode::Invalid);
+        assert_eq!(err.reason, "search_query_required");
+    }
     let activity = bridge.mailbox_activity(None, None).await.unwrap();
     assert!(activity
         .ops
