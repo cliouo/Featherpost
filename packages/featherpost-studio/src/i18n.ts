@@ -12,6 +12,33 @@ export function uiLocale(): UiLocale {
   return getUiLocale();
 }
 
+type NoArgMessage = (
+  inputs?: Record<string, never>,
+  options?: { locale?: UiLocale },
+) => string;
+
+/**
+ * 从无参界面消息生成去重后的中英双语关键词列表（零硬编码 CJK），
+ * 供命令注册与未来的命令面板中英互搜使用。
+ */
+export function bilingualKeywords(
+  title: NoArgMessage,
+  aliases?: NoArgMessage,
+): readonly string[] {
+  const tokens = new Set<string>();
+  for (const locale of ["zh-CN", "en"] as const) {
+    const label = title({}, { locale }).trim();
+    if (label) tokens.add(label);
+    if (aliases) {
+      for (const part of aliases({}, { locale }).split(/[,\n]/)) {
+        const clean = part.trim();
+        if (clean) tokens.add(clean);
+      }
+    }
+  }
+  return [...tokens];
+}
+
 /** manifest `[l10n.<tag>]` 的一条（ADR-0048 决策 5）；缺的字段回落顶层。 */
 export interface PackageL10nEntry {
   name?: string;

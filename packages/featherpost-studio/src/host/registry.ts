@@ -1,8 +1,8 @@
 import { m } from '@featherpost/i18n/messages';
 
 import type {
-  CommandContribution, Contributions, CoreRole, RegisteredContribution, RegistrySnapshot,
-  SettingsContribution, ViewContribution,
+  CommandContribution, CommandLocation, Contributions, CoreRole, EnabledWhen, RegisteredContribution,
+  RegistrySnapshot, SettingsContribution, ViewContribution,
 } from './types';
 
 interface Entry<View> {
@@ -27,7 +27,28 @@ export function copyContribution<T extends object>(value: T, overrides: Partial<
 
 const MODULE_ID = /^[a-z][a-z0-9]*(?:\.[a-z][a-z0-9-]*)+$/;
 const CONTRIBUTION_SUFFIX = /^[a-z][a-z0-9.-]*$/;
+const VALID_COMMAND_LOCATIONS = new Set<CommandLocation>(['navigation', 'toolbar', 'menu', 'palette']);
+const VALID_ENABLED_WHEN = new Set<EnabledWhen>([
+  'always',
+  'message-selected',
+  'online-message-selected',
+  'online',
+  'targets',
+  'online-targets',
+  'checked-messages',
+]);
 const VALID_COMMAND_RISKS = new Set(['read', 'stage', 'write', 'destructive']);
+
+function normalizeShortcut(value: string): string {
+  return value.trim().toLowerCase().replace(/\s*\+\s*/g, '+');
+}
+
+function isValidShortcut(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  const normalized = normalizeShortcut(value);
+  if (!normalized) return false;
+  return normalized.split('+').every((token) => token.length > 0);
+}
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
@@ -102,11 +123,19 @@ export class ContributionRegistry<View> {
     const stored: Contributions<View> = copyContribution(bundle, {
       commands: bundle.commands?.map((command) => {
         const schemaDescriptor = Object.getOwnPropertyDescriptor(command, 'inputSchema');
+        const keywordsDescriptor = Object.getOwnPropertyDescriptor(command, 'keywords');
+        const shortcutDescriptor = Object.getOwnPropertyDescriptor(command, 'shortcut');
         const overrides: Partial<CommandContribution> = {
-          locations: [...command.locations],
+          locations: Array.isArray(command.locations) ? [...command.locations] : command.locations,
         };
         if (schemaDescriptor && 'value' in schemaDescriptor && isPlainRecord(schemaDescriptor.value)) {
           overrides.inputSchema = cloneSchema(schemaDescriptor.value);
+        }
+        if (keywordsDescriptor && 'value' in keywordsDescriptor && Array.isArray(keywordsDescriptor.value)) {
+          overrides.keywords = [...keywordsDescriptor.value];
+        }
+        if (shortcutDescriptor && 'value' in shortcutDescriptor && typeof shortcutDescriptor.value === 'string') {
+          overrides.shortcut = normalizeShortcut(shortcutDescriptor.value);
         }
         return copyContribution(command, overrides);
       }),
@@ -155,14 +184,30 @@ export class ContributionRegistry<View> {
         ids.add(value.id);
       }
       for (const command of bundle.commands ?? []) {
-        if (command.locations.length === 0)
+        if (!Array.isArray(command.locations) || command.locations.length === 0)
           throw new Error(m.extensions_registry_command_location({ id: command.id }));
+        for (const location of command.locations) {
+          if (!VALID_COMMAND_LOCATIONS.has(location))
+            throw new Error(`Invalid command location for ${command.id}: ${String(location)}`);
+        }
+        if (command.enabledWhen !== undefined && !VALID_ENABLED_WHEN.has(command.enabledWhen))
+          throw new Error(`Invalid command enabledWhen for ${command.id}: ${String(command.enabledWhen)}`);
+        if (command.canExecute !== undefined && typeof command.canExecute !== 'function')
+          throw new Error(`Invalid command canExecute for ${command.id}`);
         if (command.risk !== undefined && !VALID_COMMAND_RISKS.has(command.risk))
           throw new Error(`Invalid command risk for ${command.id}: ${String(command.risk)}`);
         if (command.description !== undefined && typeof command.description !== 'string')
           throw new Error(`Invalid command description for ${command.id}`);
         if (command.inputSchema !== undefined && !isPlainRecord(command.inputSchema))
           throw new Error(`Invalid command inputSchema for ${command.id}`);
+        if (
+          command.keywords !== undefined &&
+          (!Array.isArray(command.keywords) ||
+            command.keywords.some((keyword) => typeof keyword !== 'string' || !keyword.trim()))
+        )
+          throw new Error(`Invalid command keywords for ${command.id}`);
+        if (command.shortcut !== undefined && !isValidShortcut(command.shortcut))
+          throw new Error(`Invalid command shortcut for ${command.id}`);
       }
       for (const view of bundle.views ?? []) {
         if (view.role && roles.has(view.role))

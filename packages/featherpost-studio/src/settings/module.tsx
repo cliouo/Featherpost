@@ -1,5 +1,6 @@
 import { m } from "@featherpost/i18n/messages";
 import {
+  bilingualKeywords,
   identityFailureText,
   lifecycleLabel,
   packageText,
@@ -280,8 +281,8 @@ export function settingsModule(
       return () => { delete document.body.dataset.studioSettings; };
     }, []);
     const navigate = (id: string) => {
-      const next = () => controller.activate(id);
-      if (controller.requestLeave(next)) next();
+      if (id === active?.id) return;
+      controller.selectSection(id);
     };
     const Section = active?.render;
     const accounts = active?.id === "maild.settings.accounts";
@@ -336,7 +337,7 @@ export function settingsModule(
                 </div>
                 {accounts ? (
                   <button type="button" className="primary" disabled={!state.online || state.busy || state.loading || state.closeLocked || state.profiles === null}
-                    onClick={() => { const next = () => controller.beginAccount(); if (controller.requestLeave(next)) next(); }}>
+                    onClick={() => { controller.runAfterLeave(() => controller.beginAccount()); }}>
                     <span aria-hidden="true">{PLUS}</span> {m.studio_account_add_mailbox()}
                   </button>
                 ) : active?.id === "maild.settings.appearance" ? (
@@ -412,6 +413,65 @@ export function settingsModule(
     get title() {
       return m.studio_settings_title();
     },
+    commands: [
+      {
+        id: "maild.settings.open",
+        get title() {
+          return m.settings_command_open();
+        },
+        get description() {
+          return m.settings_command_open_description();
+        },
+        get keywords() {
+          return bilingualKeywords(
+            m.settings_command_open,
+            m.settings_command_open_keywords,
+          );
+        },
+        shortcut: "mod+,",
+        risk: "read",
+        icon: "settings",
+        locations: ["navigation", "palette"],
+        order: 900,
+        execute: () => {
+          host.openView(SETTINGS_VIEW);
+        },
+      },
+      {
+        id: "maild.settings.add-account",
+        get title() {
+          return m.settings_command_add_account();
+        },
+        get description() {
+          return m.settings_command_add_account_description();
+        },
+        get keywords() {
+          return bilingualKeywords(
+            m.settings_command_add_account,
+            m.settings_command_add_account_keywords,
+          );
+        },
+        risk: "stage",
+        icon: "settings",
+        locations: ["palette"],
+        order: 910,
+        canExecute: () => {
+          const s = controller.store.getSnapshot();
+          return !s.busy && !s.closeLocked;
+        },
+        execute: () => {
+          const s = controller.store.getSnapshot();
+          if (s.busy || s.closeLocked) return;
+          if (host.state.getSnapshot().activeViewId === SETTINGS_VIEW) {
+            controller.openSetup();
+            return;
+          }
+          host.runAfterLeave(SETTINGS_VIEW, () => {
+            if (host.openView(SETTINGS_VIEW)) controller.openSetup();
+          });
+        },
+      },
+    ],
     views: [
       {
         id: SETTINGS_VIEW,

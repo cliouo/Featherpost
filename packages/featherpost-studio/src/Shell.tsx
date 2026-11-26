@@ -129,10 +129,26 @@ export function Studio({
     document.title = "Featherpost Studio";
     void host.bridge.compose.ready().catch(() => {});
   }, [host]);
-  const openMailbox = async (action: () => void) => {
+  const openMailbox = (action: () => void): Promise<boolean> => {
     const current = mailbox.navigationGuard();
-    if (!(await host.approveNavigation(MAIL)) || !current()) return;
-    if (host.openView(MAIL)) action();
+    return new Promise<boolean>((resolve) => {
+      host.runAfterLeave(
+        MAIL,
+        () => {
+          if (!current()) {
+            resolve(false);
+            return;
+          }
+          if (host.openView(MAIL)) {
+            action();
+            resolve(true);
+            return;
+          }
+          resolve(false);
+        },
+        () => resolve(false),
+      );
+    });
   };
   const changeView = (next: StudioView) =>
     void openMailbox(() => {
@@ -167,9 +183,11 @@ export function Studio({
   }, [host]);
   const actions: StudioActions = {
     search(text, all = false) {
-      if (all) setAllMail(true);
-      setSearch(text);
-      void openMailbox(() => searchMail(mailbox, text, all || allMail, searchScope));
+      void openMailbox(() => {
+        if (all) setAllMail(true);
+        setSearch(text);
+        searchMail(mailbox, text, all || allMail, searchScope);
+      });
     },
     copy: clipboardCopier((text) => host.notify(text)),
   };
@@ -181,7 +199,8 @@ export function Studio({
         mailbox.setUnreadFilter(true);
       }),
     searchIn: (folder) =>
-      void openMailbox(() => mailbox.selectFolder(folder)).then(() => {
+      void openMailbox(() => {
+        mailbox.selectFolder(folder);
         setAllMail(false);
         searchInput.current?.focus();
         searchInput.current?.select();
@@ -254,11 +273,14 @@ export function Studio({
             }
             onValueChange={(value) => {
               const all = value === "all";
-              setAllMail(all);
-              if (search.trim())
-                void openMailbox(() =>
-                  searchMail(mailbox, search, all, searchScope),
-                );
+              if (search.trim()) {
+                void openMailbox(() => {
+                  setAllMail(all);
+                  searchMail(mailbox, search, all, searchScope);
+                });
+              } else {
+                setAllMail(all);
+              }
             }}
           >
             {(searchContext.account || searchContext.accounts) && (
@@ -279,8 +301,10 @@ export function Studio({
               title={m.studio_search_clear()}
               aria-label={m.studio_search_clear()}
               onClick={() => {
-                setSearch("");
-                void openMailbox(() => searchMail(mailbox, ""));
+                void openMailbox(() => {
+                  setSearch("");
+                  searchMail(mailbox, "");
+                });
               }}
             >
               ×
