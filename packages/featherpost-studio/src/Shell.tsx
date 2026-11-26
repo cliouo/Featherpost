@@ -35,6 +35,39 @@ import {
 // i18n-lint-allow-cjk: 全角加号是按钮的装饰图标（aria-hidden），不是文案
 const PLUS = "＋";
 
+export function isGlobalShortcutBlocked(
+  event: Pick<KeyboardEvent, "defaultPrevented" | "target">,
+): boolean {
+  if (event.defaultPrevented) return true;
+  if (typeof document === "undefined") return false;
+  if (document.querySelector('dialog[open], [aria-modal="true"]')) return true;
+  const isActiveGate = (el: Element | null | undefined) =>
+    Boolean(el && !el.closest("[hidden]"));
+  const target = event.target as
+    | { closest?(selector: string): Element | null }
+    | null
+    | undefined;
+  if (
+    target &&
+    typeof target.closest === "function" &&
+    isActiveGate(target.closest("[data-shortcuts-off]"))
+  ) {
+    return true;
+  }
+  const active = document.activeElement;
+  if (
+    active &&
+    typeof active.closest === "function" &&
+    isActiveGate(active.closest("[data-shortcuts-off]"))
+  ) {
+    return true;
+  }
+  for (const el of document.querySelectorAll("[data-shortcuts-off]")) {
+    if (isActiveGate(el)) return true;
+  }
+  return false;
+}
+
 export function Studio({
   host,
   mailbox,
@@ -109,7 +142,7 @@ export function Studio({
       if (
         !(e.metaKey || e.ctrlKey) ||
         e.altKey ||
-        document.querySelector('dialog[open], [aria-modal="true"]')
+        isGlobalShortcutBlocked(e)
       )
         return;
       if (e.key.toLowerCase() === "k") {

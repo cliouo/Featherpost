@@ -50,7 +50,6 @@ export function ContextMenuHost({
   const before = useRef<string | null>(null);
   const marked = useRef<Element | null>(null);
   const [entries, setEntries] = useState<MenuEntry[]>([]);
-  const [container, setContainer] = useState<HTMLElement | undefined>();
   const api = useMemo<MenuOffers>(
     () => ({
       offer(event, build, target = event.currentTarget as Element) {
@@ -107,8 +106,6 @@ export function ContextMenuHost({
       return;
     }
     mark(offer?.target ?? null);
-    // Native modal dialogs sit in the top layer; a body portal would be inert behind them.
-    setContainer((target.closest("dialog") as HTMLElement | null) ?? undefined);
     setEntries(list);
   };
   return (
@@ -129,7 +126,7 @@ export function ContextMenuHost({
         >
           {children}
         </Menu.Trigger>
-        <Menu.Portal container={container}>
+        <Menu.Portal>
           <Menu.Content
             className="studio-menu"
             collisionPadding={10}
@@ -141,7 +138,7 @@ export function ContextMenuHost({
               if (active && active !== document.body) e.preventDefault();
             }}
           >
-            <Entries entries={entries} container={container} />
+            <Entries entries={entries} />
           </Menu.Content>
         </Menu.Portal>
       </Menu.Root>
@@ -157,7 +154,7 @@ function Slot({ icon, children }: { icon?: IconName; children?: ReactElement }) 
   );
 }
 
-function Entries({ entries, container }: { entries: MenuEntry[]; container?: HTMLElement }) {
+function Entries({ entries }: { entries: MenuEntry[] }) {
   return entries.map((entry, index) => {
     const key = `${index}:${entry.kind}:${"label" in entry ? entry.label : ""}`;
     switch (entry.kind) {
@@ -196,7 +193,7 @@ function Entries({ entries, container }: { entries: MenuEntry[]; container?: HTM
                 <path d="m6 4 4 4-4 4" />
               </svg>
             </Menu.SubTrigger>
-            <Menu.Portal container={container}>
+            <Menu.Portal>
               <Menu.SubContent
                 className="studio-menu studio-submenu"
                 sideOffset={4}
@@ -206,7 +203,7 @@ function Entries({ entries, container }: { entries: MenuEntry[]; container?: HTM
                 data-shortcuts-off
               >
                 {entry.entries.length ? (
-                  <Entries entries={entry.entries} container={container} />
+                  <Entries entries={entry.entries} />
                 ) : (
                   <div className="studio-menu-empty">{entry.empty ?? m.studio_menu_empty()}</div>
                 )}

@@ -25,11 +25,7 @@ export function StudioSelect({ value, onValueChange, children, disabled, classNa
   const items = optionsOf(children);
   const selected = items.findIndex((item) => item.value === value);
   const [open, setOpen] = useState(false);
-  const [trigger, setTrigger] = useState<HTMLButtonElement | null>(null);
   const [selectionPending, setSelectionPending] = useState(false);
-  // Native modal dialogs live in the top layer. A body portal would be behind
-  // their backdrop and inert, regardless of the menu's z-index.
-  const container = trigger?.closest("dialog") ?? undefined;
   // Keep option identity stable when a profile/folder refresh reorders items.
   // The prefix also lets Radix represent our valid empty-string wire values.
   const keyOf = (wireValue: string) => `choice:${wireValue}`;
@@ -51,14 +47,14 @@ export function StudioSelect({ value, onValueChange, children, disabled, classNa
           onValueChange(item.value);
         }
       }}>
-      <Select.Trigger {...label} ref={setTrigger} aria-disabled={disabled || undefined}
+      <Select.Trigger {...label} aria-disabled={disabled || undefined}
         data-disabled={disabled ? "" : undefined} className={`studio-picker ${className ?? ""}`}>
         <Select.Value placeholder={m.studio_select_placeholder()}>{items[selected]?.label ?? m.studio_select_placeholder()}</Select.Value>
         <Select.Icon className="studio-picker-chevron">
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="m4 6 4 4 4-4" /></svg>
         </Select.Icon>
       </Select.Trigger>
-      <Select.Portal container={container}>
+      <Select.Portal>
         <Select.Content className="studio-picker-menu" position="popper" sideOffset={6} collisionPadding={12}>
           <Select.ScrollUpButton className="studio-picker-scroll" aria-label={m.studio_select_scroll_up()}>⌃</Select.ScrollUpButton>
           <Select.Viewport className="studio-picker-options">
