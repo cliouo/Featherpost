@@ -39,9 +39,10 @@ describe("Shared scrollbar styling and layout stability (#29)", () => {
     expect(studioMain).toMatch(/import\s+["']\.\/styles\/scrollbars\.css["']/);
   });
 
-  it("defines lightweight WebKit scrollbar styles with expanded hit area, hover/active states, and Radix exclusion", () => {
+  it("defines lightweight WebKit scrollbar styles with expanded hit area, hover/active states, and zero Radix selectors", () => {
     const clean = stripComments(scrollbarsCss);
-    expect(clean).toContain(":where(*:not([data-radix-select-viewport]))::-webkit-scrollbar");
+    expect(clean).toContain(":where(*)::-webkit-scrollbar");
+    expect(clean).not.toContain("radix");
     expect(clean).toContain("::-webkit-scrollbar-track");
     expect(clean).toContain("::-webkit-scrollbar-thumb");
     expect(clean).toContain("::-webkit-scrollbar-thumb:vertical");

@@ -14,55 +14,55 @@
  * wider drag hit area than the visible thumb).
  */
 
-:where(*:not([data-radix-select-viewport]))::-webkit-scrollbar {
+:where(*)::-webkit-scrollbar {
   width: var(--scrollbar-size, 10px);
   height: var(--scrollbar-size, 10px);
 }
 
-:where(*:not([data-radix-select-viewport]))::-webkit-scrollbar-track,
-:where(*:not([data-radix-select-viewport]))::-webkit-scrollbar-corner {
+:where(*)::-webkit-scrollbar-track,
+:where(*)::-webkit-scrollbar-corner {
   background: var(--scrollbar-track, transparent);
 }
 
-:where(*:not([data-radix-select-viewport]))::-webkit-scrollbar-button {
+:where(*)::-webkit-scrollbar-button {
   display: none;
   width: 0;
   height: 0;
 }
 
-:where(*:not([data-radix-select-viewport]))::-webkit-scrollbar-thumb {
+:where(*)::-webkit-scrollbar-thumb {
   background-color: var(--scrollbar-thumb);
   border-radius: 999px;
   border: var(--scrollbar-thumb-inset, 3px) solid transparent;
   background-clip: content-box;
 }
 
-:where(*:not([data-radix-select-viewport]))::-webkit-scrollbar-thumb:vertical {
+:where(*)::-webkit-scrollbar-thumb:vertical {
   min-height: 28px;
 }
 
-:where(*:not([data-radix-select-viewport]))::-webkit-scrollbar-thumb:horizontal {
+:where(*)::-webkit-scrollbar-thumb:horizontal {
   min-width: 28px;
 }
 
 @media (hover: hover) {
-  :where(*:not([data-radix-select-viewport])):hover::-webkit-scrollbar-thumb {
+  :where(*):hover::-webkit-scrollbar-thumb {
     background-color: var(--scrollbar-thumb-container-hover, var(--scrollbar-thumb-hover));
   }
 
-  :where(*:not([data-radix-select-viewport]))::-webkit-scrollbar-thumb:hover {
+  :where(*)::-webkit-scrollbar-thumb:hover {
     background-color: var(--scrollbar-thumb-hover);
     border-width: var(--scrollbar-thumb-inset-hover, 2px);
   }
 }
 
-:where(*:not([data-radix-select-viewport]))::-webkit-scrollbar-thumb:active {
+:where(*)::-webkit-scrollbar-thumb:active {
   background-color: var(--scrollbar-thumb-active);
   border-width: var(--scrollbar-thumb-inset-hover, 2px);
 }
 
 @supports not selector(::-webkit-scrollbar) {
-  :where(*:not([data-radix-select-viewport])) {
+  :where(*) {
     scrollbar-width: thin;
     scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track, transparent);
   }

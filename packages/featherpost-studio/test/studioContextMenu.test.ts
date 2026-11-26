@@ -1,10 +1,21 @@
-import { createElement as h } from "react";
+// @vitest-environment jsdom
+import {
+  act,
+  createElement as h,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { applyEffectiveLocales } from "@featherpost/i18n";
-import { afterEach, expect, it, vi } from "vitest";
-import { ContextMenuHost } from "../src/ContextMenu";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { StudioDialog } from "../src/app/Dialog";
+import { ContextMenuHost, useContextMenu } from "../src/ContextMenu";
 import { SyncCount } from "../src/SyncCount";
 import { clipboardCopier } from "../src/studioActions";
+import { acquireFallbackLayer, closeAllPopovers } from "../src/ui";
+import { isShortcutBlockedTarget } from "../src/Workspace";
 import {
   accountMenu,
   addressMenu,
@@ -19,6 +30,42 @@ import {
   type MenuEntry,
 } from "../src/menus";
 import { folder, online, summary } from "./fakeBridge";
+
+(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+beforeAll(() => {
+  if (typeof globalThis.ResizeObserver === "undefined") {
+    globalThis.ResizeObserver = class ResizeObserver {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    };
+  }
+  if (typeof globalThis.PointerEvent === "undefined") {
+    class PolyfillPointerEvent extends MouseEvent {
+      readonly pointerId: number;
+      readonly pointerType: string;
+      constructor(type: string, params: PointerEventInit = {}) {
+        super(type, params);
+        this.pointerId = params.pointerId ?? 1;
+        this.pointerType = params.pointerType ?? "mouse";
+      }
+    }
+    globalThis.PointerEvent = PolyfillPointerEvent as unknown as typeof PointerEvent;
+  }
+  if (!Element.prototype.hasPointerCapture) {
+    Element.prototype.hasPointerCapture = () => false;
+  }
+  if (!Element.prototype.setPointerCapture) {
+    Element.prototype.setPointerCapture = () => {};
+  }
+  if (!Element.prototype.releasePointerCapture) {
+    Element.prototype.releasePointerCapture = () => {};
+  }
+  if (!Element.prototype.scrollIntoView) {
+    Element.prototype.scrollIntoView = () => {};
+  }
+});
 
 type Item = Extract<MenuEntry, { kind: "item" }>;
 const labels = (entries: MenuEntry[]) =>
@@ -44,6 +91,118 @@ function deps(state: Partial<MailMenuDeps["controller"]["state"]> = {}) {
   const d: MailMenuDeps = { controller, reply: vi.fn(), copy: vi.fn(), findSender: vi.fn() };
   return { d, row, other, controller: controller as unknown as Record<string, ReturnType<typeof vi.fn>> };
 }
+
+const mountedRoots: Array<{ root: Root; container: HTMLElement }> = [];
+
+function mount(node: ReactNode) {
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  act(() => {
+    root.render(node);
+  });
+  mountedRoots.push({ root, container });
+  return {
+    container,
+    rerender(next: ReactNode) {
+      act(() => {
+        root.render(next);
+      });
+    },
+    unmount() {
+      act(() => {
+        root.unmount();
+      });
+      container.remove();
+    },
+  };
+}
+
+function flushTimers() {
+  return act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
+
+function openMenus(): HTMLElement[] {
+  return [...document.body.querySelectorAll<HTMLElement>('[role="menu"]:not([hidden])')];
+}
+
+function openMenu(): HTMLElement | null {
+  return openMenus()[0] ?? null;
+}
+
+function dispatchContextMenu(
+  target: Element,
+  init: MouseEventInit = { button: 2, clientX: 80, clientY: 90 },
+): MouseEvent {
+  const event = new MouseEvent("contextmenu", {
+    bubbles: true,
+    cancelable: true,
+    ...init,
+  });
+  act(() => {
+    target.dispatchEvent(event);
+  });
+  return event;
+}
+
+function dispatchMouseDown(
+  target: Element,
+  init: MouseEventInit = { button: 2, clientX: 80, clientY: 90 },
+): MouseEvent {
+  const event = new MouseEvent("mousedown", {
+    bubbles: true,
+    cancelable: true,
+    ...init,
+  });
+  act(() => {
+    target.dispatchEvent(event);
+  });
+  return event;
+}
+
+function dispatchPointerDown(
+  target: EventTarget,
+  init: PointerEventInit = { button: 0, pointerType: "mouse" },
+) {
+  act(() => {
+    target.dispatchEvent(
+      new PointerEvent("pointerdown", {
+        bubbles: true,
+        cancelable: true,
+        ...init,
+      }),
+    );
+  });
+}
+
+function keydown(target: EventTarget, key: string, init: KeyboardEventInit = {}) {
+  const event = new KeyboardEvent("keydown", {
+    key,
+    bubbles: true,
+    cancelable: true,
+    ...init,
+  });
+  act(() => {
+    target.dispatchEvent(event);
+  });
+  return event;
+}
+
+afterEach(() => {
+  while (mountedRoots.length) {
+    const entry = mountedRoots.pop()!;
+    act(() => {
+      entry.root.unmount();
+    });
+    entry.container.remove();
+  }
+  closeAllPopovers();
+  globalThis.getSelection?.()?.removeAllRanges();
+  document.body.innerHTML = "";
+  applyEffectiveLocales([]);
+});
 
 it("drops empty, leading, trailing and doubled separators, also inside submenus", () => {
   const run = () => {};
@@ -197,15 +356,13 @@ it("uses the count slot for the sync glyph while keeping the count in place", ()
   expect(busy).toContain("sync-count-spinner");
 });
 
-it("wraps the Studio root without adding markup", () => {
+it("wraps the Studio root without adding wrapper DOM markup", () => {
   const html = renderToStaticMarkup(
     h(ContextMenuHost, { selection: () => [], children: h("div", { className: "studio" }, "x") }),
   );
-  expect(html).toBe('<div class="studio" data-state="closed" style="-webkit-touch-callout:none">x</div>');
-});
-
-afterEach(() => {
-  applyEffectiveLocales([]);
+  expect(html).toMatch(/^<div[^>]*class="studio"[^>]*>x<\/div>$/);
+  expect(html).toContain('data-slot="menu-context-trigger"');
+  expect(html).toContain("data-closed");
 });
 
 it("ADR-0048: every Studio menu follows the UI language", () => {
@@ -251,4 +408,661 @@ it("ADR-0048: every Studio menu follows the UI language", () => {
     Object.defineProperty(globalThis, "navigator", { value: original, configurable: true });
   }
   expect(notify).toHaveBeenCalledWith("Can't access the clipboard");
+});
+
+describe("ContextMenuHost (@ui-sdk/react/menu + MenuContextTrigger)", () => {
+  it("opens on offered surface, highlights [data-menu-target], marks global attributes, and dismisses on blank area click", async () => {
+    const onReply = vi.fn();
+    function Surface() {
+      const menu = useContextMenu();
+      return h(
+        "div",
+        { className: "surface" },
+        h("div", { className: "blank" }, "Blank"),
+        h(
+          "div",
+          {
+            className: "row",
+            onContextMenu: (e) =>
+              menu.offer(e, () => [
+                { kind: "item", label: "Reply", run: onReply },
+                { kind: "item", label: "Delete", tone: "danger", run: () => {} },
+              ]),
+          },
+          "Row 1",
+        ),
+      );
+    }
+
+    const { container } = mount(
+      h(ContextMenuHost, {
+        selection: () => [],
+        children: h("div", { className: "studio" }, h(Surface)),
+      }),
+    );
+    const row = container.querySelector<HTMLElement>(".row")!;
+    const blank = container.querySelector<HTMLElement>(".blank")!;
+
+    const event = dispatchContextMenu(row);
+    await flushTimers();
+
+    expect(event.defaultPrevented).toBe(true);
+    const menu = openMenu()!;
+    expect(menu).not.toBeNull();
+    expect(row.hasAttribute("data-menu-target")).toBe(true);
+    expect(menu.hasAttribute("data-agent-hidden")).toBe(true);
+    expect(menu.getAttribute("data-tauri-drag-region")).toBe("false");
+    expect(menu.hasAttribute("data-shortcuts-off")).toBe(true);
+    expect(isShortcutBlockedTarget(menu)).toBe(true);
+
+    const items = [...menu.querySelectorAll<HTMLElement>('[role="menuitem"]')];
+    expect(items.map((el) => el.textContent)).toEqual(["Reply", "Delete"]);
+    expect(items[1]!.getAttribute("data-tone")).toBe("danger");
+
+    // Clicking blank area dismisses the open menu and clears [data-menu-target].
+    dispatchPointerDown(blank, { button: 0, pointerType: "mouse" });
+    await flushTimers();
+    expect(openMenu()).toBeNull();
+    expect(row.hasAttribute("data-menu-target")).toBe(false);
+  });
+
+  it("passes through native spellcheck/IME menu on text entries without preventing default", async () => {
+    function Surface() {
+      const menu = useContextMenu();
+      return h(
+        "div",
+        {
+          className: "outer",
+          onContextMenu: (e) =>
+            menu.offer(e, () => [{ kind: "item", label: "Outer", run: () => {} }]),
+        },
+        h("input", { className: "field", type: "text", defaultValue: "hello" }),
+        h("textarea", { className: "area", defaultValue: "world" }),
+        h("div", { className: "editable", contentEditable: true, suppressContentEditableWarning: true }, "edit"),
+        h("div", { className: "row" }, "Row"),
+      );
+    }
+
+    const { container } = mount(
+      h(ContextMenuHost, {
+        selection: () => [],
+        children: h("div", { className: "studio" }, h(Surface)),
+      }),
+    );
+
+    for (const selector of [".field", ".area", ".editable"]) {
+      const el = container.querySelector<HTMLElement>(selector)!;
+      const ev = dispatchContextMenu(el);
+      await flushTimers();
+      expect(openMenus()).toHaveLength(0);
+      expect(ev.defaultPrevented).toBe(false);
+    }
+
+    // Also closes any currently open menu when right-clicking a text entry, while still leaving native menu untouched.
+    const row = container.querySelector<HTMLElement>(".row")!;
+    dispatchContextMenu(row);
+    await flushTimers();
+    expect(openMenu()).not.toBeNull();
+
+    const input = container.querySelector<HTMLInputElement>(".field")!;
+    const ev = dispatchContextMenu(input);
+    await flushTimers();
+    expect(openMenu()).toBeNull();
+    expect(ev.defaultPrevented).toBe(false);
+  });
+
+  it("suppresses empty menus (blocks WKWebView Reload/Inspect) and closes any open menu on blank right-click", async () => {
+    function Surface() {
+      const menu = useContextMenu();
+      return h(
+        "div",
+        { className: "surface" },
+        h("div", { className: "blank" }, "Empty"),
+        h(
+          "div",
+          {
+            className: "row",
+            onContextMenu: (e) =>
+              menu.offer(e, () => [{ kind: "item", label: "Open", run: () => {} }]),
+          },
+          "Row",
+        ),
+      );
+    }
+
+    const { container } = mount(
+      h(ContextMenuHost, {
+        selection: () => [],
+        children: h("div", { className: "studio" }, h(Surface)),
+      }),
+    );
+    const blank = container.querySelector<HTMLElement>(".blank")!;
+    const row = container.querySelector<HTMLElement>(".row")!;
+
+    const emptyEv = dispatchContextMenu(blank);
+    await flushTimers();
+    expect(openMenus()).toHaveLength(0);
+    expect(emptyEv.defaultPrevented).toBe(true);
+
+    // Open menu on row, then right-click blank area -> suppresses native menu and closes open menu.
+    dispatchContextMenu(row);
+    await flushTimers();
+    expect(openMenu()).not.toBeNull();
+    expect(row.hasAttribute("data-menu-target")).toBe(true);
+
+    dispatchPointerDown(blank, { button: 2, pointerType: "mouse" });
+    const blankWhileOpen = dispatchContextMenu(blank);
+    await flushTimers();
+    expect(blankWhileOpen.defaultPrevented).toBe(true);
+    expect(openMenu()).toBeNull();
+    expect(row.hasAttribute("data-menu-target")).toBe(false);
+  });
+
+  it("clears accidental WKWebView word selection on right-click and Ctrl-click, while keeping intentional selections", async () => {
+    const copy = vi.fn();
+    function Surface() {
+      const menu = useContextMenu();
+      return h(
+        "div",
+        { className: "surface" },
+        h(
+          "div",
+          {
+            className: "row",
+            onContextMenu: (e) =>
+              menu.offer(e, () => [{ kind: "item", label: "Archive", run: () => {} }]),
+          },
+          h("span", { className: "word" }, "Important"),
+          " subject",
+        ),
+      );
+    }
+
+    const { container } = mount(
+      h(ContextMenuHost, {
+        selection: (text) => [{ kind: "item", label: `Copy ${text}`, run: () => copy(text) }],
+        children: h("div", { className: "studio" }, h(Surface)),
+      }),
+    );
+    const word = container.querySelector<HTMLElement>(".word")!;
+
+    const selectWord = () => {
+      const range = document.createRange();
+      range.selectNode(word);
+      const sel = window.getSelection()!;
+      sel.removeAllRanges();
+      sel.addRange(range);
+    };
+
+    // 1. Right-click where WebKit auto-selects a word between mousedown and contextmenu -> cleared!
+    window.getSelection()!.removeAllRanges();
+    dispatchMouseDown(word, { button: 2 });
+    selectWord();
+    expect(window.getSelection()!.toString()).toBe("Important");
+    dispatchContextMenu(word, { button: 2 });
+    await flushTimers();
+    expect(window.getSelection()!.toString()).toBe("");
+    expect(
+      [...openMenu()!.querySelectorAll('[role="menuitem"]')].map((el) => el.textContent),
+    ).toEqual(["Archive"]);
+
+    keydown(openMenu()!, "Escape");
+    await flushTimers();
+
+    // 2. Ctrl-click where WebKit auto-selects a word between mousedown and contextmenu -> cleared!
+    window.getSelection()!.removeAllRanges();
+    dispatchMouseDown(word, { button: 0, ctrlKey: true });
+    selectWord();
+    dispatchContextMenu(word, { button: 0, ctrlKey: true });
+    await flushTimers();
+    expect(window.getSelection()!.toString()).toBe("");
+    expect(
+      [...openMenu()!.querySelectorAll('[role="menuitem"]')].map((el) => el.textContent),
+    ).toEqual(["Archive"]);
+
+    keydown(openMenu()!, "Escape");
+    await flushTimers();
+
+    // 3. Intentional selection already present BEFORE mousedown -> preserved and offers Copy!
+    selectWord();
+    dispatchMouseDown(word, { button: 2 });
+    dispatchContextMenu(word, { button: 2 });
+    await flushTimers();
+    const items = [...openMenu()!.querySelectorAll<HTMLElement>('[role="menuitem"]')];
+    expect(items.map((el) => el.textContent)).toEqual(["Copy Important", "Archive"]);
+    act(() => {
+      items[0]!.click();
+    });
+    await flushTimers();
+    expect(copy).toHaveBeenCalledWith("Important");
+  });
+
+  it("resolves innermost offer, supports submenus, empty submenus, checkbox items, and group labels", async () => {
+    const outerAction = vi.fn();
+    const innerMove = vi.fn();
+    const toggleCheck = vi.fn();
+
+    function Surface() {
+      const menu = useContextMenu();
+      return h(
+        "div",
+        {
+          className: "outer",
+          onContextMenu: (e) =>
+            menu.offer(e, () => [{ kind: "item", label: "Outer", run: outerAction }]),
+        },
+        h(
+          "div",
+          {
+            className: "inner",
+            onContextMenu: (e) =>
+              menu.offer(e, () => [
+                { kind: "label", label: "2 Selected" },
+                { kind: "check", label: "In Selection", checked: true, run: toggleCheck },
+                separator,
+                {
+                  kind: "submenu",
+                  label: "Move To",
+                  entries: [{ kind: "item", label: "Receipts", run: innerMove }],
+                },
+                {
+                  kind: "submenu",
+                  label: "Empty Sub",
+                  entries: [],
+                  empty: "Nothing here",
+                },
+              ]),
+          },
+          "Inner",
+        ),
+      );
+    }
+
+    const { container } = mount(
+      h(ContextMenuHost, {
+        selection: () => [],
+        children: h("div", { className: "studio" }, h(Surface)),
+      }),
+    );
+    const inner = container.querySelector<HTMLElement>(".inner")!;
+
+    dispatchContextMenu(inner);
+    await flushTimers();
+
+    const menu = openMenu()!;
+    expect(inner.hasAttribute("data-menu-target")).toBe(true);
+    expect(menu.textContent).not.toContain("Outer");
+
+    // Group label is wrapped in role="group" with aria-labelledby.
+    const group = menu.querySelector<HTMLElement>('[role="group"]')!;
+    expect(group).not.toBeNull();
+    const labelId = group.getAttribute("aria-labelledby")!;
+    expect(document.getElementById(labelId)?.textContent).toBe("2 Selected");
+
+    // Checkbox item shows indicator when checked and toggles + closes on select.
+    const checkbox = menu.querySelector<HTMLElement>('[role="menuitemcheckbox"]')!;
+    expect(checkbox.getAttribute("aria-checked")).toBe("true");
+    expect(checkbox.querySelector(".studio-menu-check")).not.toBeNull();
+
+    // Open submenu via keyboard (focus Move To trigger -> ArrowRight).
+    const triggers = [...menu.querySelectorAll<HTMLElement>('[role="menuitem"]')];
+    const moveTrigger = triggers.find((el) => el.textContent === "Move To")!;
+    act(() => {
+      moveTrigger.focus();
+    });
+    keydown(moveTrigger, "ArrowRight");
+    await flushTimers();
+
+    const menus = openMenus();
+    expect(menus).toHaveLength(2);
+    const submenu = menus[1]!;
+    expect(submenu.hasAttribute("data-agent-hidden")).toBe(true);
+    expect(submenu.getAttribute("data-tauri-drag-region")).toBe("false");
+    expect(submenu.hasAttribute("data-shortcuts-off")).toBe(true);
+    const receipts = submenu.querySelector<HTMLElement>('[role="menuitem"]')!;
+    expect(receipts.textContent).toBe("Receipts");
+    act(() => {
+      receipts.click();
+    });
+    await flushTimers();
+    expect(innerMove).toHaveBeenCalledTimes(1);
+    expect(openMenus()).toHaveLength(0);
+    expect(inner.hasAttribute("data-menu-target")).toBe(false);
+
+    // Reopen and verify empty submenu renders fallback message, and checkbox closes menu on click.
+    dispatchContextMenu(inner);
+    await flushTimers();
+    const emptyTrigger = [...openMenu()!.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(
+      (el) => el.textContent === "Empty Sub",
+    )!;
+    act(() => {
+      emptyTrigger.focus();
+    });
+    keydown(emptyTrigger, "ArrowRight");
+    await flushTimers();
+    expect(openMenus()[1]!.querySelector(".studio-menu-empty")?.textContent).toBe("Nothing here");
+
+    // Click checkbox item -> runs callback and closes menu.
+    const checkItem = openMenu()!.querySelector<HTMLElement>('[role="menuitemcheckbox"]')!;
+    act(() => {
+      checkItem.click();
+    });
+    await flushTimers();
+    expect(toggleCheck).toHaveBeenCalledTimes(1);
+    expect(openMenus()).toHaveLength(0);
+    expect(outerAction).not.toHaveBeenCalled();
+  });
+
+  it("handles right-click on unselected row, keyboard contextmenu, and target refresh while menu is open", async () => {
+    const actions: string[] = [];
+    let selectedId = "row-a";
+
+    function Surface() {
+      const menu = useContextMenu();
+      return h(
+        "div",
+        { className: "surface" },
+        h(
+          "button",
+          {
+            type: "button",
+            className: "row-a",
+            onContextMenu: (e) =>
+              menu.offer(e, () => [
+                { kind: "item", label: "Action A1", run: () => actions.push("A1") },
+                { kind: "item", label: "Action A2", run: () => actions.push("A2") },
+              ]),
+          },
+          "Row A",
+        ),
+        h(
+          "button",
+          {
+            type: "button",
+            className: "row-b",
+            onContextMenu: (e) =>
+              menu.offer(e, () => [
+                { kind: "item", label: "Action B1", run: () => actions.push("B1") },
+              ]),
+          },
+          "Row B",
+        ),
+      );
+    }
+
+    const { container } = mount(
+      h(ContextMenuHost, {
+        selection: () => [],
+        children: h("div", { className: "studio" }, h(Surface)),
+      }),
+    );
+    const rowA = container.querySelector<HTMLButtonElement>(".row-a")!;
+    const rowB = container.querySelector<HTMLButtonElement>(".row-b")!;
+
+    // 1. Right-click unselected Row B -> opens menu for Row B without changing selectedId.
+    dispatchContextMenu(rowB, { button: 2, clientX: 50, clientY: 60 });
+    await flushTimers();
+    expect(selectedId).toBe("row-a");
+    expect(rowB.hasAttribute("data-menu-target")).toBe(true);
+    expect(rowA.hasAttribute("data-menu-target")).toBe(false);
+    expect(
+      [...openMenu()!.querySelectorAll('[role="menuitem"]')].map((el) => el.textContent),
+    ).toEqual(["Action B1"]);
+
+    // 2. While menu is ALREADY open on Row B, right-click Row A -> refreshes target & entries cleanly.
+    dispatchPointerDown(rowA, { button: 2, pointerType: "mouse" });
+    dispatchContextMenu(rowA, { button: 2, clientX: 20, clientY: 30 });
+    await flushTimers();
+    expect(openMenu()).not.toBeNull();
+    expect(rowA.hasAttribute("data-menu-target")).toBe(true);
+    expect(rowB.hasAttribute("data-menu-target")).toBe(false);
+    expect(
+      [...openMenu()!.querySelectorAll('[role="menuitem"]')].map((el) => el.textContent),
+    ).toEqual(["Action A1", "Action A2"]);
+
+    keydown(openMenu()!, "Escape");
+    await flushTimers();
+    expect(openMenu()).toBeNull();
+
+    // 3. Keyboard contextmenu (button: 0, ctrlKey: false) focuses first item and allows ArrowDown + Enter.
+    act(() => {
+      rowA.focus();
+    });
+    dispatchContextMenu(rowA, { button: 0, ctrlKey: false });
+    await flushTimers();
+    const items = [...openMenu()!.querySelectorAll<HTMLElement>('[role="menuitem"]')];
+    expect(document.activeElement).toBe(items[0]);
+    keydown(items[0]!, "ArrowDown");
+    await flushTimers();
+    expect(document.activeElement).toBe(items[1]);
+    keydown(items[1]!, "Enter");
+    await flushTimers();
+    expect(actions).toEqual(["A2"]);
+    expect(openMenu()).toBeNull();
+  });
+
+  it("portals context menu inside enclosing modal StudioDialog container so inert never traps it", async () => {
+    const onDialogAction = vi.fn();
+
+    function ModalApp() {
+      const menu = useContextMenu();
+      return h(
+        StudioDialog,
+        { open: true, title: "Modal Host" },
+        h(
+          "div",
+          {
+            className: "modal-surface",
+            onContextMenu: (e) =>
+              menu.offer(e, () => [
+                { kind: "item", label: "Inside Modal Action", run: onDialogAction },
+              ]),
+          },
+          "Right-click me in modal",
+        ),
+      );
+    }
+
+    mount(
+      h(ContextMenuHost, {
+        selection: () => [],
+        children: h("div", { className: "studio" }, h(ModalApp)),
+      }),
+    );
+    await flushTimers();
+
+    const dialogContent = document.body.querySelector<HTMLElement>('[data-slot="dialog-content"]')!;
+    expect(dialogContent).not.toBeNull();
+    const surface = dialogContent.querySelector<HTMLElement>(".modal-surface")!;
+
+    dispatchContextMenu(surface, { button: 2, clientX: 120, clientY: 140 });
+    await flushTimers();
+
+    const menu = openMenu()!;
+    expect(menu).not.toBeNull();
+    // Portaled INSIDE the modal dialog content, never a sibling under inert document.body.
+    expect(dialogContent.contains(menu)).toBe(true);
+    expect(menu.closest("[inert]")).toBeNull();
+
+    const item = menu.querySelector<HTMLElement>('[role="menuitem"]')!;
+    expect(item.textContent).toBe("Inside Modal Action");
+    act(() => {
+      item.click();
+    });
+    await flushTimers();
+    expect(onDialogAction).toHaveBeenCalledTimes(1);
+    expect(openMenu()).toBeNull();
+  });
+
+  it("allocates monotonic Safari 16 fallback inline zIndex above existing fallback layers", async () => {
+    const baseLayer = acquireFallbackLayer();
+    try {
+      function Surface() {
+        const menu = useContextMenu();
+        return h(
+          "div",
+          {
+            className: "row",
+            onContextMenu: (e) =>
+              menu.offer(e, () => [
+                {
+                  kind: "submenu",
+                  label: "Sub",
+                  entries: [{ kind: "item", label: "Leaf", run: () => {} }],
+                },
+              ]),
+          },
+          "Layer Row",
+        );
+      }
+
+      const { container } = mount(
+        h(ContextMenuHost, {
+          selection: () => [],
+          children: h("div", { className: "studio" }, h(Surface)),
+        }),
+      );
+      dispatchContextMenu(container.querySelector(".row")!);
+      await flushTimers();
+
+      const rootMenu = openMenu()!;
+      const rootZ = Number(rootMenu.style.zIndex);
+      expect(Number.isFinite(rootZ)).toBe(true);
+      expect(rootZ).toBeGreaterThan(baseLayer.content);
+      expect(rootZ).toBeLessThan(2000);
+
+      // Opening submenu allocates a strictly higher fallback z-index.
+      const subTrigger = rootMenu.querySelector<HTMLElement>('[role="menuitem"]')!;
+      act(() => {
+        subTrigger.focus();
+      });
+      keydown(subTrigger, "ArrowRight");
+      await flushTimers();
+      const subMenu = openMenus()[1]!;
+      const subZ = Number(subMenu.style.zIndex);
+      expect(subZ).toBeGreaterThan(rootZ);
+      expect(subZ).toBeLessThan(2000);
+    } finally {
+      baseLayer.release();
+    }
+  });
+
+  it("dismisses via window lifecycle events and preserves focus moved to a Dialog or Editor", async () => {
+    function FocusApp() {
+      const menu = useContextMenu();
+      const [dialogOpen, setDialogOpen] = useState(false);
+      const cancelRef = useRef<HTMLButtonElement>(null);
+      const editorRef = useRef<HTMLTextAreaElement>(null);
+
+      return h(
+        "div",
+        { className: "surface" },
+        h("textarea", { ref: editorRef, className: "editor-input" }),
+        h(
+          "button",
+          {
+            type: "button",
+            className: "row",
+            onContextMenu: (e) =>
+              menu.offer(e, () => [
+                { kind: "item", label: "Open Dialog", run: () => setDialogOpen(true) },
+                { kind: "item", label: "Focus Editor", run: () => editorRef.current?.focus() },
+              ]),
+          },
+          "Row",
+        ),
+        dialogOpen &&
+          h(
+            StudioDialog,
+            {
+              open: dialogOpen,
+              title: "Confirm Delete",
+              initialFocusRef: cancelRef,
+              onClose: () => setDialogOpen(false),
+            },
+            h(
+              "button",
+              { ref: cancelRef, type: "button", className: "dialog-cancel", onClick: () => setDialogOpen(false) },
+              "Cancel",
+            ),
+          ),
+      );
+    }
+
+    const { container } = mount(
+      h(ContextMenuHost, {
+        selection: () => [],
+        children: h("div", { className: "studio" }, h(FocusApp)),
+      }),
+    );
+    const row = container.querySelector<HTMLButtonElement>(".row")!;
+    const editor = container.querySelector<HTMLTextAreaElement>(".editor-input")!;
+
+    // 1. Dismiss on closeAllPopovers(), pagehide, and hidden visibilitychange.
+    dispatchContextMenu(row);
+    await flushTimers();
+    expect(openMenu()).not.toBeNull();
+    act(() => {
+      closeAllPopovers();
+    });
+    await flushTimers();
+    expect(openMenu()).toBeNull();
+
+    dispatchContextMenu(row);
+    await flushTimers();
+    expect(openMenu()).not.toBeNull();
+    act(() => {
+      window.dispatchEvent(new Event("pagehide"));
+    });
+    await flushTimers();
+    expect(openMenu()).toBeNull();
+
+    dispatchContextMenu(row);
+    await flushTimers();
+    expect(openMenu()).not.toBeNull();
+    Object.defineProperty(document, "hidden", { value: true, configurable: true });
+    try {
+      act(() => {
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      await flushTimers();
+      expect(openMenu()).toBeNull();
+    } finally {
+      Object.defineProperty(document, "hidden", { value: false, configurable: true });
+    }
+
+    // 2. Selecting "Focus Editor" moves focus to editor and menu close does NOT steal it back.
+    act(() => {
+      row.focus();
+    });
+    dispatchContextMenu(row);
+    await flushTimers();
+    const focusEditorItem = [...openMenu()!.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(
+      (el) => el.textContent === "Focus Editor",
+    )!;
+    act(() => {
+      focusEditorItem.click();
+    });
+    await flushTimers();
+    expect(openMenu()).toBeNull();
+    expect(document.activeElement).toBe(editor);
+
+    // 3. Selecting "Open Dialog" opens StudioDialog and menu close does NOT steal focus from dialog.
+    act(() => {
+      row.focus();
+    });
+    dispatchContextMenu(row);
+    await flushTimers();
+    const openDialogItem = [...openMenu()!.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(
+      (el) => el.textContent === "Open Dialog",
+    )!;
+    act(() => {
+      openDialogItem.click();
+    });
+    await flushTimers();
+    expect(openMenu()).toBeNull();
+    const cancelBtn = document.body.querySelector<HTMLButtonElement>("button.dialog-cancel")!;
+    expect(cancelBtn).not.toBeNull();
+    expect(document.activeElement).toBe(cancelBtn);
+  });
 });

@@ -90,8 +90,9 @@ describe("shared motion tokens (#25)", () => {
     expect(incompatible).toEqual([]);
   });
 
-  it("uses @ui-sdk data-attribute transitions and portal-safe Settings variables without legacy dialog-positioner", () => {
+  it("uses @ui-sdk data-attribute transitions and portal-safe Settings variables without legacy dialog-positioner or Radix variables", () => {
     const studio = stylesheets["studio.css"]!;
+    const contextmenu = stylesheets["contextmenu.css"]!;
     const settings = stylesheets["settings/settings.css"]!;
     const forms = stylesheets["settings/forms.css"]!;
 
@@ -101,6 +102,14 @@ describe("shared motion tokens (#25)", () => {
     expect(studio).toContain("--transform-origin");
     expect(studio).toContain("[data-starting-style]");
     expect(studio).toContain("[data-ending-style]");
+    expect(contextmenu).not.toContain("--radix-");
+    expect(contextmenu).not.toContain("data-state");
+    expect(contextmenu).toContain("--available-height");
+    expect(contextmenu).toContain("--available-width");
+    expect(contextmenu).toContain("--transform-origin");
+    expect(contextmenu).toContain("[data-open]");
+    expect(contextmenu).toContain("[data-starting-style]");
+    expect(contextmenu).toContain("[data-ending-style]");
     expect(settings).toContain("body[data-studio-settings],\n.studio-settings");
     expect(forms).toContain("body[data-studio-settings] .mail-dialog fieldset");
   });

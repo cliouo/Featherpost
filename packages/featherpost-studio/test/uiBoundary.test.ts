@@ -97,11 +97,7 @@ describe("UI SDK architectural boundary", () => {
           violations.push(`${rel}:${line} imports forbidden stylesheet ${specifier}`);
           continue;
         }
-        if (
-          specifier.includes("@radix-ui/react-select") ||
-          specifier.includes("@radix-ui/react-dialog") ||
-          specifier.includes("@radix-ui/react-dropdown-menu")
-        ) {
+        if (specifier.includes("@radix-ui/")) {
           violations.push(`${rel}:${line} still imports retired ${specifier}`);
           continue;
         }
@@ -136,14 +132,33 @@ describe("UI SDK architectural boundary", () => {
     expect(violations).toEqual([]);
   });
 
-  it("pins exact @ui-sdk versions and removes retired Radix Select/Dialog/DropdownMenu in package.json", () => {
+  it("pins exact @ui-sdk versions and removes all @radix-ui/* packages in package.json", () => {
     const deps = studioPkg.dependencies as Record<string, string>;
+    const devDeps = (studioPkg.devDependencies ?? {}) as Record<string, string>;
     expect(deps["@ui-sdk/core"]).toBe("0.1.0-beta.17");
     expect(deps["@ui-sdk/react"]).toBe("0.1.0-beta.17");
     expect(deps["@ui-sdk/core"]).not.toMatch(/^[~^]/);
     expect(deps["@ui-sdk/react"]).not.toMatch(/^[~^]/);
-    expect(deps["@radix-ui/react-select"]).toBeUndefined();
-    expect(deps["@radix-ui/react-dialog"]).toBeUndefined();
-    expect(deps["@radix-ui/react-dropdown-menu"]).toBeUndefined();
+    const radixPackages = Object.keys({ ...deps, ...devDeps }).filter((name) =>
+      name.startsWith("@radix-ui/"),
+    );
+    expect(radixPackages).toEqual([]);
+  });
+
+  it("leaves zero Radix CSS variables or data-radix selectors anywhere in src/", () => {
+    const cssFiles = ts.sys.readDirectory(srcDir, [".css"], ["node_modules", "dist"]);
+    expect(cssFiles.length).toBeGreaterThanOrEqual(8);
+    const violations: string[] = [];
+    for (const full of cssFiles) {
+      const source = ts.sys.readFile(full, "utf8") ?? "";
+      if (/radix/i.test(source)) {
+        const normalized = full.replaceAll("\\", "/");
+        const rel = normalized.startsWith(`${srcDir}/`)
+          ? normalized.slice(srcDir.length + 1)
+          : normalized;
+        violations.push(`${rel} contains a leftover radix reference`);
+      }
+    }
+    expect(violations).toEqual([]);
   });
 });
