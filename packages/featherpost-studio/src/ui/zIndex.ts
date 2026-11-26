@@ -1,5 +1,5 @@
-import { supportsTopLayer } from "@ui-sdk/core";
-import { useEffect, useRef } from "react";
+import { bindPersistentLayer, supportsTopLayer } from "@ui-sdk/core";
+import { useEffect, useRef, type RefObject } from "react";
 
 /**
  * Mirrors the `--z-*` stacking tokens in `src/styles/tokens.css`.
@@ -9,9 +9,9 @@ import { useEffect, useRef } from "react";
 export const Z_INDEX_TOKENS = {
   dialogBackdrop: 60,
   dialog: 65,
-  toast: 80,
   skipLink: 100,
   popover: 1000,
+  toast: 2000,
 } as const;
 
 const LAYER_STEP = 10;
@@ -95,4 +95,39 @@ export function useFallbackLayer(
 /** Convenience hook for single-surface popovers (Select, Menu, Popover) on Safari 16 fallback. */
 export function useFallbackZIndex(open: boolean): number | undefined {
   return useFallbackLayer(open)?.content;
+}
+
+/**
+ * Keeps a persistent status overlay (such as Studio's `.toast` live region)
+ * exempt from `@ui-sdk` modal `inert` trapping and promoted above modal dialogs
+ * in Safari 17+ native top-layer via `popover="manual"` + `bindPersistentLayer()`.
+ */
+export function usePersistentOverlay(ref: RefObject<HTMLElement | null>): void {
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+
+    const topLayer = supportsTopLayer();
+    if (topLayer) {
+      el.setAttribute("popover", "manual");
+      try {
+        el.showPopover();
+      } catch {
+        // Ignore if already open or detached during teardown.
+      }
+    }
+
+    const unbind = bindPersistentLayer(el);
+    return () => {
+      unbind();
+      if (topLayer) {
+        try {
+          el.hidePopover();
+        } catch {
+          // Ignore if already hidden or detached.
+        }
+        el.removeAttribute("popover");
+      }
+    };
+  }, [ref]);
 }

@@ -89,6 +89,21 @@ describe("shared motion tokens (#25)", () => {
     }
     expect(incompatible).toEqual([]);
   });
+
+  it("uses @ui-sdk data-attribute transitions and portal-safe Settings variables without legacy dialog-positioner", () => {
+    const studio = stylesheets["studio.css"]!;
+    const settings = stylesheets["settings/settings.css"]!;
+    const forms = stylesheets["settings/forms.css"]!;
+
+    expect(studio).not.toContain(".dialog-positioner");
+    expect(studio).not.toContain("--radix-dropdown-menu-");
+    expect(studio).toContain("--available-height");
+    expect(studio).toContain("--transform-origin");
+    expect(studio).toContain("[data-starting-style]");
+    expect(studio).toContain("[data-ending-style]");
+    expect(settings).toContain("body[data-studio-settings],\n.studio-settings");
+    expect(forms).toContain("body[data-studio-settings] .mail-dialog fieldset");
+  });
 });
 
 describe("shared hover states (#27)", () => {

@@ -51,9 +51,9 @@
   /* Shared overlay stacking tokens (Safari 16 fallback when top-layer is unavailable). */
   --z-dialog-backdrop: 60;
   --z-dialog: 65;
-  --z-toast: 80;
   --z-skip-link: 100;
   --z-popover: 1000;
+  --z-toast: 2000;
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
   font-size: 13px;
   line-height: 1.55;
