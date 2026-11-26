@@ -1013,18 +1013,72 @@ kbd {
 .unread .row-marker {
   background: var(--studio-mark);
 }
+.studio-checkbox {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  margin: 0;
+  border: 1.5px solid var(--studio-muted);
+  border-radius: 3.5px;
+  background: var(--studio-surface);
+  color: var(--studio-on-primary);
+  flex-shrink: 0;
+  cursor: pointer;
+  transition:
+    background-color var(--motion-instant) var(--ease-standard),
+    border-color var(--motion-instant) var(--ease-standard),
+    color var(--motion-instant) var(--ease-standard),
+    opacity var(--motion-instant) var(--ease-standard);
+}
+.studio-checkbox[aria-checked="true"],
+.studio-checkbox[aria-checked="mixed"],
+.studio-checkbox[data-checked],
+.studio-checkbox[data-indeterminate] {
+  background: var(--studio-primary);
+  border-color: var(--studio-primary);
+}
+.studio-checkbox:disabled,
+.studio-checkbox[data-disabled] {
+  cursor: default;
+  opacity: 0.42;
+}
+@media (hover: hover) {
+  .studio-checkbox:not(:disabled):not([data-disabled]):not([data-checked]):not([data-indeterminate]):hover {
+    border-color: var(--studio-primary);
+    background: var(--hover-surface);
+  }
+  .studio-checkbox:not(:disabled):not([data-disabled])[data-checked]:hover,
+  .studio-checkbox:not(:disabled):not([data-disabled])[data-indeterminate]:hover {
+    background: var(--hover-accent);
+    border-color: var(--hover-accent);
+  }
+}
+.studio-checkbox-indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.studio-checkbox-indicator svg {
+  width: 10px;
+  height: 10px;
+  display: block;
+}
 .row-check {
   position: absolute;
   left: 6px;
   top: 10px;
-  width: 12px;
-  height: 12px;
+  width: 13px;
+  height: 13px;
   z-index: 1;
   opacity: 0;
-  accent-color: var(--studio-primary);
   margin: 0;
   cursor: pointer;
-  transition: opacity var(--motion-instant) var(--ease-standard);
 }
 .message-row:hover .row-check,
 .message-row:focus-within .row-check,
@@ -1319,6 +1373,115 @@ kbd {
   color: var(--studio-muted);
   padding: 4px 9px;
   overflow-wrap: anywhere;
+}
+.studio-popover {
+  z-index: var(--z-popover, 1000);
+  min-width: 180px;
+  max-width: min(360px, var(--available-width, calc(100vw - 24px)));
+  max-height: var(--available-height, calc(100vh - 24px));
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  padding: 12px 14px;
+  border: 1px solid var(--studio-border);
+  border-radius: 8px;
+  background: var(--studio-surface);
+  color: var(--studio-text);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.55;
+  box-shadow: 0 12px 36px #0002, 0 2px 8px #0001;
+  transform-origin: var(--transform-origin);
+  outline: none;
+  transition:
+    opacity var(--motion-fast) var(--ease-standard),
+    transform var(--motion-fast) var(--ease-standard);
+}
+:root[data-studio-theme="dark"] .studio-popover {
+  box-shadow: 0 12px 36px #0006, 0 2px 8px #0004;
+}
+.studio-popover[data-starting-style],
+.studio-popover[data-ending-style] {
+  opacity: 0;
+  transform: scale(0.97);
+}
+.studio-popover-title {
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--studio-text);
+}
+.studio-popover-description {
+  margin: 0 0 10px;
+  font-size: 12px;
+  color: var(--studio-muted);
+}
+.studio-tabs {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.studio-tabs[data-orientation="vertical"] {
+  flex-direction: row;
+  gap: 16px;
+}
+.studio-tabs-list {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 4px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--studio-border);
+}
+.studio-tabs[data-orientation="vertical"] .studio-tabs-list {
+  flex-direction: column;
+  align-items: stretch;
+  border-bottom: 0;
+  border-right: 1px solid var(--studio-border);
+  padding-right: 8px;
+}
+.studio-tab {
+  position: relative;
+  flex: none;
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--studio-secondary);
+  border-radius: 5px 5px 0 0;
+  transition:
+    background-color var(--motion-fast) var(--ease-standard),
+    color var(--motion-fast) var(--ease-standard);
+}
+.studio-tab[aria-selected="true"] {
+  color: var(--studio-text);
+}
+.studio-tab[aria-selected="true"]::after {
+  content: "";
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 0;
+  border-bottom: 2px solid var(--studio-primary);
+}
+.studio-tabs[data-orientation="vertical"] .studio-tab[aria-selected="true"]::after {
+  left: auto;
+  right: -9px;
+  top: 4px;
+  bottom: 4px;
+  border-bottom: 0;
+  border-right: 2px solid var(--studio-primary);
+}
+.studio-tab[data-disabled] {
+  cursor: default;
+  opacity: 0.42;
+}
+@media (hover: hover) {
+  .studio-tab:not([aria-selected="true"]):not([data-disabled]):hover {
+    background: var(--hover-bg);
+    color: var(--studio-text);
+  }
+}
+.studio-tabs-panel {
+  min-width: 0;
 }
 .letter-scroll {
   min-height: 0;
@@ -2103,6 +2266,11 @@ kbd {
 .toggle {
   padding: 10px 0;
 }
+.toggle:disabled,
+.toggle[data-disabled] {
+  cursor: default;
+  opacity: 0.42;
+}
 .toggle-track {
   display: block;
   width: 34px;
@@ -2114,8 +2282,7 @@ kbd {
     background-color var(--motion-fast) var(--ease-standard),
     box-shadow var(--motion-fast) var(--ease-standard);
 }
-.toggle-track:after {
-  content: "";
+.toggle-thumb {
   display: block;
   width: 14px;
   height: 14px;
@@ -2126,15 +2293,17 @@ kbd {
     transform var(--motion-fast) var(--ease-standard),
     background-color var(--motion-fast) var(--ease-standard);
 }
-.toggle[aria-checked="true"] .toggle-track {
+.toggle[aria-checked="true"] .toggle-track,
+.toggle[data-checked] .toggle-track {
   background: var(--studio-primary);
 }
-.toggle[aria-checked="true"] .toggle-track:after {
+.toggle[aria-checked="true"] .toggle-thumb,
+.toggle[data-checked] .toggle-thumb {
   transform: translateX(14px);
   background: var(--studio-on-primary);
 }
 @media (hover: hover) {
-  .toggle:hover:not(:disabled) .toggle-track {
+  .toggle:hover:not(:disabled):not([data-disabled]) .toggle-track {
     box-shadow: 0 0 0 3px var(--hover-bg-strong);
   }
 }

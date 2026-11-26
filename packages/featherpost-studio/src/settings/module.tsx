@@ -23,6 +23,7 @@ import { Appearance } from "./Appearance";
 import { LanguageController } from "./language";
 import { Icon } from "../app/Icon";
 import { BRAND } from "../brand";
+import { Switch } from "../ui";
 
 export const SETTINGS_VIEW = "maild.settings.page";
 
@@ -234,20 +235,15 @@ export function settingsModule(
               {module.builtin ? (
                 <span className="tag">{m.studio_extensions_builtin()}</span>
               ) : (
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={enabled}
+                <Switch
+                  checked={enabled}
                   aria-label={m.studio_extensions_enable({
                     module: module.title,
                   })}
-                  className="toggle"
-                  onClick={() =>
-                    host.setModuleEnabled(module.moduleId, !enabled)
+                  onCheckedChange={(next) =>
+                    host.setModuleEnabled(module.moduleId, next)
                   }
-                >
-                  <span className="toggle-track" />
-                </button>
+                />
               )}
             </Row>
           );

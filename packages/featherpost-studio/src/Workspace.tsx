@@ -1,5 +1,5 @@
 import { m } from "@featherpost/i18n/messages";
-import { Fragment, useEffect } from "react";
+import { Fragment, useEffect, useMemo } from "react";
 import type { Host } from "./host/host";
 import { useStore } from "./host/hooks";
 import { uiLocale, useUiLocale } from "./i18n";
@@ -8,6 +8,7 @@ import {
   messageKey,
   type MailboxController,
 } from "./mailbox/controller";
+import { createMessageListActions } from "./mailbox/listActions";
 import { useSelectedRowScroll } from "./mailbox/listScroll";
 import { displayName, shortDate } from "./mailbox/format";
 import { Actions } from "./mailbox/Actions";
@@ -19,9 +20,10 @@ import { ACTIVITY } from "./views";
 import { useContextMenu } from "./ContextMenu";
 import { messageMenu, type MailMenuDeps } from "./menus";
 import { useStudioActions } from "./studioActions";
+import { Checkbox } from "./ui";
 
 const SHORTCUT_BLOCKED_SELECTOR =
-  'input,textarea,select,summary,[contenteditable="true"],[data-shortcuts-off],[role="combobox"],[role="listbox"],[role="option"],[role="menu"],[role="menuitem"]';
+  'input,textarea,select,summary,[contenteditable="true"],[data-shortcuts-off],[role="checkbox"],[role="switch"],[role="combobox"],[role="listbox"],[role="option"],[role="menu"],[role="menuitem"]';
 
 export function isShortcutBlockedTarget(
   target: { closest?(selector: string): unknown } | null | undefined,
@@ -72,6 +74,10 @@ export function Workspace({
   const scopeKey = JSON.stringify(s.scope);
   const menu = useContextMenu(),
     menuDeps = useMailMenu(controller, composer);
+  const listActions = useMemo(
+    () => createMessageListActions(controller),
+    [controller],
+  );
   const selectedKey = s.selected ? messageKey(s.selected) : null;
   const {
     listRef,
@@ -86,6 +92,15 @@ export function Workspace({
     s.remote.rows,
   );
   useEffect(() => {
+    const stepList = (delta: 1 | -1, repeat: boolean) => {
+      const intent = { repeat, revealGroupHeader: delta < 0 };
+      setPendingIntent(intent);
+      const result = listActions.step(delta);
+      if (result.atBoundary) {
+        setPendingIntent(null);
+        revealSelected(intent);
+      }
+    };
     const key = (e: KeyboardEvent) => {
       if (
         e.defaultPrevented ||
@@ -99,35 +114,17 @@ export function Workspace({
         return;
       if (e.key === "ArrowDown" || e.key === "j") {
         e.preventDefault();
-        const before = controller.state.selected
-          ? messageKey(controller.state.selected)
-          : null;
-        const intent = { repeat: e.repeat, revealGroupHeader: false };
-        setPendingIntent(intent);
-        const next = controller.step(1);
-        if (next && before === messageKey(next)) {
-          setPendingIntent(null);
-          revealSelected(intent);
-        }
+        stepList(1, e.repeat);
       }
       if (e.key === "ArrowUp" || e.key === "k") {
         e.preventDefault();
-        const before = controller.state.selected
-          ? messageKey(controller.state.selected)
-          : null;
-        const intent = { repeat: e.repeat, revealGroupHeader: true };
-        setPendingIntent(intent);
-        const next = controller.step(-1);
-        if (next && before === messageKey(next)) {
-          setPendingIntent(null);
-          revealSelected(intent);
-        }
+        stepList(-1, e.repeat);
       }
-      if (e.key === "Escape") controller.clearSelection();
+      if (e.key === "Escape") listActions.clearOpenSelection();
     };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
-  }, [controller, revealSelected, setPendingIntent]);
+  }, [listActions, revealSelected, setPendingIntent]);
   const day = (at: number) =>
     new Date(at * 1000).toDateString() === new Date().toDateString()
       ? m.studio_list_day_today()
@@ -257,13 +254,11 @@ export function Workspace({
               </div>
             )}
             {s.rows.map((row, index) => {
-              const selected =
-                !!s.selected && messageKey(s.selected) === messageKey(row);
-              const checked = s.checked.some(
-                (r) => messageKey(r) === messageKey(row),
-              );
+              const key = messageKey(row);
+              const selected = selectedKey === key;
+              const checked = s.checked.some((r) => messageKey(r) === key);
               return (
-                <Fragment key={messageKey(row)}>
+                <Fragment key={key}>
                   {(index === 0 ||
                     day(row.sort_at) !== day(s.rows[index - 1]!.sort_at)) && (
                     <div className="date-group">{day(row.sort_at)}</div>
@@ -276,21 +271,25 @@ export function Workspace({
                     }
                   >
                     <span className="row-marker" aria-hidden="true" />
-                    <input
+                    <Checkbox
                       className="row-check"
-                      type="checkbox"
                       aria-label={
                         row.subject
                           ? m.studio_list_select({ subject: row.subject })
                           : m.studio_list_select_untitled()
                       }
                       checked={checked}
-                      onChange={() => controller.toggle(row)}
+                      disabled={s.busy}
+                      onCheckedChange={(next, details) =>
+                        listActions.setCheckedByKey(key, next, {
+                          range: details.shiftKey,
+                        })
+                      }
                     />
                     <button
                       className="message-open"
                       aria-current={selected ? "true" : undefined}
-                      onClick={() => controller.selectMessage(row)}
+                      onClick={() => listActions.openByKey(key)}
                     >
                       <span className="row-top">
                         <strong>{displayName(row.sender) || row.sender}</strong>
@@ -355,7 +354,7 @@ export function Workspace({
                       className={`remote-row ${selected ? "selected" : ""}`}
                       aria-current={selected ? "true" : undefined}
                       key={key}
-                      onClick={() => controller.openRemote(row)}
+                      onClick={() => listActions.openByKey(key)}
                     >
                       <strong>{row.subject || m.studio_message_no_subject()}</strong>
                       <span>
