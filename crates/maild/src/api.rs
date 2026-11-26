@@ -597,9 +597,10 @@ fn method_policy(method: &str) -> MethodPolicy {
         "getProxyConfig" => MethodPolicy::Open,
         "setProxyConfig" | "testProxy" => MethodPolicy::Capability("settings_write"),
         "listAccounts" | "listFolders" | "listMessageSummaries" | "listMessages"
-        | "getMessage" | "searchMessages" | "getThread" | "getSearchIndexStatus" => {
+        | "getMessage" | "searchMessages" | "searchContacts" | "getThread"
+        | "getSearchIndexStatus" => {
             // 换一个检索维度不构成新的权限面：读到的是 `listMessages` 已经能读的同一批
-            // 数据（ADR-0029 决策 12）。
+            // 可见消息数据（ADR-0029 决策 12；ADR-0034：searchContacts 绝不读 drafts 表）。
             MethodPolicy::Capability("messages_read")
         }
         // `status` 返回版本 + 账户状态 + 落库计数。`getAgentInfo`（Open）已给版本、
@@ -840,6 +841,7 @@ pub async fn dispatch_with_session(
         "setProxyConfig" => set_proxy_config(ctx, &request.params).await,
         "testProxy" => test_proxy(ctx, &request.params).await,
         "searchMessages" => search_messages(ctx, &request.params).await,
+        "searchContacts" => search_contacts(ctx, &request.params).await,
         "getThread" => get_thread(ctx, &request.params).await,
         "getSearchIndexStatus" => search_index_status(ctx, &request.params).await,
         "markMessages" => mark_messages(ctx, &request.params).await,
@@ -1507,6 +1509,15 @@ const SEARCH_KEYS: &[&str] = &[
     "scope",
 ];
 
+const SEARCH_CONTACTS_KEYS: &[&str] = &["account", "query", "limit"];
+
+fn contact_search_semaphore() -> &'static tokio::sync::Semaphore {
+    static SEMAPHORE: std::sync::OnceLock<tokio::sync::Semaphore> = std::sync::OnceLock::new();
+    SEMAPHORE.get_or_init(|| {
+        tokio::sync::Semaphore::new(crate::contacts::MAX_CONCURRENT_CONTACT_SEARCHES)
+    })
+}
+
 fn optional_account(
     object: &serde_json::Map<String, Value>,
     key: &str,
@@ -1689,6 +1700,92 @@ async fn search_messages(ctx: &Context, params: &Value) -> HandlerResult {
         .map_err(|error| internal(format!("查询任务失败: {error}")))?
         .map_err(|error| internal(format!("查询失败: {error}")))?;
     Ok(json!({ "messages": messages, "total": total, "scope": "local" }))
+}
+
+/// `searchContacts`：按发件账户检索近期与历史联系人建议（只读，`messages_read`）。
+///
+/// ADR-0034 合规：绝不读取 `drafts` 表，仅扫描当前 `account` 下存在且非 spam/trash/drafts
+/// 文件夹中的可见未删消息，并在锁外完成 `mailparse` 解析与排名。
+async fn search_contacts(ctx: &Context, params: &Value) -> HandlerResult {
+    let object = params
+        .as_object()
+        .ok_or_else(|| invalid_params("参数必须是对象"))?;
+    if object
+        .keys()
+        .any(|key| !SEARCH_CONTACTS_KEYS.contains(&key.as_str()))
+    {
+        return Err(invalid_params(
+            "参数只能包含 `account`、`query` 和 `limit`",
+        ));
+    }
+    let account = match object.get("account") {
+        Some(Value::String(value))
+            if !value.is_empty()
+                && value.len() <= crate::contacts::MAX_CONTACT_ACCOUNT_BYTES
+                && !value.chars().any(char::is_control) =>
+        {
+            value.clone()
+        }
+        _ => return Err(invalid_params("`account` 必须是非空字符串")),
+    };
+    let query = match object.get("query") {
+        None | Some(Value::Null) => String::new(),
+        Some(Value::String(value))
+            if value.len() <= crate::contacts::MAX_CONTACT_QUERY_BYTES
+                && !value.chars().any(char::is_control) =>
+        {
+            value.clone()
+        }
+        Some(Value::String(_)) => {
+            return Err(invalid_params("`query` 过长或包含控制字符"));
+        }
+        Some(_) => return Err(invalid_params("`query` 必须是字符串或 null")),
+    };
+    let limit = match object.get("limit") {
+        None | Some(Value::Null) => crate::contacts::DEFAULT_CONTACT_LIMIT,
+        Some(value) => value
+            .as_u64()
+            .filter(|limit| *limit >= 1)
+            .map(|limit| {
+                limit.min(crate::contacts::MAX_CONTACT_LIMIT as u64) as usize
+            })
+            .ok_or_else(|| invalid_params("`limit` 必须是正整数或 null"))?,
+    };
+
+    let store = ctx.get::<Store>().ok_or_else(|| unavailable("store"))?;
+    let account_manager = ctx.get::<crate::accounts::AccountManager>();
+    let _permit = contact_search_semaphore()
+        .acquire()
+        .await
+        .map_err(|_| internal("联系人检索并发控制器不可用".into()))?;
+
+    let contacts = tokio::task::spawn_blocking(move || {
+        let own_addresses = match account_manager {
+            Some(manager) => manager.own_addresses(&account),
+            None => store
+                .list_addresses(Some(&account))
+                .map(|records| {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0);
+                    records
+                        .into_iter()
+                        .filter(|r| {
+                            r.effective_state(now) == crate::addresses::AddressState::Active
+                        })
+                        .map(|r| r.address)
+                        .collect()
+                })
+                .unwrap_or_default(),
+        };
+        store.search_contacts(&account, &query, &own_addresses, limit)
+    })
+    .await
+    .map_err(|error| internal(format!("联系人查询任务失败: {error}")))?
+    .map_err(|error| internal(format!("联系人查询失败: {error}")))?;
+
+    Ok(json!({ "contacts": contacts }))
 }
 
 /// `getThread`：一条会话的全部消息，时间正序，跨文件夹（ADR-0029 决策 7）。
@@ -5734,6 +5831,7 @@ mod tests {
             ("getMessage", Capability("messages_read")),
             // ADR-0029 决策 12：换检索维度不构成新的权限面。
             ("searchMessages", Capability("messages_read")),
+            ("searchContacts", Capability("messages_read")),
             ("getThread", Capability("messages_read")),
             ("getSearchIndexStatus", Capability("messages_read")),
             ("send", Capability("messages_send")),

@@ -21,6 +21,7 @@ pub mod api;
 pub mod autodiscover;
 pub mod compose;
 pub mod config;
+pub mod contacts;
 pub mod containment;
 pub mod credential;
 pub mod daemon;

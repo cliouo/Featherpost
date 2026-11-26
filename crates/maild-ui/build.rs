@@ -48,6 +48,7 @@ fn main() {
             "ui_list_folders",
             "ui_list_messages",
             "ui_get_message",
+            "ui_search_contacts",
             "ui_refresh",
             "ui_frontend_info",
             "ui_claim_intent",

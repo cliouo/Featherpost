@@ -12,6 +12,7 @@ import type {
   ProxyConfigResult,
   ProxyPreferenceEvent,
   TestProxyResult,
+  UiContactSuggestion,
   UiError,
   UiLink,
   UiLocale,
@@ -135,6 +136,12 @@ export const tauriBridge: MailBridge = {
   folders: (account) => call('ui_list_folders', { account }),
   messages: ({ account, folder }, offset, limit) => call('ui_list_messages', { account, folder, offset, limit }),
   message: ({ account, folder, uid }) => call('ui_get_message', { account, folder, uid }),
+  searchContacts: (account, query, limit) =>
+    call<UiContactSuggestion[]>('ui_search_contacts', {
+      account,
+      query: query ?? null,
+      limit: limit ?? null,
+    }),
   refresh: () => call('ui_refresh'),
   frontendInfo: () => call('ui_frontend_info'),
   prepareHtml: ({ account, folder, uid }, allowRemote) =>

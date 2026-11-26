@@ -53,6 +53,7 @@
 | `getLocalePreference` | `{}` | `{preference, effective, persisted}` | 无（配置文件方式启动） |
 | `setLocalePreference` | `{mode, languages?}` | `{preference, effective, persisted}` | 无（配置文件方式启动） |
 | `searchMessages` | `{query?, account?, folder?, from?, to?, subject?, since?, until?, hasAttachments?, seen?, flagged?, limit?, offset?, scope?}` | `{messages, total, scope, truncated?}` | `store`（`scope=server` 另需该账户在线） |
+| `searchContacts` | `{account, query?, limit?}` | `{contacts: [{address, name?}]}` | `store` |
 | `getThread` | `{account, uid?, threadId?, folder?, limit?, offset?}` | `{threadId, messages, total}` | `store` |
 | `getSearchIndexStatus` | `{}` | `{pending, done}` | `store` |
 | `markMessages` | `{account, folder, uids, flag, value}` | `{ok, queued, queued_uids, unchanged_uids, missing_uids}` | `store` |
@@ -574,6 +575,21 @@ ADR-0037 的 `getThread` 支持 `limit` 1..200 与非负 `offset`，返回当前
 `getSearchIndexStatus` 的 `pending` 是还没进索引的历史消息条数。升级到 schema v7 之后
 历史消息由后台任务分批回填，**回填期间检索结果是部分的**；前端应据此提示「索引中」，
 而不是让用户以为邮件丢了。新到的邮件不经回填，落库即可搜。
+
+### `searchContacts`
+
+按发件账户检索近期与历史联系人建议（只读，授权归 `messages_read`）。
+
+- `account` 必填（非空字符串，≤256 字节，不含控制字符），严格绑定单账户，绝不跨账户泄露。
+- `query` 可选纯文本或 `null`（≤256 字节，不含控制字符）；省略或空白时返回该账户的近期高频联系人。
+- `limit` 可选正整数或 `null`（缺省 8，上限钳制至 20）；非正整数或未知键返回 `-32602`。
+- **ADR-0034 权限边界**：绝不读取 `drafts` 表；仅扫描指定 `account` 下存在且角色非 `spam`/`trash`/`drafts` 文件夹内的可见未删消息（`pending_removal = 0` 且 `deleted = 0`）。
+- 排序综合 `Sent` 文件夹收件人加权、时间衰减与己方主地址/别名降权；每条结果返回经发送校验的裸 ASCII `addr-spec`（保留 local-part 大小写、domain 小写）与可选纯文本显示名 `name`。
+
+```json
+{"jsonrpc":"2.0","method":"searchContacts","params":{"account":"personal","query":"ali","limit":8},"id":9}
+{"jsonrpc":"2.0","result":{"contacts":[{"address":"Alice@example.com","name":"Alice"}]},"id":9}
+```
 
 ### 写路径：`markMessages` / `moveMessages` / `deleteMessages`
 

@@ -14,11 +14,10 @@ use maild_app::{
     IdentityFailure, ViewState,
 };
 use maild_client::{
-    assemble_attachment, AttachmentBytes, AttachmentChunk, ClientError, Endpoint, ErrorKind,
-    FrontendsResult, LocalePreferenceResult, LocalePreferenceUpdate, MailAttachment, MailFolder,
-    PackageL10n,
-    MailMessage, MessageResult, MessageSummariesResult, MessageSummary, OpenIntent,
-    ReadingPolicyPatch, ReadingPolicyResult,
+    assemble_attachment, AttachmentBytes, AttachmentChunk, ClientError, ContactSuggestion,
+    Endpoint, ErrorKind, FrontendsResult, LocalePreferenceResult, LocalePreferenceUpdate,
+    MailAttachment, MailFolder, MailMessage, MessageResult, MessageSummariesResult, MessageSummary,
+    OpenIntent, PackageL10n, ReadingPolicyPatch, ReadingPolicyResult, SearchContactsResult,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -405,6 +404,38 @@ impl From<MessageSummary> for UiSummary {
 pub struct UiPage {
     pub messages: Vec<UiSummary>,
     pub total: i64,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct UiContactSuggestion {
+    pub address: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+impl From<ContactSuggestion> for UiContactSuggestion {
+    fn from(suggestion: ContactSuggestion) -> Self {
+        Self {
+            address: suggestion.address,
+            name: suggestion.name,
+        }
+    }
+}
+
+/// `searchContacts` 错误投影：清晰区分后台离线、旧版后台不支持（`-32601` 或旧后台对未知方法
+/// fail-closed 返回的 `仅限用户主体` `-32016`）与真实缺 `messages_read` 授权（`-32016`）。
+fn search_contacts_error(error: ClientError) -> UiError {
+    let unsupported = error.rpc_code == Some(-32601)
+        || (error.rpc_code == Some(-32016) && error.message.contains("仅限用户主体"));
+    if unsupported {
+        eprintln!("[maild-ui] searchContacts 失败（后台不支持联系人检索）: {error}");
+        return UiError {
+            code: UiErrorCode::Failed,
+            reason: "contacts_unsupported",
+            message: "后台版本不支持联系人自动补全。".into(),
+        };
+    }
+    UiError::from_client("searchContacts", error)
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -882,6 +913,42 @@ impl Bridge {
         ))
     }
 
+    pub async fn search_contacts(
+        &self,
+        account: &str,
+        query: Option<&str>,
+        limit: Option<u64>,
+    ) -> Result<Vec<UiContactSuggestion>, UiError> {
+        if account.is_empty() || account.len() > 256 || account.chars().any(char::is_control) {
+            return Err(UiError::invalid("account_required", "account 不能为空"));
+        }
+        if let Some(q) = query {
+            if q.len() > 256 || q.chars().any(char::is_control) {
+                return Err(UiError::invalid("invalid_params", "请求参数无效。"));
+            }
+        }
+        let mut params = json!({ "account": account });
+        if let Some(q) = query {
+            params["query"] = json!(q);
+        }
+        if let Some(l) = limit {
+            if l == 0 {
+                return Err(UiError::invalid("invalid_params", "请求参数无效。"));
+            }
+            params["limit"] = json!(l.min(20));
+        }
+        let result: SearchContactsResult = self
+            .handle
+            .request_typed("searchContacts", params)
+            .await
+            .map_err(search_contacts_error)?;
+        Ok(result
+            .contacts
+            .into_iter()
+            .map(UiContactSuggestion::from)
+            .collect())
+    }
+
     /// 经认证连接分块取回附件字节（ADR-0032 决策 1），循环与护栏与 `RpcClient` 共用。
     pub async fn read_attachment(
         &self,
@@ -1222,6 +1289,7 @@ mod tests {
                 "getMessage",
                 "listMessageSummaries",
                 "searchMessages",
+                "searchContacts",
                 "getReadingPolicy",
                 "getProxyConfig",
                 "whoami",
@@ -1378,6 +1446,46 @@ mod tests {
         assert_eq!(
             locale_error("setLocalePreference", rpc(-32602)).reason,
             "invalid_params"
+        );
+    }
+
+    #[test]
+    fn search_contacts_errors_distinguish_offline_unsupported_and_denied() {
+        let offline = search_contacts_error(ClientError::connection("socket down"));
+        assert_eq!((offline.code, offline.reason), (UiErrorCode::Offline, "offline"));
+
+        let method_missing = search_contacts_error(rpc(-32601));
+        assert_eq!(
+            (method_missing.code, method_missing.reason),
+            (UiErrorCode::Failed, "contacts_unsupported")
+        );
+
+        let legacy_fail_closed = search_contacts_error(ClientError {
+            kind: ErrorKind::Rpc,
+            message: "插件主体无权调用 searchContacts：该方法仅限用户主体".into(),
+            rpc_code: Some(-32016),
+            rpc_data: None,
+        });
+        assert_eq!(
+            (legacy_fail_closed.code, legacy_fail_closed.reason),
+            (UiErrorCode::Failed, "contacts_unsupported")
+        );
+
+        let real_denied = search_contacts_error(ClientError {
+            kind: ErrorKind::Rpc,
+            message: "插件主体无权调用 searchContacts：缺少 capability messages_read".into(),
+            rpc_code: Some(-32016),
+            rpc_data: None,
+        });
+        assert_eq!(
+            (real_denied.code, real_denied.reason),
+            (UiErrorCode::Denied, "denied")
+        );
+
+        let invalid = search_contacts_error(rpc(-32602));
+        assert_eq!(
+            (invalid.code, invalid.reason),
+            (UiErrorCode::Invalid, "invalid_params")
         );
     }
 
