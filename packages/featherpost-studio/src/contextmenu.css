@@ -1,10 +1,10 @@
 /* Studio context menus share the picker popover's surface, border, radius and shadow (select.css). */
 
 .studio-menu {
-  z-index: 1000;
+  z-index: var(--z-popover, 1000);
   min-width: 212px;
-  max-width: 320px;
-  max-height: var(--radix-context-menu-content-available-height);
+  max-width: min(320px, var(--available-width, calc(100vw - 24px)));
+  max-height: var(--available-height, calc(100vh - 24px));
   overflow-y: auto;
   overflow-x: hidden;
   overscroll-behavior: contain;
@@ -17,17 +17,25 @@
   font-size: 12px;
   line-height: 18px;
   box-shadow: 0 12px 36px #0002, 0 2px 8px #0001;
-  transform-origin: var(--radix-context-menu-content-transform-origin);
+  transform-origin: var(--transform-origin);
   -webkit-user-select: none;
   user-select: none;
   outline: none;
+  transition:
+    opacity var(--motion-fast) var(--ease-standard),
+    transform var(--motion-fast) var(--ease-standard);
 }
 :root[data-studio-theme="dark"] .studio-menu {
   box-shadow: 0 12px 36px #0006, 0 2px 8px #0004;
 }
+.studio-menu[data-starting-style],
+.studio-menu[data-ending-style] {
+  opacity: 0;
+  transform: scale(0.97);
+}
 .studio-submenu {
   min-width: 184px;
-  max-height: min(380px, var(--radix-context-menu-content-available-height));
+  max-height: min(380px, var(--available-height, calc(100vh - 24px)));
 }
 
 .studio-menu-item {
@@ -45,7 +53,7 @@
     color var(--motion-instant) var(--ease-standard);
 }
 .studio-menu-item[data-highlighted],
-.studio-menu-item[data-state="open"] {
+.studio-menu-item[data-open] {
   background: var(--studio-tint);
 }
 .studio-menu-item[data-disabled] {
@@ -111,13 +119,6 @@
   height: 1px;
   margin: 4px 8px;
   background: var(--studio-border);
-}
-
-.studio-menu[data-state="open"] {
-  animation: fp-pop-in var(--motion-fast) var(--ease-standard);
-}
-.studio-menu[data-state="closed"] {
-  animation: fp-pop-out var(--motion-instant) var(--ease-exit);
 }
 
 /* The object a menu was opened on stays outlined, like Finder and Mail. */
