@@ -36,7 +36,7 @@ import { matchingFolderNames } from "./navigation";
 export interface NavigationHandle {
   focus(): void;
 }
-type Navigate = (action: () => void) => Promise<void>;
+type Navigate = (action: () => void) => void | Promise<unknown>;
 
 /** 「N 个邮箱」：按当前界面语言的复数类别选消息（中文只有 other）。 */
 function mailboxCount(count: number): string {

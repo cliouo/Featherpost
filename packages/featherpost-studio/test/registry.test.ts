@@ -233,6 +233,15 @@ describe('CommandContribution 可选语义元数据（向后兼容）', () => {
       { id: 'org.example.bad.r', title: 'r', locations: ['menu'], risk: 'sudo', execute: () => {} },
       { id: 'org.example.bad.s', title: 's', locations: ['menu'], inputSchema: ['not-an-object'], execute: () => {} },
       { id: 'org.example.bad.d', title: 'd', locations: ['menu'], description: 123, execute: () => {} },
+      { id: 'org.example.bad.l', title: 'l', locations: ['sidebar'], execute: () => {} },
+      { id: 'org.example.bad.w', title: 'w', locations: ['palette'], enabledWhen: 'always-yes', execute: () => {} },
+      { id: 'org.example.bad.c', title: 'c', locations: ['palette'], canExecute: true, execute: () => {} },
+      { id: 'org.example.bad.k1', title: 'k1', locations: ['palette'], keywords: 'not-array', execute: () => {} },
+      { id: 'org.example.bad.k2', title: 'k2', locations: ['palette'], keywords: ['ok', '   '], execute: () => {} },
+      { id: 'org.example.bad.k3', title: 'k3', locations: ['palette'], keywords: [123], execute: () => {} },
+      { id: 'org.example.bad.sc1', title: 'sc1', locations: ['palette'], shortcut: '   ', execute: () => {} },
+      { id: 'org.example.bad.sc2', title: 'sc2', locations: ['palette'], shortcut: 'mod+', execute: () => {} },
+      { id: 'org.example.bad.sc3', title: 'sc3', locations: ['palette'], shortcut: 42, execute: () => {} },
     ]) {
       expect(() =>
         registry.register({
@@ -244,5 +253,66 @@ describe('CommandContribution 可选语义元数据（向后兼容）', () => {
       ).toThrow();
     }
     expect(registry.getSnapshot()).toBe(before);
+  });
+
+  it('支持 palette 位置、新增 EnabledWhen、防御性拷贝 keywords/归一化 shortcut，并保留访问器', () => {
+    const registry = new ContributionRegistry<View>();
+    let locale = 'zh';
+    const plainKeywords = ['写信', 'compose'];
+    registry.register({
+      moduleId: 'org.example.palette',
+      apiVersion: 1,
+      title: 'palette',
+      commands: [
+        {
+          id: 'org.example.palette.plain',
+          title: 'Compose',
+          locations: ['palette'],
+          enabledWhen: 'online-targets',
+          keywords: plainKeywords,
+          shortcut: ' Mod + N ',
+          execute: () => {},
+        },
+        {
+          id: 'org.example.palette.dynamic',
+          title: 'Settings',
+          locations: ['navigation', 'palette'],
+          enabledWhen: 'checked-messages',
+          get keywords() {
+            return locale === 'zh' ? ['设置'] : ['settings'];
+          },
+          get shortcut() {
+            return 'mod+,';
+          },
+          execute: () => {},
+        },
+        {
+          id: 'org.example.palette.targets',
+          title: 'Targets',
+          locations: ['palette'],
+          enabledWhen: 'targets',
+          execute: () => {},
+        },
+      ],
+    });
+
+    const plain = registry.findCommand('org.example.palette.plain');
+    expect(plain?.locations).toEqual(['palette']);
+    expect(plain?.enabledWhen).toBe('online-targets');
+    expect(plain?.shortcut).toBe('mod+n');
+    expect(plain?.keywords).toEqual(['写信', 'compose']);
+
+    // Mutating caller's plain array must not mutate registered keywords.
+    plainKeywords.push('injected');
+    expect(plain?.keywords).toEqual(['写信', 'compose']);
+
+    // Getter keywords stay live across locale changes.
+    const dynamic = registry.findCommand('org.example.palette.dynamic');
+    expect(dynamic?.keywords).toEqual(['设置']);
+    expect(dynamic?.shortcut).toBe('mod+,');
+    locale = 'en';
+    expect(dynamic?.keywords).toEqual(['settings']);
+
+    expect(registry.findCommand('org.example.palette.targets')?.enabledWhen).toBe('targets');
   });
 });

@@ -4,9 +4,16 @@ import type { ConnectionPhase, MessageIdentity, UiCompat } from '../bridge/types
 import type { Preferences } from '../preferences';
 
 export type CoreRole = 'mailbox' | 'settings' | 'compose' | 'drafts' | 'activity';
-export type CommandLocation = 'navigation' | 'toolbar' | 'menu';
+export type CommandLocation = 'navigation' | 'toolbar' | 'menu' | 'palette';
 /** 受限的声明式条件（UI-EXTENSIONS §5）：只有必要的非秘密布尔上下文，不给插件推全量对象。 */
-export type EnabledWhen = 'always' | 'message-selected' | 'online-message-selected' | 'online';
+export type EnabledWhen =
+  | 'always'
+  | 'message-selected'
+  | 'online-message-selected'
+  | 'online'
+  | 'targets'
+  | 'online-targets'
+  | 'checked-messages';
 /** 声明式操作风险等级，供未来的语义动作编排/确认策略使用。 */
 export type CommandRisk = 'read' | 'stage' | 'write' | 'destructive';
 /** 轻量级 JSON Schema 描述符（零外部校验依赖）。 */
@@ -34,6 +41,12 @@ export interface CommandContribution {
   locations: readonly CommandLocation[];
   order?: number;
   enabledWhen?: EnabledWhen;
+  /** 可选的细粒度可用性守卫（如混合账户禁移、同步中防重入）；与 enabledWhen 共同决定可见/可执行状态。 */
+  canExecute?: (context: CommandContext) => boolean;
+  /** 可选的双语搜索别名（支持 getter 以随界面语言更新）。 */
+  keywords?: readonly string[];
+  /** 仅用于展示/ARIA 的规范化快捷键元数据（如 'mod+n'、'mod+,'），不自动绑定热键。 */
+  shortcut?: string;
   execute(context: CommandContext): void;
 }
 
@@ -56,6 +69,8 @@ export interface HostMailboxContext {
   checkedMessages: readonly MessageIdentity[];
   threadOpen: boolean;
   totalMessages: number;
+  busy?: boolean;
+  targetMessages?: readonly MessageIdentity[];
 }
 
 export interface HostComposeContext {

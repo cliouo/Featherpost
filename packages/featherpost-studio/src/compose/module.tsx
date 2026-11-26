@@ -1,17 +1,31 @@
 import { m } from "@featherpost/i18n/messages";
 import { useEffect } from "react";
+import { compatBlocksWrites } from "../bridge/types";
 import type { Host } from "../host/host";
 import { useStore } from "../host/hooks";
 import type { Bundle } from "../host/types";
 import { ComposeController, COMPOSE_VIEW, DRAFTS_VIEW } from "./controller";
 import { Editor } from "./Editor";
 import { fullDate, isoDateTime, shortDate } from "../mailbox/format";
-import { uiLocale, useUiLocale } from "../i18n";
+import { bilingualKeywords, uiLocale, useUiLocale } from "../i18n";
+import { MAIL } from "../views";
 
 const REPLY_TITLE = {
   reply: m.compose_command_reply,
   reply_all: m.compose_command_reply_all,
   forward: m.compose_command_forward,
+} as const;
+
+const REPLY_DESCRIPTION = {
+  reply: m.compose_command_reply_description,
+  reply_all: m.compose_command_reply_all_description,
+  forward: m.compose_command_forward_description,
+} as const;
+
+const REPLY_KEYWORDS = {
+  reply: m.compose_command_reply_keywords,
+  reply_all: m.compose_command_reply_all_keywords,
+  forward: m.compose_command_forward_keywords,
 } as const;
 
 function draftCount(count: number): string {
@@ -40,12 +54,15 @@ export function composeModule(
   const intent = host.onIntent((i) => {
     if (i.route === "compose") void controller.create();
   });
+  controller.setBeforeNavigate((id, next, cancel) =>
+    host.runAfterLeave(id, next, cancel),
+  );
   controller.setDropScope(() => {
     const ui = host.state.getSnapshot(),
       compose = controller.store.getSnapshot();
     return (
       ui.activeViewId === COMPOSE_VIEW ||
-      (ui.activeViewId === "maild.mailbox.workspace" &&
+      (ui.activeViewId === MAIL &&
         compose.inline &&
         !compose.collapsed &&
         compose.source ===
@@ -60,6 +77,15 @@ export function composeModule(
           ))
     );
   });
+  const resolveReadingTarget = () => {
+    const ui = host.state.getSnapshot();
+    if (ui.activeViewId !== MAIL) return null;
+    if (ui.snapshot.phase !== "online" || compatBlocksWrites(ui.snapshot))
+      return null;
+    const snap = host.getContextSnapshot();
+    if (snap.mailbox?.busy) return null;
+    return snap.mailbox ? snap.mailbox.selectedMessage : (ui.selection?.identity ?? null);
+  };
   void controller.start();
   function Workspace() {
     return <Editor controller={controller} />;
@@ -182,9 +208,19 @@ export function composeModule(
         get title() {
           return m.compose_command_new();
         },
+        get description() {
+          return m.compose_command_new_description();
+        },
+        get keywords() {
+          return bilingualKeywords(
+            m.compose_command_new,
+            m.compose_command_new_keywords,
+          );
+        },
+        shortcut: "mod+n",
         risk: "stage",
         icon: "drafts",
-        locations: ["navigation"],
+        locations: ["navigation", "palette"],
         order: 0,
         enabledWhen: "online",
         execute: () => {
@@ -196,9 +232,18 @@ export function composeModule(
         get title() {
           return m.compose_drafts_title();
         },
+        get description() {
+          return m.compose_command_open_drafts_description();
+        },
+        get keywords() {
+          return bilingualKeywords(
+            m.compose_drafts_title,
+            m.compose_command_open_drafts_keywords,
+          );
+        },
         risk: "read",
         icon: "drafts",
-        locations: ["navigation"],
+        locations: ["navigation", "palette"],
         order: 10,
         execute: () => host.openView(DRAFTS_VIEW),
       },
@@ -207,19 +252,44 @@ export function composeModule(
         get title() {
           return REPLY_TITLE[mode]();
         },
+        get description() {
+          return REPLY_DESCRIPTION[mode]();
+        },
+        get keywords() {
+          return bilingualKeywords(REPLY_TITLE[mode], REPLY_KEYWORDS[mode]);
+        },
         risk: "stage" as const,
         icon: mode === "forward" ? ("forward" as const) : ("reply" as const),
-        locations: ["toolbar", "menu"] as const,
+        locations: ["toolbar", "menu", "palette"] as const,
         order: 10 + index,
         enabledWhen: "online-message-selected" as const,
+        canExecute: () => resolveReadingTarget() !== null,
         execute: (context: import("../host/types").CommandContext) => {
-          if (context.online && context.selection)
-            void controller.reply(context.selection, mode);
-          else host.notify(m.compose_error_offline());
+          const ui = host.state.getSnapshot();
+          if (ui.activeViewId !== MAIL) return;
+          if (ui.snapshot.phase !== "online" || compatBlocksWrites(ui.snapshot)) {
+            host.notify(m.compose_error_offline());
+            return;
+          }
+          const target = resolveReadingTarget();
+          if (!target) return;
+          if (
+            context.selection &&
+            (context.selection.account !== target.account ||
+              context.selection.folder !== target.folder ||
+              context.selection.uid !== target.uid)
+          ) {
+            return;
+          }
+          void controller.reply(target, mode);
         },
       })),
     ],
     dispose: () => {
+      controller.setBeforeNavigate((_id, next) => {
+        next();
+        return true;
+      });
       stopContext();
       stop();
       intent();

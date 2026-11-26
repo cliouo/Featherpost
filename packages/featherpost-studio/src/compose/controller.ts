@@ -112,7 +112,20 @@ export class ComposeController {
   private sending = false;
   private dropScope = () => true;
   private beforeClose = async () => true;
+  private leaveGuard: (
+    id: string,
+    next: () => void,
+    cancel?: () => void,
+  ) => boolean = (_id, next) => {
+    next();
+    return true;
+  };
   setBeforeClose(guard:()=>Promise<boolean>) { this.beforeClose = guard; }
+  setBeforeNavigate(
+    guard: (id: string, next: () => void, cancel?: () => void) => boolean,
+  ) {
+    this.leaveGuard = guard;
+  }
   setDropScope(check: () => boolean) {
     this.dropScope = check;
   }
@@ -285,7 +298,20 @@ export class ComposeController {
       throw new Error(m.compose_error_uploads_pending());
     await this.saveLoop();
   }
-  async create(to = "") {
+  create(to = ""): Promise<void> {
+    if (this.store.getSnapshot().busy || this.store.getSnapshot().closing)
+      return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      this.leaveGuard(
+        COMPOSE_VIEW,
+        () => {
+          void this.createApproved(to).finally(resolve);
+        },
+        () => resolve(),
+      );
+    });
+  }
+  private async createApproved(to = "") {
     if (this.store.getSnapshot().busy || this.store.getSnapshot().closing)
       return;
     this.store.patch({ busy: true });
@@ -312,12 +338,35 @@ export class ComposeController {
       }
     });
   }
-  async open(id: string) {
+  open(id: string): Promise<void> {
     if (this.store.getSnapshot().draft?.id === id) {
-      this.store.patch({ inline: false, collapsed: false });
-      this.navigate(COMPOSE_VIEW);
-      return;
+      return new Promise<void>((resolve) => {
+        this.leaveGuard(
+          COMPOSE_VIEW,
+          () => {
+            if (this.store.getSnapshot().draft?.id === id) {
+              this.store.patch({ inline: false, collapsed: false });
+              this.navigate(COMPOSE_VIEW);
+            }
+            resolve();
+          },
+          () => resolve(),
+        );
+      });
     }
+    if (this.store.getSnapshot().busy || this.store.getSnapshot().closing)
+      return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      this.leaveGuard(
+        COMPOSE_VIEW,
+        () => {
+          void this.openApproved(id).finally(resolve);
+        },
+        () => resolve(),
+      );
+    });
+  }
+  private async openApproved(id: string) {
     if (this.store.getSnapshot().busy || this.store.getSnapshot().closing)
       return;
     this.store.patch({ busy: true });
@@ -335,7 +384,22 @@ export class ComposeController {
       }
     });
   }
-  async reply(identity: MessageIdentity, mode: ReplyMode) {
+  reply(identity: MessageIdentity, mode: ReplyMode): Promise<void> {
+    if (this.store.getSnapshot().busy || this.store.getSnapshot().closing)
+      return Promise.resolve();
+    const targetView =
+      mode === "forward" ? COMPOSE_VIEW : "maild.mailbox.workspace";
+    return new Promise<void>((resolve) => {
+      this.leaveGuard(
+        targetView,
+        () => {
+          void this.replyApproved(identity, mode).finally(resolve);
+        },
+        () => resolve(),
+      );
+    });
+  }
+  private async replyApproved(identity: MessageIdentity, mode: ReplyMode) {
     if (this.store.getSnapshot().busy || this.store.getSnapshot().closing)
       return;
     this.store.patch({ busy: true });

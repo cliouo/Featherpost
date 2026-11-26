@@ -10,6 +10,7 @@ import { Store } from './store';
 import type {
   Bundle,
   CommandContext,
+  CommandContribution,
   EnabledWhen,
   HostComposeContext,
   HostContextProviders,
@@ -73,6 +74,13 @@ function sanitizeMailboxContext(raw: HostMailboxContext | null | undefined): Rea
     typeof raw.selectedThreadId === 'number' && Number.isInteger(raw.selectedThreadId) && raw.selectedThreadId > 0
       ? raw.selectedThreadId
       : null;
+  const targetMessages = Array.isArray(raw.targetMessages)
+    ? Object.freeze(
+        raw.targetMessages
+          .map((item) => sanitizeIdentity(item))
+          .filter((item): item is Readonly<MessageIdentity> => item !== null),
+      )
+    : undefined;
   return Object.freeze({
     scope: sanitizeScope(raw.scope),
     selectedMessage: sanitizeIdentity(raw.selectedMessage),
@@ -80,6 +88,8 @@ function sanitizeMailboxContext(raw: HostMailboxContext | null | undefined): Rea
     checkedMessages: Object.freeze(checked),
     threadOpen: Boolean(raw.threadOpen),
     totalMessages: typeof raw.totalMessages === 'number' && Number.isFinite(raw.totalMessages) ? Math.max(0, Math.trunc(raw.totalMessages)) : 0,
+    ...(typeof raw.busy === 'boolean' ? { busy: raw.busy } : {}),
+    ...(targetMessages !== undefined ? { targetMessages } : {}),
   });
 }
 
@@ -220,21 +230,74 @@ export class Host {
     this.openRole('mailbox');
   }
 
-  openRole(role: 'mailbox' | 'settings') {
-    this.openView(this.registry.resolveRole(role).id);
+  openRole(role: 'mailbox' | 'settings'): boolean {
+    return this.openView(this.registry.resolveRole(role).id);
   }
 
-  beforeNavigate(guard:(id:string,next:()=>void,cancel:()=>void)=>boolean) {
+  beforeNavigate(guard: (id: string, next: () => void, cancel: () => void) => boolean) {
     this.navigationGuards.add(guard);
-    return ()=>{this.navigationGuards.delete(guard);};
+    return () => {
+      this.navigationGuards.delete(guard);
+    };
   }
 
-  approveNavigation(id:string):Promise<boolean> {
-    return new Promise(resolve=>{
-      if(id!==this.state.getSnapshot().activeViewId){
-        for(const guard of this.navigationGuards) if(!guard(id,()=>resolve(true),()=>resolve(false)))return;
+  /**
+   * 统一的「先获准离开，再执行一次」导航守卫入口。
+   * 无需确认时同步调用 `run` 并返回 `true`；需要用户确认时返回 `false`，
+   * 待确认后再执行一次 `run`，取消则调用一次 `onCancel`。
+   */
+  runAfterLeave(
+    targetViewId: string,
+    run: () => void,
+    onCancel: () => void = () => {},
+  ): boolean {
+    const guards = [...this.navigationGuards];
+    let settled = false;
+    const finishCancel = () => {
+      if (settled) return;
+      settled = true;
+      onCancel();
+    };
+    const finishRun = () => {
+      if (settled) return;
+      settled = true;
+      run();
+    };
+    if (targetViewId === this.state.getSnapshot().activeViewId || guards.length === 0) {
+      finishRun();
+      return true;
+    }
+    const step = (index: number): boolean => {
+      for (let i = index; i < guards.length; i++) {
+        const guard = guards[i]!;
+        let continued = false;
+        const allowed = guard(
+          targetViewId,
+          () => {
+            if (continued || settled) return;
+            continued = true;
+            if (step(i + 1)) finishRun();
+          },
+          finishCancel,
+        );
+        if (!allowed) return false;
       }
-      resolve(true);
+      return true;
+    };
+    if (step(0)) {
+      finishRun();
+      return true;
+    }
+    return false;
+  }
+
+  approveNavigation(id: string): Promise<boolean> {
+    return new Promise((resolve) => {
+      this.runAfterLeave(
+        id,
+        () => resolve(true),
+        () => resolve(false),
+      );
     });
   }
 
@@ -243,17 +306,16 @@ export class Host {
       this.diagnose(m.extensions_host_view_missing({ id }));
       return false;
     }
-    if (id !== this.state.getSnapshot().activeViewId) {
-      for (const guard of this.navigationGuards) if (!guard(id,()=>this.openView(id),()=>{})) return false;
-    }
-    this.state.patch({ activeViewId: id });
-    return true;
+    return this.runAfterLeave(id, () => {
+      if (!this.registry.findView(id)) return;
+      this.state.patch({ activeViewId: id });
+    });
   }
 
   execute(commandId: string) {
     const command = this.registry.findCommand(commandId);
     if (!command) return;
-    if (!this.isEnabled(command.enabledWhen)) return;
+    if (!this.canExecute(command)) return;
     try {
       command.execute(this.commandContext());
     } catch (error) {
@@ -267,20 +329,71 @@ export class Host {
     }
   }
 
-  isEnabled(when: EnabledWhen | undefined) {
-    const state = this.state.getSnapshot();
-    // 版本不一致时，「在线」类命令（写信、标记、归档等写入口）一律禁用；桥侧另有同一道闸门。
-    const writable = state.snapshot.phase === 'online' && !compatBlocksWrites(state.snapshot);
-    switch (when ?? 'always') {
-      case 'online-message-selected':
-        return state.selection !== null && writable;
-      case 'message-selected':
-        return state.selection !== null;
-      case 'online':
-        return writable;
-      default:
-        return true;
+  canExecute(
+    commandOrId: string | CommandContribution,
+    contextSnapshot?: HostContextSnapshot,
+  ): boolean {
+    const command =
+      typeof commandOrId === 'string'
+        ? this.registry.findCommand(commandOrId)
+        : commandOrId;
+    if (!command) return false;
+    if (!this.isEnabled(command.enabledWhen, contextSnapshot)) return false;
+    if (command.canExecute) {
+      try {
+        return Boolean(command.canExecute(this.commandContext()));
+      } catch {
+        return false;
+      }
     }
+    return true;
+  }
+
+  isEnabled(when: EnabledWhen | undefined, contextSnapshot?: HostContextSnapshot): boolean {
+    const state = this.state.getSnapshot();
+    const phase = contextSnapshot?.phase ?? state.snapshot.phase;
+    const compat = contextSnapshot?.compat ?? state.snapshot.compat;
+    // 版本不一致时，「在线」类命令（写信、标记、归档等写入口）一律禁用；桥侧另有同一道闸门。
+    const writable = phase === 'online' && !compatBlocksWrites({ compat });
+    const condition = when ?? 'always';
+    if (condition === 'always') return true;
+    if (condition === 'online') return writable;
+    if (
+      condition === 'message-selected' ||
+      condition === 'online-message-selected' ||
+      condition === 'targets' ||
+      condition === 'online-targets' ||
+      condition === 'checked-messages'
+    ) {
+      const activeViewId = contextSnapshot?.activeViewId ?? state.activeViewId;
+      if (!this.isMailboxViewActive(activeViewId)) return false;
+      const mailbox = contextSnapshot
+        ? contextSnapshot.mailbox
+        : sanitizeMailboxContext(this.readProvider('mailbox'));
+      const mailboxBusy = Boolean(mailbox?.busy);
+      const selected = contextSnapshot
+        ? contextSnapshot.selectedMessage
+        : (mailbox?.selectedMessage ?? sanitizeIdentity(state.selection?.identity));
+      const checked = contextSnapshot?.checkedMessages ?? mailbox?.checkedMessages ?? [];
+      const hasTargets =
+        mailbox?.targetMessages !== undefined
+          ? mailbox.targetMessages.length > 0
+          : checked.length > 0 || selected !== null;
+      switch (condition) {
+        case 'message-selected':
+          return selected !== null;
+        case 'online-message-selected':
+          return selected !== null && writable && !mailboxBusy;
+        case 'targets':
+          return hasTargets;
+        case 'online-targets':
+          return hasTargets && writable && !mailboxBusy;
+        case 'checked-messages':
+          return checked.length > 0 && !mailboxBusy;
+      }
+    }
+    // 未知条件运行时 fail-closed 拒绝，避免宽放未识别的声明式守卫。
+    return false;
   }
 
   setSelection(selection: HostState['selection']) {
@@ -300,25 +413,33 @@ export class Host {
     };
   }
 
+  private readProvider<K extends keyof HostContextProviders>(key: K): HostContextProviders[K] | null {
+    const provider = this.contextProviders.get(key);
+    if (!provider) return null;
+    try {
+      return (provider() as HostContextProviders[K] | null | undefined) ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  private isMailboxViewActive(activeViewId: string): boolean {
+    const mailboxView = this.registry
+      .getSnapshot()
+      .views.find(({ value }) => value.role === 'mailbox')?.value;
+    if (!mailboxView) return true;
+    return activeViewId === mailboxView.id;
+  }
+
   /**
    * 返回只读、经过白名单净化的 UI 上下文快照。
    * 绝不包含任何凭据、密码、令牌、身份主体、邮件正文或原始 HTML。
    */
   getContextSnapshot(): HostContextSnapshot {
     const state = this.state.getSnapshot();
-    const readProvider = <K extends keyof HostContextProviders>(key: K): HostContextProviders[K] | null => {
-      const provider = this.contextProviders.get(key);
-      if (!provider) return null;
-      try {
-        return (provider() as HostContextProviders[K] | null | undefined) ?? null;
-      } catch {
-        return null;
-      }
-    };
-
-    const mailbox = sanitizeMailboxContext(readProvider('mailbox'));
-    const compose = sanitizeComposeContext(readProvider('compose'));
-    const settings = sanitizeSettingsContext(readProvider('settings'));
+    const mailbox = sanitizeMailboxContext(this.readProvider('mailbox'));
+    const compose = sanitizeComposeContext(this.readProvider('compose'));
+    const settings = sanitizeSettingsContext(this.readProvider('settings'));
     const selectedMessage = mailbox?.selectedMessage ?? sanitizeIdentity(state.selection?.identity);
     const checkedMessages = mailbox?.checkedMessages ?? Object.freeze([]);
     const accountIds = Object.freeze(

@@ -141,8 +141,7 @@ function Editor({ controller }: { controller: SettingsController }) {
     controller.editEndpoint(side, patch);
   const saved = s.profiles?.find((p) => p.id === e.id);
   const end = () => {
-    if (controller.requestLeave(() => controller.store.patch({ editor: null })))
-      controller.store.patch({ editor: null });
+    controller.runAfterLeave(() => controller.store.patch({ editor: null }));
   };
   const secretLabel = preset?.secretLabel ?? m.studio_account_secret_default();
   function SecretInput({
@@ -643,7 +642,9 @@ export function AccountMore({ profile, controller, disabled = false }: { profile
 export function Accounts({ controller }: { controller: SettingsController }) {
   useUiLocale();
   const s = useStore(controller.store);
-  const change = (next: () => void) => { if (controller.requestLeave(next)) next(); };
+  const change = (next: () => void) => {
+    controller.runAfterLeave(next);
+  };
   return <>
     <section className="studio-accounts">
       <div className="studio-account-list-heading"><span>{m.studio_accounts_connected()}</span>

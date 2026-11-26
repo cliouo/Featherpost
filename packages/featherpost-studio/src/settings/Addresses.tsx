@@ -34,8 +34,7 @@ export function Addresses({ controller }: { controller: SettingsController }) {
           value={s.addressAccount}
           onValueChange={(value) => {
             const account = value;
-            const next = () => void controller.selectAddressAccount(account);
-            if (controller.requestLeave(next)) next();
+            controller.runAfterLeave(() => void controller.selectAddressAccount(account));
           }}
         >
           <option value="" disabled>

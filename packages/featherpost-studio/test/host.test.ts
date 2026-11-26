@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { ComposeController, COMPOSE_VIEW } from '../src/compose/controller';
 import { composeModule } from '../src/compose/module';
 import { Host } from '../src/host/host';
-import type { HostMailboxContext, View } from '../src/host/types';
+import type { EnabledWhen, HostMailboxContext, View } from '../src/host/types';
 import { studioMailbox } from '../src/mailbox';
 import { MailboxController } from '../src/mailbox/controller';
 import { SettingsController } from '../src/settings/controller';
@@ -399,5 +399,124 @@ describe('Host.getContextSnapshot() 只读语义上下文与防泄漏边界', ()
 
     stopMailbox();
     stopCompose();
+  });
+
+  it('未知 EnabledWhen 运行时 fail-closed，targets/online-targets/checked-messages 严格遵守视图、在线、版本与忙状态', () => {
+    const host = new Host(new FakeBridge());
+    core(host);
+    let mailboxCtx: HostMailboxContext = {
+      scope: { kind: 'smart', smartFolder: 'inbox' },
+      selectedMessage: null,
+      selectedThreadId: null,
+      checkedMessages: [],
+      threadOpen: false,
+      totalMessages: 2,
+      busy: false,
+      targetMessages: [],
+    };
+    const stop = host.registerContextProvider('mailbox', () => mailboxCtx);
+
+    // Unknown EnabledWhen must fail closed instead of defaulting to true.
+    expect(host.isEnabled('unknown-condition' as EnabledWhen)).toBe(false);
+    expect(host.isEnabled('targets')).toBe(false);
+    expect(host.isEnabled('online-targets')).toBe(false);
+    expect(host.isEnabled('checked-messages')).toBe(false);
+
+    // Select a message while offline.
+    const msg = { account: 'demo', folder: 'INBOX', uid: '1' };
+    mailboxCtx = { ...mailboxCtx, selectedMessage: msg, targetMessages: [msg] };
+    expect(host.isEnabled('targets')).toBe(true);
+    expect(host.isEnabled('online-targets')).toBe(false);
+    expect(host.isEnabled('checked-messages')).toBe(false);
+
+    // Online + compatible enables online-targets.
+    host.state.patch({ snapshot: online });
+    expect(host.isEnabled('online-targets')).toBe(true);
+
+    // Mailbox busy disables online-targets, online-message-selected, and checked-messages.
+    mailboxCtx = { ...mailboxCtx, checkedMessages: [msg], busy: true };
+    expect(host.isEnabled('online-targets')).toBe(false);
+    expect(host.isEnabled('online-message-selected')).toBe(false);
+    expect(host.isEnabled('checked-messages')).toBe(false);
+
+    // Not busy with checked messages enables checked-messages and online-targets.
+    mailboxCtx = { ...mailboxCtx, busy: false };
+    expect(host.isEnabled('checked-messages')).toBe(true);
+    expect(host.isEnabled('online-targets')).toBe(true);
+
+    // Version mismatch disables online-targets while keeping read-only targets & checked-messages.
+    host.state.patch({ snapshot: { ...online, compat: 'app_outdated' } });
+    expect(host.isEnabled('online-targets')).toBe(false);
+    expect(host.isEnabled('targets')).toBe(true);
+    expect(host.isEnabled('checked-messages')).toBe(true);
+
+    // Leaving active mailbox view disables all selection/target/checked conditions.
+    host.state.patch({ snapshot: online });
+    host.openRole('settings');
+    expect(host.isEnabled('message-selected')).toBe(false);
+    expect(host.isEnabled('online-message-selected')).toBe(false);
+    expect(host.isEnabled('targets')).toBe(false);
+    expect(host.isEnabled('online-targets')).toBe(false);
+    expect(host.isEnabled('checked-messages')).toBe(false);
+
+    // Single-snapshot evaluation uses the provided snapshot accurately.
+    host.openRole('mailbox');
+    const snap = host.getContextSnapshot();
+    expect(host.isEnabled('online-targets', snap)).toBe(true);
+    expect(host.isEnabled('checked-messages', snap)).toBe(true);
+
+    stop();
+  });
+
+  it('runAfterLeave 按序执行多个守卫且保证回调与取消至多各执行一次', () => {
+    const host = new Host(new FakeBridge());
+    core(host);
+    const pending: Array<{ next: () => void; cancel: () => void }> = [];
+    const order: string[] = [];
+
+    const stop1 = host.beforeNavigate((_id, next, cancel) => {
+      order.push('guard1');
+      pending.push({ next, cancel });
+      return false;
+    });
+    const stop2 = host.beforeNavigate((_id, next, cancel) => {
+      order.push('guard2');
+      pending.push({ next, cancel });
+      return false;
+    });
+
+    const ran = vi.fn();
+    const cancelled = vi.fn();
+    expect(host.runAfterLeave('maild.settings.page', ran, cancelled)).toBe(false);
+    expect(order).toEqual(['guard1']);
+    expect(ran).not.toHaveBeenCalled();
+
+    // Approving guard 1 proceeds to guard 2 without running yet.
+    pending[0]!.next();
+    expect(order).toEqual(['guard1', 'guard2']);
+    expect(ran).not.toHaveBeenCalled();
+
+    // Approving guard 2 runs action once; duplicate next/cancel calls are ignored.
+    pending[1]!.next();
+    pending[1]!.next();
+    pending[1]!.cancel();
+    expect(ran).toHaveBeenCalledTimes(1);
+    expect(cancelled).not.toHaveBeenCalled();
+
+    // Cancelling at guard 1 never invokes guard 2 or run.
+    pending.length = 0;
+    order.length = 0;
+    const ran2 = vi.fn();
+    const cancelled2 = vi.fn();
+    expect(host.runAfterLeave('maild.settings.page', ran2, cancelled2)).toBe(false);
+    pending[0]!.cancel();
+    pending[0]!.cancel();
+    pending[0]!.next();
+    expect(order).toEqual(['guard1']);
+    expect(ran2).not.toHaveBeenCalled();
+    expect(cancelled2).toHaveBeenCalledTimes(1);
+
+    stop1();
+    stop2();
   });
 });

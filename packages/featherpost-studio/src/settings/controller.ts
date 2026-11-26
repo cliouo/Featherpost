@@ -267,6 +267,32 @@ export class SettingsController {
     this.store.patch({ section, error: null, notice: null });
     void this.load();
   }
+  /** 统一的「先获准离开，再执行一次」设置守卫入口，复用 requestLeave。 */
+  runAfterLeave(next: () => void, onCancel: () => void = () => {}): boolean {
+    let settled = false;
+    const onceNext = () => {
+      if (settled) return;
+      settled = true;
+      next();
+    };
+    const onceCancel = () => {
+      if (settled) return;
+      settled = true;
+      onCancel();
+    };
+    if (this.requestLeave(onceNext, onceCancel)) {
+      onceNext();
+      return true;
+    }
+    return false;
+  }
+  /** 切换设置分区：选中当前已激活分区时为无副作用 no-op，否则先过离开守卫。 */
+  selectSection(section: string): boolean {
+    const s = this.store.getSnapshot();
+    if (s.closeLocked) return false;
+    if (s.section === section) return true;
+    return this.runAfterLeave(() => this.activate(section));
+  }
   async load() {
     const s = this.store.getSnapshot();
     if (!s.online || s.busy || s.closeLocked) return;
@@ -436,24 +462,38 @@ export class SettingsController {
       notice: null,
     });
   }
-  /** 从邮箱欢迎页 / 账户提醒进入：切到「账户」分区，直接打开（预选服务商的）添加向导。 */
-  openSetup(providerId?: string) {
+  /** 从邮箱欢迎页 / 账户提醒进入：先过未保存设置守卫，再切到「账户」分区并打开添加向导。 */
+  openSetup(providerId?: string): boolean {
     const s = this.store.getSnapshot();
-    if (s.busy || s.closeLocked) return;
-    if (s.editor && this.dirty) {
-      this.store.patch({ section: "maild.settings.accounts" });
-      return;
-    }
-    this.store.patch({ section: "maild.settings.accounts", editor: null });
-    this.beginAccount(undefined, providerId);
-    void this.load();
+    if (s.busy || s.closeLocked) return false;
+    return this.runAfterLeave(() => {
+      this.store.patch({
+        section: "maild.settings.accounts",
+        editor: null,
+        error: null,
+        notice: null,
+      });
+      this.beginAccount(undefined, providerId);
+      void this.load();
+    });
   }
-  /** 账户异常的「修复」入口：只切到账户列表，不打断正在编辑的内容。 */
-  openAccounts() {
+  /** 账户异常的「修复」入口：已在账户分区时不打断编辑，跨分区切换前先过未保存守卫。 */
+  openAccounts(): boolean {
     const s = this.store.getSnapshot();
-    if (s.busy || s.closeLocked) return;
-    this.store.patch({ section: "maild.settings.accounts", error: null });
-    void this.load();
+    if (s.busy || s.closeLocked) return false;
+    if (s.section === "maild.settings.accounts") {
+      this.store.patch({ error: null });
+      void this.load();
+      return true;
+    }
+    return this.runAfterLeave(() => {
+      this.store.patch({
+        section: "maild.settings.accounts",
+        error: null,
+        notice: null,
+      });
+      void this.load();
+    });
   }
   private setWizard(patch: Partial<AccountWizard>) {
     this.store.patch({

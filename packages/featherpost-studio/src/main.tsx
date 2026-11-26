@@ -4,7 +4,7 @@ import { Host } from "./host/host";
 import { ComposeController } from "./compose/controller";
 import { composeModule } from "./compose/module";
 import { SettingsController } from "./settings/controller";
-import { settingsModule } from "./settings/module";
+import { settingsModule, SETTINGS_VIEW } from "./settings/module";
 import { ErrorBoundary } from "./app/ErrorBoundary";
 import { studioMailbox } from "./mailbox";
 import { Studio } from "./Shell";
@@ -30,9 +30,19 @@ const composer = new ComposeController(
 const settings = new SettingsController(tauriBridge.settings, () => {
   void tauriBridge.refresh().catch(() => {});
 });
+const openSettingsWith = (action: () => void) => {
+  if (host.state.getSnapshot().activeViewId === SETTINGS_VIEW) {
+    action();
+    return;
+  }
+  host.runAfterLeave(SETTINGS_VIEW, () => {
+    if (host.openView(SETTINGS_VIEW)) action();
+  });
+};
 const mailbox = studioMailbox(host, composer, () => {
-  settings.openSetup();
-  host.openRole("settings");
+  openSettingsWith(() => {
+    settings.openSetup();
+  });
 });
 host.registerBuiltin(mailbox.bundle);
 host.registerBuiltin(composeModule(host, composer));
@@ -59,8 +69,9 @@ void startupLocaleReady().then(() => {
         composer={composer}
         setup={mailbox.setup}
         manageAccounts={() => {
-          settings.openAccounts();
-          host.openRole("settings");
+          openSettingsWith(() => {
+            settings.openAccounts();
+          });
         }}
       />
       </ChoiceRenderer.Provider>
