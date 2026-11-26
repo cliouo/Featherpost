@@ -43,9 +43,13 @@ export interface StudioDialogProps {
   /** Controlled open state. Defaults to `true` for conditionally mounted dialogs. */
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
+  /** Invoked after open/close transitions settle. */
+  onOpenChangeComplete?: (open: boolean) => void;
   /** Convenience close callback invoked when dismissal is allowed. */
   onClose?: () => void;
   title: ReactNode;
+  /** Visually hides the dialog title with `.visually-hidden` while preserving ARIA labeling. */
+  hideTitle?: boolean;
   /** Optional accessible description rendered via DialogDescription (`aria-describedby`). */
   description?: ReactNode;
   descriptionClassName?: string;
@@ -87,8 +91,10 @@ export interface StudioDialogProps {
 export function StudioDialog({
   open = true,
   onOpenChange,
+  onOpenChangeComplete,
   onClose,
   title,
+  hideTitle = false,
   description,
   descriptionClassName,
   role = "dialog",
@@ -109,7 +115,8 @@ export function StudioDialog({
 
   const isAlert = role === "alertdialog";
   const allowOutsideClick = dismissOnOutsideClick ?? !isAlert;
-  const hasCloseButton = showCloseButton ?? variant === "dialog";
+  const hasCloseButton = showCloseButton ?? (!hideTitle && variant === "dialog");
+  const titleClassName = hideTitle ? "visually-hidden" : undefined;
 
   const fallbackLayer = useFallbackLayer(open);
   const busyRef = useRef(busy);
@@ -180,6 +187,7 @@ export function StudioDialog({
       <UiSdkAlertDialog
         open={open}
         onOpenChange={handleOpenChange}
+        onOpenChangeComplete={onOpenChangeComplete}
         dismissible={!busy}
         persistentElements={PERSISTENT_OVERLAY_SELECTORS}
         container={container ?? undefined}
@@ -203,7 +211,7 @@ export function StudioDialog({
         >
           {hasCloseButton ? (
             <header>
-              <AlertDialogTitle>{title}</AlertDialogTitle>
+              <AlertDialogTitle className={titleClassName}>{title}</AlertDialogTitle>
               <button
                 type="button"
                 className="text-button"
@@ -215,7 +223,7 @@ export function StudioDialog({
               </button>
             </header>
           ) : (
-            <AlertDialogTitle>{title}</AlertDialogTitle>
+            <AlertDialogTitle className={titleClassName}>{title}</AlertDialogTitle>
           )}
           {description !== undefined && (
             <AlertDialogDescription className={descriptionClassName}>
@@ -232,6 +240,7 @@ export function StudioDialog({
     <UiSdkDialog
       open={open}
       onOpenChange={handleOpenChange}
+      onOpenChangeComplete={onOpenChangeComplete}
       modal
       dismissible={!busy}
       closeOnOutsidePress={allowOutsideClick}
@@ -257,7 +266,7 @@ export function StudioDialog({
       >
         {hasCloseButton ? (
           <header>
-            <DialogTitle>{title}</DialogTitle>
+            <DialogTitle className={titleClassName}>{title}</DialogTitle>
             <button
               type="button"
               className="text-button"
@@ -269,7 +278,7 @@ export function StudioDialog({
             </button>
           </header>
         ) : (
-          <DialogTitle>{title}</DialogTitle>
+          <DialogTitle className={titleClassName}>{title}</DialogTitle>
         )}
         {description !== undefined && (
           <DialogDescription className={descriptionClassName}>

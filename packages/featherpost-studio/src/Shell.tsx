@@ -1,7 +1,7 @@
 import { m } from "@featherpost/i18n/messages";
 import { useUiLocale } from "./i18n";
 import { Choice } from "./settings/Choice";
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import type { Host } from "./host/host";
 import { useExternal, useStore } from "./host/hooks";
 import { Icon } from "./app/Icon";
@@ -13,9 +13,12 @@ import { MAIL, ACTIVITY } from "./views";
 import { MailboxNavigation, type NavigationHandle } from "./MailboxNavigation";
 import { readStudioView, saveStudioView, type StudioView } from "./layout";
 import { ContextMenuHost, useContextMenu } from "./ContextMenu";
+import { CommandPalette } from "./CommandPalette";
 import { folderMenu, selectionMenu } from "./menus";
+import type { LanguageController } from "./settings/language";
 import { SyncCount } from "./SyncCount";
 import { usePersistentOverlay } from "./ui";
+import { isShortcutBlockedTarget } from "./Workspace";
 import {
   StudioActionsContext,
   clipboardCopier,
@@ -73,14 +76,18 @@ export function Studio({
   host,
   mailbox,
   composer,
+  language,
   setup,
   manageAccounts,
+  openSettingsSection,
 }: {
   host: Host;
   mailbox: MailboxController;
   composer: ComposeController;
+  language?: LanguageController;
   setup(): void;
   manageAccounts(): void;
+  openSettingsSection?: (sectionId: string) => void;
 }) {
   // 订阅界面语言：切换时整棵树随根组件重新渲染（不重挂载、不丢状态）。
   useUiLocale();
@@ -101,6 +108,7 @@ export function Studio({
   const [search, setSearch] = useState("");
   const [allMail, setAllMail] = useState(false);
   const [searchScope, setSearchScope] = useState(mail.scope);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const [toastText, setToastText] = useState<string | null>(null);
   useEffect(() => {
     if (state.toast) setToastText(state.toast);
@@ -129,58 +137,117 @@ export function Studio({
     document.title = "Featherpost Studio";
     void host.bridge.compose.ready().catch(() => {});
   }, [host]);
-  const openMailbox = (action: () => void): Promise<boolean> => {
-    const current = mailbox.navigationGuard();
-    return new Promise<boolean>((resolve) => {
-      host.runAfterLeave(
-        MAIL,
-        () => {
-          if (!current()) {
+  const openMailbox = useCallback(
+    (action: () => void): Promise<boolean> => {
+      const current = mailbox.navigationGuard();
+      return new Promise<boolean>((resolve) => {
+        host.runAfterLeave(
+          MAIL,
+          () => {
+            if (!current()) {
+              resolve(false);
+              return;
+            }
+            if (host.openView(MAIL)) {
+              action();
+              resolve(true);
+              return;
+            }
             resolve(false);
-            return;
+          },
+          () => resolve(false),
+        );
+      });
+    },
+    [host, mailbox],
+  );
+  const changeView = useCallback(
+    (next: StudioView) =>
+      void openMailbox(() => {
+        setView((previous) => {
+          saveStudioView(next);
+          if (next === "unified" && previous !== next) {
+            mailbox.selectSmart("inbox");
           }
-          if (host.openView(MAIL)) {
-            action();
-            resolve(true);
-            return;
-          }
-          resolve(false);
-        },
-        () => resolve(false),
-      );
-    });
-  };
-  const changeView = (next: StudioView) =>
-    void openMailbox(() => {
-      setView(next);
-      saveStudioView(next);
-      if (next === "unified" && view !== next) mailbox.selectSmart("inbox");
-    });
+          return next;
+        });
+      }),
+    [mailbox, openMailbox],
+  );
+  const focusSearch = useCallback(() => {
+    searchInput.current?.focus();
+    searchInput.current?.select();
+  }, []);
+  const focusSidebarFilter = useCallback(() => {
+    navigation.current?.focus();
+  }, []);
+  const navigateSettingsSection = useCallback(
+    (sectionId: string) => {
+      if (openSettingsSection) {
+        openSettingsSection(sectionId);
+        return;
+      }
+      host.openRole("settings");
+    },
+    [host, openSettingsSection],
+  );
+  const runPaletteMailSearch = useCallback(
+    (query: string) => {
+      void openMailbox(() => {
+        setSearch(query);
+        searchMail(mailbox, query, allMail, searchScope);
+      });
+    },
+    [allMail, mailbox, openMailbox, searchScope],
+  );
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
-      if (
-        !(e.metaKey || e.ctrlKey) ||
-        e.altKey ||
-        isGlobalShortcutBlocked(e)
-      )
+      if (e.isComposing || e.keyCode === 229 || isGlobalShortcutBlocked(e))
         return;
-      if (e.key.toLowerCase() === "k") {
-        e.preventDefault();
-        searchInput.current?.focus();
-        searchInput.current?.select();
+      if (e.metaKey || e.ctrlKey) {
+        if (e.altKey) return;
+        const lower = e.key.toLowerCase();
+        if (lower === "k" && !e.shiftKey && !e.repeat) {
+          e.preventDefault();
+          setPaletteOpen(true);
+          return;
+        }
+        if (lower === "f" && e.shiftKey && !e.repeat) {
+          e.preventDefault();
+          focusSearch();
+          return;
+        }
+        if (lower === "l" && !e.shiftKey) {
+          e.preventDefault();
+          focusSidebarFilter();
+          return;
+        }
+        if (e.key === "," && !e.shiftKey) {
+          e.preventDefault();
+          host.openRole("settings");
+        }
+        return;
       }
-      if (e.key.toLowerCase() === "l") {
-        e.preventDefault();
-        navigation.current?.focus();
-      }
-      if (e.key === ",") {
-        e.preventDefault();
-        host.openRole("settings");
+      // Single-character `/` mail search is strictly scoped to message list focus.
+      if (!e.altKey && !e.repeat && e.key === "/") {
+        const target = e.target as
+          | { closest?(selector: string): Element | null }
+          | null
+          | undefined;
+        if (
+          target &&
+          typeof target.closest === "function" &&
+          target.closest(".message-column") &&
+          !isShortcutBlockedTarget(target)
+        ) {
+          e.preventDefault();
+          focusSearch();
+        }
       }
     };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
-  }, [host]);
+  }, [focusSearch, focusSidebarFilter, host]);
   const actions: StudioActions = {
     search(text, all = false) {
       void openMailbox(() => {
@@ -310,10 +377,22 @@ export function Studio({
               ×
             </button>
           ) : (
-            <kbd>⌘ K</kbd>
+            <kbd>⌘ ⇧ F</kbd>
           )}
         </form>
         <div className="topbar-actions">
+          <button
+            type="button"
+            className="palette-trigger"
+            title={m.studio_palette_open_title()}
+            aria-label={m.studio_palette_open()}
+            aria-keyshortcuts="Meta+K Control+K"
+            onClick={() => setPaletteOpen((prev) => !prev)}
+          >
+            <Icon name="search" />
+            <span>{m.studio_palette_open()}</span>
+            <kbd aria-hidden="true">⌘ K</kbd>
+          </button>
           <div className="view-switch" role="group" aria-label={m.studio_view_switch_label()}>
             <button
               aria-pressed={view === "standard"}
@@ -427,6 +506,21 @@ export function Studio({
         )}
         {View && <View active />}
       </main>
+      <CommandPalette
+        open={paletteOpen}
+        onOpenChange={setPaletteOpen}
+        host={host}
+        mailbox={mailbox}
+        composer={composer}
+        view={view}
+        language={language}
+        focusSearch={focusSearch}
+        focusSidebarFilter={focusSidebarFilter}
+        changeView={changeView}
+        openMailbox={openMailbox}
+        openSettingsSection={navigateSettingsSection}
+        runMailSearch={runPaletteMailSearch}
+      />
       <div
         ref={toastRef}
         className={`toast${state.toast ? " show" : ""}`}

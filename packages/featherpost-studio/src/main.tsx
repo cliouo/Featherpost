@@ -4,6 +4,7 @@ import { Host } from "./host/host";
 import { ComposeController } from "./compose/controller";
 import { composeModule } from "./compose/module";
 import { SettingsController } from "./settings/controller";
+import { LanguageController } from "./settings/language";
 import { settingsModule, SETTINGS_VIEW } from "./settings/module";
 import { ErrorBoundary } from "./app/ErrorBoundary";
 import { studioMailbox } from "./mailbox";
@@ -20,6 +21,7 @@ import "./activity.css";
 import "./settings/settings.css";
 import "./select.css";
 import "./contextmenu.css";
+import "./command-palette.css";
 
 const host = new Host(tauriBridge);
 const composer = new ComposeController(
@@ -30,6 +32,7 @@ const composer = new ComposeController(
 const settings = new SettingsController(tauriBridge.settings, () => {
   void tauriBridge.refresh().catch(() => {});
 });
+const language = new LanguageController(tauriBridge.locale);
 const openSettingsWith = (action: () => void) => {
   if (host.state.getSnapshot().activeViewId === SETTINGS_VIEW) {
     action();
@@ -39,6 +42,15 @@ const openSettingsWith = (action: () => void) => {
     if (host.openView(SETTINGS_VIEW)) action();
   });
 };
+const openSettingsSection = (sectionId: string) => {
+  if (host.state.getSnapshot().activeViewId === SETTINGS_VIEW) {
+    settings.selectSection(sectionId);
+    return;
+  }
+  openSettingsWith(() => {
+    settings.activate(sectionId);
+  });
+};
 const mailbox = studioMailbox(host, composer, () => {
   openSettingsWith(() => {
     settings.openSetup();
@@ -46,7 +58,7 @@ const mailbox = studioMailbox(host, composer, () => {
 });
 host.registerBuiltin(mailbox.bundle);
 host.registerBuiltin(composeModule(host, composer));
-host.registerBuiltin(settingsModule(host, settings));
+host.registerBuiltin(settingsModule(host, settings, language));
 composer.setBeforeClose(() => settings.beforeClose());
 composer.store.subscribe(() => {
   if (!composer.store.getSnapshot().closing) settings.releaseClose();
@@ -67,12 +79,14 @@ void startupLocaleReady().then(() => {
         host={host}
         mailbox={mailbox.controller}
         composer={composer}
+        language={language}
         setup={mailbox.setup}
         manageAccounts={() => {
           openSettingsWith(() => {
             settings.openAccounts();
           });
         }}
+        openSettingsSection={openSettingsSection}
       />
       </ChoiceRenderer.Provider>
     </ErrorBoundary>,

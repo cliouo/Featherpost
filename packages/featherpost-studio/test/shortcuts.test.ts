@@ -178,11 +178,89 @@ describe("Phase 0 shortcut gating and dead-code cleanup", () => {
     // Hidden data-shortcuts-off container does NOT block global shortcuts.
     popup.hidden = true;
     item.blur();
+
+    // Cmd+Shift+F focuses mail search (while plain Cmd+F stays free for in-page find).
     act(() => {
       window.dispatchEvent(
         new KeyboardEvent("keydown", {
+          key: "f",
+          metaKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+    expect(document.activeElement).not.toBe(searchInput);
+
+    act(() => {
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "f",
+          metaKey: true,
+          shiftKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+    expect(document.activeElement).toBe(searchInput);
+
+    // Cmd+K opens the Command Palette (allowed from normal inputs like mail search).
+    act(() => {
+      searchInput.dispatchEvent(
+        new KeyboardEvent("keydown", {
           key: "k",
           metaKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+    const paletteDialog = document.body.querySelector<HTMLElement>(
+      '[role="dialog"].command-palette-dialog',
+    );
+    expect(paletteDialog).not.toBeNull();
+    // Toggle palette closed with Cmd+K before testing other global shortcuts.
+    act(() => {
+      paletteDialog!.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "k",
+          metaKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+    expect(
+      document.body.querySelector('[role="dialog"].command-palette-dialog'),
+    ).toBeNull();
+
+    // `/` does NOT hijack focus outside `.message-column` (e.g., on body or inputs).
+    searchInput.blur();
+    act(() => {
+      document.body.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "/",
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+    expect(document.activeElement).not.toBe(searchInput);
+
+    // `/` DOES focus mail search when focus is inside `.message-column` (non-input target).
+    const column = document.createElement("section");
+    column.className = "message-column";
+    const rowBtn = document.createElement("button");
+    rowBtn.className = "message-open";
+    rowBtn.textContent = "Row";
+    column.appendChild(rowBtn);
+    container.appendChild(column);
+    rowBtn.focus();
+    act(() => {
+      rowBtn.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "/",
           bubbles: true,
           cancelable: true,
         }),

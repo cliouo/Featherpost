@@ -5,6 +5,15 @@ export {
   type UiCheckboxProps,
 } from "./Checkbox";
 export {
+  StudioCommandDialog,
+  type StudioCommandAnnouncement,
+  type StudioCommandDialogProps,
+  type StudioCommandFooterContext,
+  type StudioCommandGroup,
+  type StudioCommandItem,
+  type StudioCommandRunOptions,
+} from "./Command";
+export {
   ContextMenuHost,
   useContextMenu,
   type ContextMenuHostProps,
