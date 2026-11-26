@@ -71,9 +71,9 @@ function Row({
 export function settingsModule(
   host: Host,
   controller = new SettingsController(host.bridge.settings),
+  language = new LanguageController(host.bridge.locale),
 ): Bundle {
   // ADR-0048：语言选择与默认前端共用一个控制器；偏好归 daemon。
-  const language = new LanguageController(host.bridge.locale);
   language.start();
 
   function Connection(_props: ViewProps) {

@@ -243,7 +243,10 @@ export function ReadingPane({
               <kbd>⌘ N</kbd> {m.studio_reader_shortcut_compose()}
             </span>
             <span>
-              <kbd>⌘ K</kbd> {m.studio_reader_shortcut_search()}
+              <kbd>⌘ K</kbd> {m.studio_reader_shortcut_palette()}
+            </span>
+            <span>
+              <kbd>⌘ ⇧ F</kbd> {m.studio_reader_shortcut_search()}
             </span>
           </div>
         </div>
