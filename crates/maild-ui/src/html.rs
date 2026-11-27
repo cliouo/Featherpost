@@ -338,7 +338,11 @@ impl Rewriter<'_> {
             .collect();
         for (name, value) in attributes {
             let lower = name.to_ascii_lowercase();
-            if lower.starts_with("on") || DROPPED_ATTRIBUTES.contains(&lower.as_str()) {
+            if lower.starts_with("on")
+                || DROPPED_ATTRIBUTES.contains(&lower.as_str())
+                || lower == maild_translate::TRUSTED_TR_ATTR
+                || lower.starts_with("data-fp-tr-")
+            {
                 el.remove_attribute(&name);
                 continue;
             }
@@ -643,6 +647,10 @@ impl State {
 
 /// Optional reading palette for an already-rewritten document. Never invert image
 /// pixels, change resource URLs, or alter the stored original / its capabilities.
+///
+/// Trusted Rust-generated translation containers (identified strictly by `data-fp-tr="1"`,
+/// NEVER by spoofable sender `.fp-tr-block` class alone) receive readable dark-mode inline
+/// `!important` styling (transparent background, `#cfd6e6` text, `#60a5fa` left border).
 pub fn dark_reading_html(html: &str) -> String {
     let adapted = lol_html::rewrite_str(html, RewriteStrSettings {
         element_content_handlers: vec![element!("*", |el| {
@@ -652,11 +660,23 @@ pub fn dark_reading_html(html: &str) -> String {
                 return Ok(());
             }
             let original = el.get_attribute("style").unwrap_or_default();
-            let background = if tag == "html" || tag == "body" { "#1b1b23" }
-                else if el.get_attribute("bgcolor").is_some() || original.to_ascii_lowercase().contains("background") { "#252530" }
-                else { "transparent" };
-            let foreground = if tag == "a" || tag == "area" { "#b1ccff" } else { "#e4e4ed" };
-            let style = format!("{original};background-color:{background}!important;background-image:none!important;color:{foreground}!important;border-color:#454550!important;box-shadow:none!important;");
+            let is_trusted_translation = el
+                .get_attribute(maild_translate::TRUSTED_TR_ATTR)
+                .as_deref()
+                == Some(maild_translate::TRUSTED_TR_VALUE);
+            let style = if is_trusted_translation {
+                format!(
+                    "{original};background-color:transparent!important;background-image:none!important;\
+                     color:#cfd6e6!important;border-left:2px solid #60a5fa!important;\
+                     border-color:#60a5fa!important;box-shadow:none!important;"
+                )
+            } else {
+                let background = if tag == "html" || tag == "body" { "#1b1b23" }
+                    else if el.get_attribute("bgcolor").is_some() || original.to_ascii_lowercase().contains("background") { "#252530" }
+                    else { "transparent" };
+                let foreground = if tag == "a" || tag == "area" { "#b1ccff" } else { "#e4e4ed" };
+                format!("{original};background-color:{background}!important;background-image:none!important;color:{foreground}!important;border-color:#454550!important;box-shadow:none!important;")
+            };
             let _ = el.set_attribute("style", &style);
             Ok(())
         })],

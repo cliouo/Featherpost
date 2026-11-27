@@ -1051,12 +1051,16 @@ impl Bridge {
                     folder: message.folder,
                     uid: message.uid,
                 },
+                subject: message.subject,
                 html: prepared.html,
                 csp: prepared.csp,
                 links: prepared.links,
                 parts,
                 remote_urls: prepared.remote_urls,
                 allow_remote,
+                translation: std::sync::Arc::new(std::sync::RwLock::new(None)),
+                translation_rev: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+                active_job: std::sync::Arc::new(std::sync::Mutex::new(None)),
             },
         );
         Ok(document)

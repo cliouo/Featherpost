@@ -22,11 +22,13 @@ default = []
 embedded = ["tauri/custom-protocol"]
 
 [dependencies]
+async-trait = "0.1"
 maild-brand = { path = "../maild-brand" }
 base64 = "0.22"
 clap = { version = "4", features = ["derive"] }
 # ADR-0033 决策 4：文档令牌用系统随机源。
 getrandom = "0.4.3"
+hex = "0.4"
 # ADR-0033 决策 3：HTML5 流式重写器——映射 cid:/链接、去势脚本与远程引用，未触碰的字节原样输出。
 lol_html = "2"
 maild-app = { path = "../maild-app" }
@@ -36,6 +38,7 @@ maild-l10n = { path = "../maild-l10n" }
 # ADR-0044：单实例锁位于平台 runtime 目录。
 maild-paths = { path = "../maild-paths" }
 maild-proxy = { path = "../maild-proxy", features = ["reqwest"] }
+maild-translate = { path = "../maild-translate" }
 plist = "1"
 regex = "1"
 reqwest = { version = "0.13.4", default-features = false, features = ["rustls", "socks"] }
@@ -43,6 +46,7 @@ reqwest = { version = "0.13.4", default-features = false, features = ["rustls", 
 rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "tokio"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
 tauri = { version = "2", features = [] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
 url = "2"

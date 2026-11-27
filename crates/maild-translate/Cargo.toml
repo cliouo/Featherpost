@@ -10,6 +10,7 @@ async-trait = "0.1"
 cordis = { path = "../cordis" }
 getrandom = "0.4.3"
 hex = "0.4"
+lol_html = "2"
 maild-proxy = { path = "../maild-proxy", features = ["reqwest"] }
 reqwest = { version = "0.13.4", default-features = false, features = ["rustls", "socks"] }
 rusqlite = { version = "0.37", features = ["bundled"] }

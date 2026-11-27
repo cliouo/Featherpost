@@ -27,6 +27,18 @@ struct Cli {
 fn main() {
     let cli = Cli::parse();
     let custom = cli.config.is_some() || cli.url.is_some() || cli.socket.is_some() || cli.pipe.is_some();
+    let storage_paths = match maild_ui::translation::TranslationStoragePaths::resolve(
+        cli.config.as_deref(),
+        cli.socket.as_deref(),
+        cli.pipe.as_deref(),
+        cli.url.as_deref(),
+    ) {
+        Ok(paths) => paths,
+        Err(error) => {
+            eprintln!("maild-ui: {error}");
+            std::process::exit(2);
+        }
+    };
     let options = DiscoveryOptions {
         config_path: cli.config,
         url: cli.url,
@@ -65,7 +77,11 @@ fn main() {
             std::process::exit(2);
         }
     };
-    if let Err(error) = maild_ui::run_with_options(bridge, custom) {
+    let launch = maild_ui::LaunchOptions {
+        custom_connection: custom,
+        translation_paths: storage_paths,
+    };
+    if let Err(error) = maild_ui::run_with_launch_options(bridge, launch) {
         eprintln!("maild-ui: {error}");
         std::process::exit(1);
     }

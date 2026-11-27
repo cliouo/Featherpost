@@ -553,12 +553,16 @@ async fn route_remote_fetches_through_proxy_enforces_guards_and_respects_allow_r
                 folder: "INBOX".into(),
                 uid: "1".into(),
             },
+            subject: String::new(),
             html: prepared_blocked.html,
             csp: prepared_blocked.csp,
             links: prepared_blocked.links,
             parts: Default::default(),
             remote_urls: vec!["http://cdn.example.test/ok.png".into()], // even if injected!
             allow_remote: false,
+            translation: std::sync::Arc::new(std::sync::RwLock::new(None)),
+            translation_rev: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            active_job: std::sync::Arc::new(std::sync::Mutex::new(None)),
         },
     );
     assert_eq!(
@@ -598,12 +602,16 @@ async fn route_remote_fetches_through_proxy_enforces_guards_and_respects_allow_r
                 folder: "INBOX".into(),
                 uid: "2".into(),
             },
+            subject: String::new(),
             html: prepared_allowed.html,
             csp: prepared_allowed.csp,
             links: prepared_allowed.links,
             parts: Default::default(),
             remote_urls: prepared_allowed.remote_urls,
             allow_remote: true,
+            translation: std::sync::Arc::new(std::sync::RwLock::new(None)),
+            translation_rev: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            active_job: std::sync::Arc::new(std::sync::Mutex::new(None)),
         },
     );
 

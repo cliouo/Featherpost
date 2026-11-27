@@ -108,10 +108,17 @@ pub(crate) async fn ui_prepare_html(
         .await
 }
 
-/// 切信即释放：令牌失效后 `/doc/`、`/part/` 都是 404。
+/// 切信即释放：令牌失效后 `/doc/`、`/part/` 都是 404，并同步取消该文档上的在途翻译任务。
 #[tauri::command]
 pub(crate) fn ui_release_html(state: State<'_, AppState>, token: String) -> bool {
-    state.documents.release(&token)
+    let (released, cancelled_job_id) = state.documents.release_and_cancel(&token);
+    if let Some(job_id) = cancelled_job_id {
+        let translation = state.translation.clone();
+        tauri::async_runtime::spawn(async move {
+            translation.notify_daemon_cancel_if_external(&job_id).await;
+        });
+    }
+    released
 }
 
 /// 只把链接表里 `http`/`https` 的那一项交给系统浏览器；webview 传不进 URL 字符串（决策 6）。
@@ -607,6 +614,127 @@ pub(crate) fn ui_open_native_recovery(state: State<'_, AppState>) -> Result<(), 
             ),
         )
     })
+}
+
+// —— ADR-0050：受控邮件翻译命令 ——
+
+#[tauri::command(rename_all = "snake_case")]
+pub(crate) fn ui_translation_get_preference(
+    state: State<'_, AppState>,
+) -> maild_translate::TranslationPreferenceView {
+    state.translation.get_preference()
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub(crate) fn ui_translation_save_preference(
+    state: State<'_, AppState>,
+    update: maild_translate::TranslationPreferenceUpdate,
+) -> Result<maild_translate::TranslationPreferenceView, UiError> {
+    state.translation.save_preference(update)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub(crate) async fn ui_translation_list_providers(
+    state: State<'_, AppState>,
+) -> Result<crate::translation::UiTranslationProvidersResponse, UiError> {
+    state.translation.sync_external_providers_from_daemon().await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub(crate) async fn ui_translation_test_provider(
+    state: State<'_, AppState>,
+    request: crate::translation::UiTestTranslationProviderRequest,
+) -> Result<maild_translate::ProbeResult, UiError> {
+    state.translation.test_provider(request).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub(crate) async fn ui_translation_detect_language(
+    state: State<'_, AppState>,
+    request: crate::translation::UiDetectLanguageRequest,
+) -> Result<crate::translation::UiLanguageDetection, UiError> {
+    if let Some(token) = request.token.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        return state
+            .translation
+            .detect_language_for_document(&state.documents, &state.base, token);
+    }
+    let (Some(account), Some(folder), Some(uid)) = (
+        request.account.as_deref(),
+        request.folder.as_deref(),
+        request.uid.as_deref(),
+    ) else {
+        return Err(UiError::invalid(
+            "message_identity_required",
+            "account、folder、uid 不能为空",
+        ));
+    };
+    let msg = state.bridge.get_message(account, folder, uid).await?;
+    Ok(state
+        .translation
+        .detect_language_for_plain_message(&msg.summary.subject, &msg.body))
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub(crate) async fn ui_translation_translate_html(
+    window: tauri::WebviewWindow,
+    state: State<'_, AppState>,
+    request: crate::translation::UiTranslateHtmlRequest,
+) -> Result<crate::translation::UiHtmlTranslationResult, UiError> {
+    use tauri::Emitter;
+    state
+        .translation
+        .translate_html_document(&state.documents, &state.base, request, |progress| {
+            let _ = window.emit(crate::translation::TRANSLATION_PROGRESS_EVENT, &progress);
+        })
+        .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub(crate) async fn ui_translation_translate_plain(
+    window: tauri::WebviewWindow,
+    state: State<'_, AppState>,
+    request: crate::translation::UiTranslatePlainRequest,
+) -> Result<crate::translation::UiPlainTranslationResult, UiError> {
+    use tauri::Emitter;
+    let msg = state
+        .bridge
+        .get_message(&request.account, &request.folder, &request.uid)
+        .await?;
+    state
+        .translation
+        .translate_plain_text(
+            &msg.summary.subject,
+            &msg.body,
+            request.provider_id.as_deref(),
+            request.target_lang.as_deref(),
+            request.force_refresh,
+            |progress| {
+                let _ = window.emit(crate::translation::TRANSLATION_PROGRESS_EVENT, &progress);
+            },
+        )
+        .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub(crate) async fn ui_translation_cancel(
+    state: State<'_, AppState>,
+    job_id: String,
+) -> Result<bool, UiError> {
+    Ok(state.translation.cancel_job(&job_id).await)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub(crate) fn ui_translation_cache_stats(
+    state: State<'_, AppState>,
+) -> Result<maild_translate::CacheStats, UiError> {
+    state.translation.cache_stats()
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub(crate) async fn ui_translation_clear_cache(
+    state: State<'_, AppState>,
+) -> Result<maild_translate::CacheClearReport, UiError> {
+    state.translation.clear_cache().await
 }
 
 #[cfg(test)]

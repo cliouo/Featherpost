@@ -25,7 +25,9 @@ pub mod endpoint;
 pub mod engine;
 pub mod error;
 pub mod fs_security;
+pub mod html_blocks;
 pub mod openai;
+pub mod plain_text;
 pub mod types;
 
 pub use cache::{
@@ -52,9 +54,17 @@ pub use engine::{
     CHUNKER_AND_PLACEHOLDER_VERSION, PROMPT_VERSION,
 };
 pub use error::{sanitize_http_status, sanitize_reqwest_error, TranslateError};
+pub use html_blocks::{
+    decode_html_entities, escape_html_text_with_br, extract_html_blocks, render_html_translation,
+    ExtractedHtmlBlocks, RenderedHtmlTranslation, TRUSTED_TR_ATTR, TRUSTED_TR_VALUE,
+};
 pub use openai::{
     OpenAiCompatibleProvider, OpenAiHttpLimits, ProxySnapshotOutcome, DEFAULT_CONNECT_TIMEOUT,
     DEFAULT_MAX_RESPONSE_BYTES, DEFAULT_PROBE_DEADLINE, DEFAULT_TOTAL_DEADLINE,
+};
+pub use plain_text::{
+    extract_plain_text, render_plain_text, ExtractedPlainText, PlainTextBlockView,
+    RenderedPlainText,
 };
 pub use types::{
     plan_batches, validate_batch_response, AnchorSlot, BatchLimits, ChunkPlan, ContentKind,

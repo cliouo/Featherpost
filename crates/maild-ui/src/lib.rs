@@ -24,6 +24,7 @@ pub mod settings;
 pub mod settings_packages;
 mod shell_locale;
 pub mod standalone_handoff;
+pub mod translation;
 
 /// Packaging contract (ADR-0039): only the `embedded` form serves its assets from the binary.
 /// A default-form build would load `devUrl` from a local port, so `build-bundle.sh` and
@@ -44,14 +45,28 @@ pub use bridge::{
     INTENT_EVENT, LINK_EVENT, LOCALE_EVENT, PROXY_EVENT, STATE_EVENT,
 };
 use documents::{
-    document_response, navigation_verdict, not_found, part_response, remote_image_response, route,
-    DocumentStore, ProtocolBase, Route, Verdict, SCHEME,
+    document_response_for_query, navigation_verdict, not_found, part_response,
+    remote_image_response, route, DocumentStore, ProtocolBase, Route, Verdict, SCHEME,
 };
+pub use translation::{
+    TranslationManager, TranslationStoragePaths, TRANSLATION_PROGRESS_EVENT,
+    TRANSLATION_PROVIDERS_EVENT,
+};
+
+/// 启动参数（由 `main.rs` 解析并透传真实活动配置目录与缓存命名空间）。
+#[derive(Clone, Debug)]
+pub struct LaunchOptions {
+    /// 启动时是否传入了自定义连接参数（`--config/--url/--socket/--pipe`）；为真时禁用平台离线修复入口。
+    pub custom_connection: bool,
+    /// 真实活动配置父目录与翻译缓存命名空间（绝不静默回退默认 `AppPaths::discover()`）。
+    pub translation_paths: TranslationStoragePaths,
+}
 
 pub struct AppState {
     pub bridge: Arc<Bridge>,
     pub documents: Arc<DocumentStore>,
     pub remote_images: Arc<remote_image::RemoteImageFetcher>,
+    pub translation: Arc<TranslationManager>,
     pub base: ProtocolBase,
     pub files: compose_files::FileSelections,
     pub packages: settings_packages::PackageSelections,
@@ -73,8 +88,28 @@ pub fn run(bridge: Arc<Bridge>) -> Result<(), tauri::Error> {
 
 /// 同 [`run`]，额外记录启动时是否使用了自定义连接参数。
 pub fn run_with_options(bridge: Arc<Bridge>, custom_connection: bool) -> Result<(), tauri::Error> {
+    let translation_paths = TranslationStoragePaths::resolve(None, None, None, None)
+        .map_err(|err| tauri::Error::Io(std::io::Error::other(err)))?;
+    run_with_launch_options(
+        bridge,
+        LaunchOptions {
+            custom_connection,
+            translation_paths,
+        },
+    )
+}
+
+/// 同 [`run`]，接收由 `main.rs` 从产品配置解析得到的真实 [`LaunchOptions`]。
+pub fn run_with_launch_options(
+    bridge: Arc<Bridge>,
+    launch: LaunchOptions,
+) -> Result<(), tauri::Error> {
     let documents = Arc::new(DocumentStore::new());
     let remote_images = Arc::new(remote_image::RemoteImageFetcher::new());
+    let translation = Arc::new(
+        TranslationManager::new(launch.translation_paths, bridge.clone())
+            .map_err(|err| tauri::Error::Io(std::io::Error::other(err.to_string())))?,
+    );
     let base = ProtocolBase::for_platform();
     let for_setup = bridge.clone();
     let for_proxy = bridge.clone();
@@ -82,6 +117,8 @@ pub fn run_with_options(bridge: Arc<Bridge>, custom_connection: bool) -> Result<
     let for_exit = bridge.clone();
     let remote_for_state = remote_images.clone();
     let remote_for_proxy = remote_images.clone();
+    let translation_for_state = translation.clone();
+    let translation_for_proxy = translation.clone();
     let documents_for_window = documents.clone();
     let base_for_window = base.clone();
     let builder = tauri::Builder::default();
@@ -92,6 +129,7 @@ pub fn run_with_options(bridge: Arc<Bridge>, custom_connection: bool) -> Result<
             bridge,
             documents,
             remote_images,
+            translation,
             base,
             files: compose_files::FileSelections::default(),
             packages: settings_packages::PackageSelections::default(),
@@ -99,17 +137,14 @@ pub fn run_with_options(bridge: Arc<Bridge>, custom_connection: bool) -> Result<
             guard_ready: AtomicBool::new(false),
             exiting: AtomicBool::new(false),
             locale: shell_locale::ShellLocale::default(),
-            custom_connection,
+            custom_connection: launch.custom_connection,
         })
         // ADR-0033 决策 4：文档与 part 只经令牌可达。处理器在 tokio 上异步跑——part 要经认证连接
         // 向 daemon 取字节；Phase 3 远程图片经 `RemoteImageFetcher`（走 `maild-proxy`）抓取。
         .register_asynchronous_uri_scheme_protocol(SCHEME, |context, request, responder| {
             let app = context.app_handle().clone();
             let path = request.uri().path().to_string();
-            let dark = request
-                .uri()
-                .query()
-                .is_some_and(|q| q.split('&').any(|pair| pair == "appearance=dark"));
+            let query = request.uri().query().map(str::to_string);
             // 诊断：只记路由形状与令牌前 8 位，不记 URL 全文。
             eprintln!(
                 "[maild-ui] 协议请求 {} {}",
@@ -120,7 +155,7 @@ pub fn run_with_options(bridge: Arc<Bridge>, custom_connection: bool) -> Result<
                 let state = app.state::<AppState>();
                 let response = match route(&path) {
                     Route::Doc(token) => match state.documents.get(&token) {
-                        Some(document) => document_response(&document, dark),
+                        Some(document) => document_response_for_query(&document, query.as_deref()),
                         None => not_found(),
                     },
                     Route::Part(token, part_index) => {
@@ -218,6 +253,16 @@ pub fn run_with_options(bridge: Arc<Bridge>, custom_connection: bool) -> Result<
             commands::ui_discover_provider,
             commands::ui_open_external_url,
             commands::ui_open_native_recovery,
+            commands::ui_translation_get_preference,
+            commands::ui_translation_save_preference,
+            commands::ui_translation_list_providers,
+            commands::ui_translation_test_provider,
+            commands::ui_translation_detect_language,
+            commands::ui_translation_translate_html,
+            commands::ui_translation_translate_plain,
+            commands::ui_translation_cancel,
+            commands::ui_translation_cache_stats,
+            commands::ui_translation_clear_cache,
         ])
         .setup(move |app| {
             // ADR-0045：`LSUIElement` 包以 `Accessory` 起步；窗口可见期间是 `Regular`
@@ -231,8 +276,18 @@ pub fn run_with_options(bridge: Arc<Bridge>, custom_connection: bool) -> Result<
             // 补上 `applicationShouldTerminate:`，统一路由进下面的退出流水线。
             #[cfg(target_os = "macos")]
             macos_window::install_terminate_handler(app.handle().clone());
-            spawn_state_pump(app.handle().clone(), for_setup, remote_for_state);
-            spawn_proxy_pump(app.handle().clone(), for_proxy, remote_for_proxy);
+            spawn_state_pump(
+                app.handle().clone(),
+                for_setup,
+                remote_for_state,
+                translation_for_state,
+            );
+            spawn_proxy_pump(
+                app.handle().clone(),
+                for_proxy,
+                remote_for_proxy,
+                translation_for_proxy,
+            );
             Ok(())
         })
         .on_window_event(move |window, event| {
@@ -500,11 +555,13 @@ fn emit_link(app: &tauri::AppHandle, documents: &DocumentStore, token: &str, ind
     }
 }
 
-/// 连接快照单向推送：每次 `ViewState` 变化投影一次发给 webview；上线那一刻顺带 claim intent 并同步远程图片代理。
+/// 连接快照单向推送：每次 `ViewState` 变化投影一次发给 webview；上线那一刻顺带 claim intent、
+/// 同步远程图片与翻译代理配置，并全量同步外部翻译插件清单。
 fn spawn_state_pump(
     app: tauri::AppHandle,
     bridge: Arc<Bridge>,
     remote_images: Arc<remote_image::RemoteImageFetcher>,
+    translation: Arc<TranslationManager>,
 ) {
     tauri::async_runtime::spawn(async move {
         let mut state = bridge.subscribe();
@@ -550,8 +607,14 @@ fn spawn_state_pump(
             if online && !was_online {
                 let bridge = bridge.clone();
                 let remote_images = remote_images.clone();
+                let translation = translation.clone();
+                let app_handle = app.clone();
                 tauri::async_runtime::spawn(async move {
                     remote_images.refresh_from_bridge(&bridge, 0).await;
+                    translation.refresh_proxy_from_bridge(&bridge, 0).await;
+                    if let Ok(providers) = translation.sync_external_providers_from_daemon().await {
+                        let _ = app_handle.emit(TRANSLATION_PROVIDERS_EVENT, &providers);
+                    }
                 });
             }
             if online {
@@ -570,12 +633,13 @@ fn spawn_state_pump(
     });
 }
 
-/// 转发后台的 `preferences/proxy` 推送事件给 webview（不含任何密码），并热刷新
-/// [`remote_image::RemoteImageFetcher`]（通过本机流式 IPC 读取含密配置并原子替换客户端）。
+/// 转发后台的 `preferences/proxy` 与 `translation/providers` 推送事件给 webview，并热刷新
+/// [`remote_image::RemoteImageFetcher`] 与 [`TranslationManager`]（含滞后/重连后的全量同步）。
 fn spawn_proxy_pump(
     app: tauri::AppHandle,
     bridge: Arc<Bridge>,
     remote_images: Arc<remote_image::RemoteImageFetcher>,
+    translation: Arc<TranslationManager>,
 ) {
     tauri::async_runtime::spawn(async move {
         let mut events = bridge.subscribe_events();
@@ -590,6 +654,16 @@ fn spawn_proxy_pump(
                         eprintln!("[maild-ui] 推送代理偏好事件失败: {error}");
                     }
                     remote_images.refresh_from_bridge(&bridge, generation).await;
+                    translation.refresh_proxy_from_bridge(&bridge, generation).await;
+                }
+                Ok(maild_app::AppEvent::Notification(
+                    maild_client::ServerNotification::TranslationProviders(event),
+                )) => {
+                    if let Some(merged) = translation.apply_external_providers_snapshot(*event) {
+                        if let Err(error) = app.emit(TRANSLATION_PROVIDERS_EVENT, &merged) {
+                            eprintln!("[maild-ui] 推送翻译插件事件失败: {error}");
+                        }
+                    }
                 }
                 Ok(_) => {}
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
@@ -598,6 +672,10 @@ fn spawn_proxy_pump(
                         let _ = app.emit(PROXY_EVENT, &payload);
                     }
                     remote_images.refresh_from_bridge(&bridge, 0).await;
+                    translation.refresh_proxy_from_bridge(&bridge, 0).await;
+                    if let Ok(providers) = translation.sync_external_providers_from_daemon().await {
+                        let _ = app.emit(TRANSLATION_PROVIDERS_EVENT, &providers);
+                    }
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
             }

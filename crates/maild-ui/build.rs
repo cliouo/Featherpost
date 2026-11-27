@@ -73,6 +73,16 @@ fn main() {
             "ui_discover_provider",
             "ui_open_external_url",
             "ui_open_native_recovery",
+            "ui_translation_get_preference",
+            "ui_translation_save_preference",
+            "ui_translation_list_providers",
+            "ui_translation_test_provider",
+            "ui_translation_detect_language",
+            "ui_translation_translate_html",
+            "ui_translation_translate_plain",
+            "ui_translation_cancel",
+            "ui_translation_cache_stats",
+            "ui_translation_clear_cache",
         ]),
     ))
     .expect("tauri-build：tauri.conf.json 或 capabilities 无效");
