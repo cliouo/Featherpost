@@ -240,8 +240,14 @@ describe("Global ⌘K Command Palette", () => {
       "button.palette-trigger",
     )!;
     expect(triggerBtn).not.toBeNull();
-    expect(triggerBtn.getAttribute("title")).toBeTruthy();
+    expect(triggerBtn.getAttribute("title")).toBeNull();
     expect(triggerBtn.getAttribute("aria-label")).toBeTruthy();
+    expect(triggerBtn.getAttribute("aria-keyshortcuts")).toBe("Meta+K Control+K");
+    const paletteTooltipId = triggerBtn.getAttribute("aria-describedby");
+    expect(paletteTooltipId).toBeTruthy();
+    const paletteTooltip = document.getElementById(paletteTooltipId!);
+    expect(paletteTooltip?.getAttribute("role")).toBe("tooltip");
+    expect(paletteTooltip?.querySelector(".studio-tooltip-shortcut")).toBeNull();
 
     // 1. Open via ⌘K from a normal input (mail search), then cancel via Esc -> restores focus to invoker.
     act(() => {

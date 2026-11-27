@@ -463,7 +463,11 @@ describe("SearchFilterPopover, 3-tier scope sync, chip bar, and guarded submit p
     const trigger = getFilterTrigger(app.container);
     expect(trigger).not.toBeNull();
     expect(trigger.getAttribute("data-tauri-drag-region")).toBe("false");
-    expect(trigger.getAttribute("title")).toBeTruthy();
+    expect(trigger.getAttribute("title")).toBeNull();
+    expect(trigger.getAttribute("aria-label")).toBeTruthy();
+    const triggerTooltipId = trigger.getAttribute("aria-labelledby");
+    expect(triggerTooltipId).toBeTruthy();
+    expect(document.getElementById(triggerTooltipId!)?.getAttribute("role")).toBe("tooltip");
 
     // Topbar Choice exposes all 3 tiers: folder, account, all.
     const scopeSelect = app.container.querySelector<HTMLSelectElement>(

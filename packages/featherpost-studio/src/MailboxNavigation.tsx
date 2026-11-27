@@ -34,6 +34,7 @@ import { useStudioActions } from "./studioActions";
 import { matchingFolderNames } from "./navigation";
 import { ShortcutKeys } from "./ShortcutKeys";
 import { STUDIO_SHORTCUT_KEYS } from "./shortcuts";
+import { StudioTooltip } from "./ui";
 
 export interface NavigationHandle {
   focus(): void;
@@ -228,13 +229,19 @@ export function MailboxNavigation({
         onChange={(e) => setFilter(e.target.value)}
       />
       {filter ? (
-        <button
-          title={m.studio_nav_filter_clear()}
-          aria-label={m.studio_nav_filter_clear()}
-          onClick={() => setFilter("")}
+        <StudioTooltip
+          label={m.studio_nav_filter_clear()}
+          roleType="label"
+          side="bottom"
         >
-          ×
-        </button>
+          <button
+            type="button"
+            aria-label={m.studio_nav_filter_clear()}
+            onClick={() => setFilter("")}
+          >
+            ×
+          </button>
+        </StudioTooltip>
       ) : (
         <ShortcutKeys
           shortcut={STUDIO_SHORTCUT_KEYS.focusSidebar}
@@ -645,19 +652,24 @@ function GroupManager({
                 {m.studio_group_rename()}
               </button>
               {g.id !== OTHER_GROUP && (
-                <button
-                  className="danger-text"
-                  title={m.studio_group_delete_hint()}
-                  onClick={() => {
-                    change((previous) => removeGroup(previous, g.id));
-                    if (editing === g.id) {
-                      setEditing(null);
-                      setName("");
-                    }
-                  }}
+                <StudioTooltip
+                  label={m.studio_group_delete_hint()}
+                  roleType="description"
+                  side="top"
                 >
-                  {m.studio_group_delete()}
-                </button>
+                  <button
+                    className="danger-text"
+                    onClick={() => {
+                      change((previous) => removeGroup(previous, g.id));
+                      if (editing === g.id) {
+                        setEditing(null);
+                        setName("");
+                      }
+                    }}
+                  >
+                    {m.studio_group_delete()}
+                  </button>
+                </StudioTooltip>
               )}
             </div>
           ))}

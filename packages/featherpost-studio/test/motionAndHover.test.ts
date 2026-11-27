@@ -93,6 +93,7 @@ describe("shared motion tokens (#25)", () => {
   it("uses @ui-sdk data-attribute transitions and portal-safe Settings variables without legacy dialog-positioner or Radix variables", () => {
     const studio = stylesheets["studio.css"]!;
     const contextmenu = stylesheets["contextmenu.css"]!;
+    const tooltip = stylesheets["tooltip.css"]!;
     const settings = stylesheets["settings/settings.css"]!;
     const forms = stylesheets["settings/forms.css"]!;
 
@@ -110,6 +111,12 @@ describe("shared motion tokens (#25)", () => {
     expect(contextmenu).toContain("[data-open]");
     expect(contextmenu).toContain("[data-starting-style]");
     expect(contextmenu).toContain("[data-ending-style]");
+    expect(tooltip).toContain("--available-width");
+    expect(tooltip).toContain("--transform-origin");
+    expect(tooltip).toContain("[data-starting-style]");
+    expect(tooltip).toContain("[data-ending-style]");
+    expect(tooltip).toContain("[data-instant]");
+    expect(tooltip.replace(/\/\*[\s\S]*?\*\//g, "")).not.toMatch(/overflow\s*:\s*auto/);
     expect(settings).toContain("body[data-studio-settings],\n.studio-settings");
     expect(forms).toContain("body[data-studio-settings] .mail-dialog fieldset");
   });
@@ -138,23 +145,137 @@ describe("shared hover states (#27)", () => {
     expect(studio).toContain(":focus-visible");
   });
 
-  it("provides title tooltips on icon-only buttons across Studio sources", () => {
+  it("requires direct StudioTooltip wrapping on icon-only and menu/popover triggers and forbids native title double-tooltips", () => {
+    /**
+     * Documented exceptions that intentionally retain native `title`:
+     * - `ui/TokenInput.tsx`: high-volume chip items and chip remove buttons
+     * - Truncated text / long-list items (`Workspace.tsx` chip body / row-account,
+     *   `Shell.tsx` folder-link, `MailboxNavigation.tsx` account-heading,
+     *   `Activity.tsx` rows, `compose/module.tsx` draft timestamps, `ReadingPane.tsx` iframe)
+     */
+    const NATIVE_TITLE_ICON_EXCEPTIONS = new Set(["ui/TokenInput.tsx"]);
+
+    const iconClasses = [
+      "icon-button",
+      "folder-disclosure",
+      "message-star",
+      "search-filter-trigger",
+      "search-filter-chip-remove",
+    ];
+    const triggerTags = new Set(["button", "summary", "StudioPopoverClose"]);
     const missing: string[] = [];
-    const iconClasses = ["icon-button", "folder-disclosure", "message-star"];
+    const doubleTitles: string[] = [];
+
+    const getDirectTooltipParent = (
+      jsxNode: ts.JsxElement | ts.JsxSelfClosingElement,
+      file: ts.SourceFile,
+    ): ts.JsxElement | null => {
+      const parent = jsxNode.parent;
+      if (!ts.isJsxElement(parent)) return null;
+      if (parent.openingElement.tagName.getText(file) !== "StudioTooltip") {
+        return null;
+      }
+      // Verify this node is the direct JSX element child of <StudioTooltip> (ignoring whitespace text).
+      const elementChildren = parent.children.filter(
+        (child) =>
+          ts.isJsxElement(child) ||
+          ts.isJsxSelfClosingElement(child) ||
+          ts.isJsxExpression(child),
+      );
+      if (elementChildren.length !== 1 || elementChildren[0] !== jsxNode) {
+        return null;
+      }
+      return parent;
+    };
+
+    const hasAttr = (
+      opening: ts.JsxOpeningLikeElement,
+      file: ts.SourceFile,
+      name: string,
+    ): boolean =>
+      opening.attributes.properties.some(
+        (prop) => ts.isJsxAttribute(prop) && prop.name.getText(file) === name,
+      );
+
+    const attrText = (
+      opening: ts.JsxOpeningLikeElement,
+      file: ts.SourceFile,
+      name: string,
+    ): string => {
+      const attr = opening.attributes.properties.find(
+        (prop): prop is ts.JsxAttribute =>
+          ts.isJsxAttribute(prop) && prop.name.getText(file) === name,
+      );
+      return attr?.initializer?.getText(file) ?? "";
+    };
+
     for (const [filePath, source] of Object.entries(tsxSources)) {
-      const file = ts.createSourceFile(filePath, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+      const file = ts.createSourceFile(
+        filePath,
+        source,
+        ts.ScriptTarget.Latest,
+        true,
+        ts.ScriptKind.TSX,
+      );
+
       const visit = (node: ts.Node) => {
-        if (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) {
-          const tag = node.tagName.getText(file);
-          if (tag === "button" || tag === "summary") {
-            const attrs = node.attributes.properties.filter(ts.isJsxAttribute);
-            const attrText = (name: string) =>
-              attrs.find((a) => a.name.getText(file) === name)?.initializer?.getText(file) ?? "";
-            const cls = attrText("className");
-            const hasTitle = attrs.some((a) => a.name.getText(file) === "title");
-            if (iconClasses.some((c) => cls.includes(c)) && !hasTitle) {
-              const { line } = file.getLineAndCharacterOfPosition(node.getStart(file));
-              missing.push(`${filePath}:${line + 1} (${tag} className=${cls})`);
+        // 1. Statically forbid native `title=` on ANY direct <StudioTooltip> trigger child!
+        if (
+          ts.isJsxElement(node) &&
+          node.openingElement.tagName.getText(file) === "StudioTooltip"
+        ) {
+          for (const child of node.children) {
+            const childOpening = ts.isJsxElement(child)
+              ? child.openingElement
+              : ts.isJsxSelfClosingElement(child)
+                ? child
+                : null;
+            if (childOpening && hasAttr(childOpening, file, "title")) {
+              const { line } = file.getLineAndCharacterOfPosition(
+                childOpening.getStart(file),
+              );
+              doubleTitles.push(
+                `${filePath}:${line + 1} (<${childOpening.tagName.getText(file)}> inside <StudioTooltip> must not also set native title=)`,
+              );
+            }
+          }
+        }
+
+        // 2. Check icon-only buttons, summary, StudioPopoverClose, and Accounts.tsx AccountMore trigger.
+        const jsxElem = ts.isJsxElement(node)
+          ? node
+          : ts.isJsxSelfClosingElement(node)
+            ? node
+            : null;
+        if (jsxElem) {
+          const opening = ts.isJsxElement(jsxElem)
+            ? jsxElem.openingElement
+            : jsxElem;
+          const tag = opening.tagName.getText(file);
+
+          if (triggerTags.has(tag) && !NATIVE_TITLE_ICON_EXCEPTIONS.has(filePath)) {
+            const cls = attrText(opening, file, "className");
+            const isIconControl =
+              tag === "StudioPopoverClose" ||
+              iconClasses.some((c) => cls.includes(c));
+            const isAccountsMoreTrigger =
+              filePath === "settings/Accounts.tsx" &&
+              tag === "button" &&
+              attrText(opening, file, "aria-label") === "{label}";
+
+            if (isIconControl || isAccountsMoreTrigger) {
+              const directTooltip = getDirectTooltipParent(jsxElem, file);
+              const hasLabelProp =
+                directTooltip !== null &&
+                hasAttr(directTooltip.openingElement, file, "label");
+              if (!hasLabelProp) {
+                const { line } = file.getLineAndCharacterOfPosition(
+                  opening.getStart(file),
+                );
+                missing.push(
+                  `${filePath}:${line + 1} (${tag} className=${cls || '""'}) must be directly wrapped in <StudioTooltip label={...}>`,
+                );
+              }
             }
           }
         }
@@ -162,6 +283,8 @@ describe("shared hover states (#27)", () => {
       };
       visit(file);
     }
+
     expect(missing).toEqual([]);
+    expect(doubleTitles).toEqual([]);
   });
 });

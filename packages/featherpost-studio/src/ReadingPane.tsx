@@ -43,6 +43,7 @@ import { useStudioActions } from "./studioActions";
 import { useMailMenu } from "./Workspace";
 import { ShortcutKeys } from "./ShortcutKeys";
 import { STUDIO_SHORTCUT_KEYS } from "./shortcuts";
+import { StudioTooltip } from "./ui";
 
 export function ReaderMoreMenu({
   seen,
@@ -66,14 +67,19 @@ export function ReaderMoreMenu({
       contentClassName="reader-menu-panel"
       align="start"
       trigger={
-        <button
-          type="button"
-          className="icon-button"
-          aria-label={m.studio_reader_more()}
-          title={m.studio_reader_more()}
+        <StudioTooltip
+          label={m.studio_reader_more()}
+          roleType="label"
+          side="bottom"
         >
-          <Icon name="more" />
-        </button>
+          <button
+            type="button"
+            className="icon-button"
+            aria-label={m.studio_reader_more()}
+          >
+            <Icon name="more" />
+          </button>
+        </StudioTooltip>
       }
     >
       <StudioDropdownMenuItem disabled={!canToggleSeen} onSelect={onToggleSeen}>
@@ -130,54 +136,79 @@ export function ReadingPane({
   return (
     <section className="reader-column" aria-label={m.studio_reader_label()}>
       <div className="reader-actions">
-        <button
-          className="icon-button back-button"
-          title={m.studio_reader_back()}
-          aria-label={m.studio_reader_back()}
-          onClick={() => controller.clearSelection()}
+        <StudioTooltip
+          label={m.studio_reader_back()}
+          roleType="label"
+          side="bottom"
         >
-          <Icon name="back" />
-        </button>
-        <button
-          className="text-button"
-          title={m.studio_reader_archive()}
-          aria-label={m.studio_reader_archive()}
-          disabled={!row || !writable}
-          onClick={() => void controller.perform({ action: "archive" })}
+          <button
+            className="icon-button back-button"
+            aria-label={m.studio_reader_back()}
+            onClick={() => controller.clearSelection()}
+          >
+            <Icon name="back" />
+          </button>
+        </StudioTooltip>
+        <StudioTooltip
+          label={m.studio_reader_archive()}
+          roleType="description"
+          side="bottom"
         >
-          <Icon name="archive" />
-          <span>{m.studio_reader_archive()}</span>
-        </button>
-        <button
-          className="icon-button danger-action"
-          title={m.studio_reader_delete()}
-          aria-label={m.studio_reader_delete()}
-          disabled={!row || !writable}
-          onClick={() => controller.requestAction("delete")}
+          <button
+            className="text-button"
+            aria-label={m.studio_reader_archive()}
+            disabled={!row || !writable}
+            onClick={() => void controller.perform({ action: "archive" })}
+          >
+            <Icon name="archive" />
+            <span>{m.studio_reader_archive()}</span>
+          </button>
+        </StudioTooltip>
+        <StudioTooltip
+          label={m.studio_reader_delete()}
+          roleType="label"
+          side="bottom"
         >
-          <Icon name="trash" />
-        </button>
+          <button
+            className="icon-button danger-action"
+            aria-label={m.studio_reader_delete()}
+            disabled={!row || !writable}
+            onClick={() => controller.requestAction("delete")}
+          >
+            <Icon name="trash" />
+          </button>
+        </StudioTooltip>
         <span className="toolbar-divider" />
-        <button
-          className="text-button"
-          title={m.studio_reader_move_title()}
-          aria-label={m.studio_reader_move_title()}
-          disabled={!row || !writable}
-          onClick={() => controller.requestAction("move")}
+        <StudioTooltip
+          label={m.studio_reader_move_title()}
+          roleType="description"
+          side="bottom"
         >
-          <Icon name="folder" />
-          <span>{m.studio_reader_move()}</span>
-        </button>
-        <button
-          className={`icon-button ${row?.flagged ? "starred" : ""}`}
-          title={m.studio_reader_toggle_star()}
-          aria-label={m.studio_reader_toggle_star()}
-          aria-pressed={row?.flagged ?? false}
-          disabled={!row || !writable}
-          onClick={() => void controller.toggleSelected("flagged")}
+          <button
+            className="text-button"
+            aria-label={m.studio_reader_move_title()}
+            disabled={!row || !writable}
+            onClick={() => controller.requestAction("move")}
+          >
+            <Icon name="folder" />
+            <span>{m.studio_reader_move()}</span>
+          </button>
+        </StudioTooltip>
+        <StudioTooltip
+          label={m.studio_reader_toggle_star()}
+          roleType="label"
+          side="bottom"
         >
-          <Icon name="star" />
-        </button>
+          <button
+            className={`icon-button ${row?.flagged ? "starred" : ""}`}
+            aria-label={m.studio_reader_toggle_star()}
+            aria-pressed={row?.flagged ?? false}
+            disabled={!row || !writable}
+            onClick={() => void controller.toggleSelected("flagged")}
+          >
+            <Icon name="star" />
+          </button>
+        </StudioTooltip>
         <ReaderMoreMenu
           key={row ? messageKey(row) : "empty"}
           seen={row?.seen}
@@ -189,21 +220,26 @@ export function ReadingPane({
         />
         <span className="spacer" />
         {dark && row && body.mode === "html" && (
-          <button
-            className="text-button reading-theme"
-            title={
+          <StudioTooltip
+            label={
               originalColors
                 ? m.studio_reader_theme_dark_title()
                 : m.studio_reader_theme_original_title()
             }
-            onClick={() =>
-              setOriginalFor(originalColors ? null : messageKey(row))
-            }
+            roleType="description"
+            side="bottom"
           >
-            {originalColors
-              ? m.studio_reader_theme_dark()
-              : m.studio_reader_theme_original()}
-          </button>
+            <button
+              className="text-button reading-theme"
+              onClick={() =>
+                setOriginalFor(originalColors ? null : messageKey(row))
+              }
+            >
+              {originalColors
+                ? m.studio_reader_theme_dark()
+                : m.studio_reader_theme_original()}
+            </button>
+          </StudioTooltip>
         )}
         <span className="reader-position">
           {index >= 0
@@ -212,28 +248,40 @@ export function ReadingPane({
               ? m.studio_reader_position_thread()
               : ""}
         </span>
-        <button
-          className="icon-button previous-mail"
-          title={m.studio_reader_previous()}
-          aria-label={m.studio_reader_previous()}
-          disabled={!row || index <= 0}
-          onClick={() => controller.step(-1)}
+        <StudioTooltip
+          label={m.studio_reader_previous()}
+          shortcut={STUDIO_SHORTCUT_KEYS.previousMessage}
+          roleType="label"
+          side="bottom"
         >
-          <Icon name="back" />
-        </button>
-        <button
-          className="icon-button next-mail"
-          title={m.studio_reader_next()}
-          aria-label={m.studio_reader_next()}
-          disabled={
-            !row ||
-            (index >= navigationRows.length - 1 &&
-              (remote || !controller.canLoadMore))
-          }
-          onClick={() => controller.step(1)}
+          <button
+            className="icon-button previous-mail"
+            aria-label={m.studio_reader_previous()}
+            disabled={!row || index <= 0}
+            onClick={() => controller.step(-1)}
+          >
+            <Icon name="back" />
+          </button>
+        </StudioTooltip>
+        <StudioTooltip
+          label={m.studio_reader_next()}
+          shortcut={STUDIO_SHORTCUT_KEYS.nextMessage}
+          roleType="label"
+          side="bottom"
         >
-          <Icon name="back" />
-        </button>
+          <button
+            className="icon-button next-mail"
+            aria-label={m.studio_reader_next()}
+            disabled={
+              !row ||
+              (index >= navigationRows.length - 1 &&
+                (remote || !controller.canLoadMore))
+            }
+            onClick={() => controller.step(1)}
+          >
+            <Icon name="back" />
+          </button>
+        </StudioTooltip>
       </div>
       {!row ? (
         <div className="reader-empty">

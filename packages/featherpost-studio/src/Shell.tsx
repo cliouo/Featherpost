@@ -21,12 +21,15 @@ import { ShortcutKeys } from "./ShortcutKeys";
 import { folderMenu, selectionMenu } from "./menus";
 import type { LanguageController } from "./settings/language";
 import { SyncCount } from "./SyncCount";
-import { usePersistentOverlay } from "./ui";
+import {
+  StudioTooltip,
+  StudioTooltipProvider,
+  usePersistentOverlay,
+} from "./ui";
 import {
   STUDIO_SHELL_MODULE_ID,
   STUDIO_SHORTCUT_KEYS,
   formatAriaKeyShortcuts,
-  formatShortcutTooltip,
   isGlobalShortcutBlocked,
   isImeEvent,
   isQuestionMarkShortcut,
@@ -485,6 +488,7 @@ export function Studio({
         })
       }
     >
+    <StudioTooltipProvider>
     <div className={`studio studio-${view}`} data-studio-view={view}>
       <a className="skip-link" href="#workspace">
         {m.studio_shell_skip_to_content()}
@@ -581,23 +585,28 @@ export function Studio({
             onApply={applyFilterDraft}
           />
           {isSearching ? (
-            <button
-              type="button"
-              title={m.studio_search_clear()}
-              aria-label={m.studio_search_clear()}
-              onClick={() => {
-                setFilterFocusHandoff(true);
-                setFiltersOpen(false);
-                void openMailbox(() => {
-                  setSearch("");
-                  if (mailbox.store.getSnapshot().scope.kind === "search") {
-                    mailbox.exitSearch();
-                  }
-                });
-              }}
+            <StudioTooltip
+              label={m.studio_search_clear()}
+              roleType="label"
+              side="bottom"
             >
-              ×
-            </button>
+              <button
+                type="button"
+                aria-label={m.studio_search_clear()}
+                onClick={() => {
+                  setFilterFocusHandoff(true);
+                  setFiltersOpen(false);
+                  void openMailbox(() => {
+                    setSearch("");
+                    if (mailbox.store.getSnapshot().scope.kind === "search") {
+                      mailbox.exitSearch();
+                    }
+                  });
+                }}
+              >
+                ×
+              </button>
+            </StudioTooltip>
           ) : (
             <ShortcutKeys
               shortcut={STUDIO_SHORTCUT_KEYS.focusSearch}
@@ -606,28 +615,31 @@ export function Studio({
           )}
         </form>
         <div className="topbar-actions">
-          <button
-            type="button"
-            className="palette-trigger"
-            title={formatShortcutTooltip(
-              m.studio_palette_open(),
-              STUDIO_SHORTCUT_KEYS.openPalette,
-            )}
-            aria-label={m.studio_palette_open()}
-            aria-keyshortcuts={formatAriaKeyShortcuts(
-              STUDIO_SHORTCUT_KEYS.openPalette,
-            )}
-            onClick={(e) =>
-              paletteOpen ? setPaletteOpen(false) : openPalette(e.currentTarget)
-            }
+          <StudioTooltip
+            label={m.studio_palette_open()}
+            roleType="description"
+            side="bottom"
+            suppress={paletteOpen}
           >
-            <Icon name="search" />
-            <span>{m.studio_palette_open()}</span>
-            <ShortcutKeys
-              shortcut={STUDIO_SHORTCUT_KEYS.openPalette}
-              variant="inline"
-            />
-          </button>
+            <button
+              type="button"
+              className="palette-trigger"
+              aria-label={m.studio_palette_open()}
+              aria-keyshortcuts={formatAriaKeyShortcuts(
+                STUDIO_SHORTCUT_KEYS.openPalette,
+              )}
+              onClick={(e) =>
+                paletteOpen ? setPaletteOpen(false) : openPalette(e.currentTarget)
+              }
+            >
+              <Icon name="search" />
+              <span>{m.studio_palette_open()}</span>
+              <ShortcutKeys
+                shortcut={STUDIO_SHORTCUT_KEYS.openPalette}
+                variant="inline"
+              />
+            </button>
+          </StudioTooltip>
           <div className="view-switch" role="group" aria-label={m.studio_view_switch_label()}>
             <button
               aria-pressed={view === "standard"}
@@ -642,44 +654,57 @@ export function Studio({
               {m.studio_view_switch_unified()}
             </button>
           </div>
-          <button
-            className={`sync-status ${syncing ? "spinning" : ""}`}
-            disabled={!online || mailbox.isSyncPending()}
-            title={m.studio_sync_now()}
-            onClick={() => void mailbox.syncNow()}
+          <StudioTooltip
+            label={m.studio_sync_now()}
+            roleType="description"
+            side="bottom"
           >
-            <Icon name="refresh" />
-            <span>
-              {syncing
-                ? m.studio_sync_status_syncing()
-                : online
-                  ? m.studio_sync_status_online()
-                  : m.studio_sync_status_connecting()}
-            </span>
-          </button>
-          <button
-            className={`icon-button drafts-shortcut ${state.activeViewId === DRAFTS_VIEW ? "active" : ""}`}
-            title={m.studio_drafts_label()}
-            aria-label={
-              drafts.draftTotal
-                ? m.studio_drafts_label_count({ count: drafts.draftTotal })
-                : m.studio_drafts_label()
-            }
-            onClick={() => host.openView(DRAFTS_VIEW)}
+            <button
+              className={`sync-status ${syncing ? "spinning" : ""}`}
+              disabled={!online || mailbox.isSyncPending()}
+              onClick={() => void mailbox.syncNow()}
+            >
+              <Icon name="refresh" />
+              <span>
+                {syncing
+                  ? m.studio_sync_status_syncing()
+                  : online
+                    ? m.studio_sync_status_online()
+                    : m.studio_sync_status_connecting()}
+              </span>
+            </button>
+          </StudioTooltip>
+          <StudioTooltip
+            label={m.studio_drafts_label()}
+            roleType="description"
+            side="bottom"
           >
-            <Icon name="drafts" />
-            {drafts.draftTotal > 0 && <span>{drafts.draftTotal}</span>}
-          </button>
-          <button
-            className="compose-button"
-            onClick={() => void composer.create()}
-            title={formatShortcutTooltip(
-              m.studio_compose(),
-              STUDIO_SHORTCUT_KEYS.composeNew,
-            )}
+            <button
+              className={`icon-button drafts-shortcut ${state.activeViewId === DRAFTS_VIEW ? "active" : ""}`}
+              aria-label={
+                drafts.draftTotal
+                  ? m.studio_drafts_label_count({ count: drafts.draftTotal })
+                  : m.studio_drafts_label()
+              }
+              onClick={() => host.openView(DRAFTS_VIEW)}
+            >
+              <Icon name="drafts" />
+              {drafts.draftTotal > 0 && <span>{drafts.draftTotal}</span>}
+            </button>
+          </StudioTooltip>
+          <StudioTooltip
+            label={m.studio_compose()}
+            shortcut={STUDIO_SHORTCUT_KEYS.composeNew}
+            roleType="description"
+            side="bottom"
           >
-            <span aria-hidden="true">{PLUS}</span> {m.studio_compose()}
-          </button>
+            <button
+              className="compose-button"
+              onClick={() => void composer.create()}
+            >
+              <span aria-hidden="true">{PLUS}</span> {m.studio_compose()}
+            </button>
+          </StudioTooltip>
         </div>
       </header>
       <aside className="studio-sidebar" aria-label={m.studio_sidebar_label()}>
@@ -712,38 +737,50 @@ export function Studio({
             <span aria-hidden="true">{PLUS}</span>{" "}
             {m.studio_account_add()}
           </button>
-          <button
-            ref={shortcutsTriggerRef}
-            type="button"
-            className="icon-button"
-            title={formatShortcutTooltip(
-              m.studio_shortcuts_open(),
-              STUDIO_SHORTCUT_KEYS.openShortcuts,
-            )}
-            aria-label={m.studio_shortcuts_open()}
-            onClick={(e) => openShortcutsHelp(e.currentTarget)}
+          <StudioTooltip
+            label={m.studio_shortcuts_open()}
+            shortcut={STUDIO_SHORTCUT_KEYS.openShortcuts}
+            roleType="label"
+            side="top"
+            suppress={shortcutsOpen}
           >
-            <Icon name="keyboard" />
-          </button>
-          <button
-            className={`icon-button${state.activeViewId === ACTIVITY ? " active" : ""}`}
-            title={m.studio_view_activity()}
-            aria-label={m.studio_view_activity()}
-            onClick={() => host.openView(ACTIVITY)}
+            <button
+              ref={shortcutsTriggerRef}
+              type="button"
+              className="icon-button"
+              aria-label={m.studio_shortcuts_open()}
+              onClick={(e) => openShortcutsHelp(e.currentTarget)}
+            >
+              <Icon name="keyboard" />
+            </button>
+          </StudioTooltip>
+          <StudioTooltip
+            label={m.studio_view_activity()}
+            roleType="label"
+            side="top"
           >
-            <Icon name="activity" />
-          </button>
-          <button
-            className="icon-button"
-            title={formatShortcutTooltip(
-              m.studio_sidebar_settings(),
-              STUDIO_SHORTCUT_KEYS.openSettings,
-            )}
-            aria-label={m.studio_sidebar_settings()}
-            onClick={() => host.openRole("settings")}
+            <button
+              className={`icon-button${state.activeViewId === ACTIVITY ? " active" : ""}`}
+              aria-label={m.studio_view_activity()}
+              onClick={() => host.openView(ACTIVITY)}
+            >
+              <Icon name="activity" />
+            </button>
+          </StudioTooltip>
+          <StudioTooltip
+            label={m.studio_sidebar_settings()}
+            shortcut={STUDIO_SHORTCUT_KEYS.openSettings}
+            roleType="label"
+            side="top"
           >
-            <Icon name="settings" />
-          </button>
+            <button
+              className="icon-button"
+              aria-label={m.studio_sidebar_settings()}
+              onClick={() => host.openRole("settings")}
+            >
+              <Icon name="settings" />
+            </button>
+          </StudioTooltip>
         </footer>
       </aside>
       <main id="workspace" className="studio-workspace">
@@ -792,6 +829,7 @@ export function Studio({
         {state.toast ?? toastText}
       </div>
     </div>
+    </StudioTooltipProvider>
     </ContextMenuHost>
     </StudioActionsContext.Provider>
   );
@@ -880,25 +918,31 @@ function FolderBranches({
               }
             >
               {children.length > 0 ? (
-                <button
-                  className="folder-disclosure"
-                  title={
+                <StudioTooltip
+                  label={
                     expanded
                       ? m.studio_folder_collapse({ folder: label })
                       : m.studio_folder_expand({ folder: label })
                   }
-                  aria-label={
-                    expanded
-                      ? m.studio_folder_collapse({ folder: label })
-                      : m.studio_folder_expand({ folder: label })
-                  }
-                  aria-expanded={expanded}
-                  onClick={() => toggle(folder.name)}
+                  roleType="label"
+                  side="right"
                 >
-                  <span className={expanded ? "chevron" : "chevron collapsed"}>
-                    ⌄
-                  </span>
-                </button>
+                  <button
+                    type="button"
+                    className="folder-disclosure"
+                    aria-label={
+                      expanded
+                        ? m.studio_folder_collapse({ folder: label })
+                        : m.studio_folder_expand({ folder: label })
+                    }
+                    aria-expanded={expanded}
+                    onClick={() => toggle(folder.name)}
+                  >
+                    <span className={expanded ? "chevron" : "chevron collapsed"}>
+                      ⌄
+                    </span>
+                  </button>
+                </StudioTooltip>
               ) : (
                 <span className="folder-disclosure" />
               )}

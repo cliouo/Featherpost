@@ -11,6 +11,7 @@ export const Z_INDEX_TOKENS = {
   dialog: 65,
   skipLink: 100,
   popover: 1000,
+  tooltip: 1900,
   toast: 2000,
 } as const;
 
@@ -95,6 +96,26 @@ export function useFallbackLayer(
 /** Convenience hook for single-surface popovers (Select, Menu, Popover) on Safari 16 fallback. */
 export function useFallbackZIndex(open: boolean): number | undefined {
   return useFallbackLayer(open)?.content;
+}
+
+/**
+ * Isolated Safari 16 (`!supportsTopLayer()`) fallback z-index for tooltips.
+ *
+ * Intentionally does NOT allocate from `activeLayers` / `nextDepth`, so repeated
+ * tooltip hovers while a Dialog stays open can never exhaust the stacking band or
+ * overflow `.toast` (`2000`). Always sits above currently active fallback overlays
+ * and strictly below `Z_INDEX_TOKENS.toast`.
+ */
+export function useFallbackTooltipZIndex(open: boolean): number | undefined {
+  if (!open || supportsTopLayer()) return undefined;
+  const activeTop =
+    activeLayers.size > 0
+      ? Z_INDEX_TOKENS.popover + nextDepth * LAYER_STEP + CONTENT_OFFSET
+      : Z_INDEX_TOKENS.popover;
+  return Math.min(
+    Z_INDEX_TOKENS.toast - 1,
+    Math.max(Z_INDEX_TOKENS.tooltip, activeTop + 1),
+  );
 }
 
 /**

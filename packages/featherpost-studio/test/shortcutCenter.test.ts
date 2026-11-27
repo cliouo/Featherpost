@@ -695,8 +695,13 @@ describe("`?` trigger, keyboard guards, focus restoration, and two-way handoff",
       '.sidebar-footer button[aria-label="键盘快捷键"]',
     )!;
     expect(sidebarBtn).not.toBeNull();
-    expect(sidebarBtn.getAttribute("title")).toContain("?");
+    expect(sidebarBtn.getAttribute("title")).toBeNull();
     expect(sidebarBtn.getAttribute("aria-keyshortcuts")).toBeNull();
+    const shortcutsTooltipId = sidebarBtn.getAttribute("aria-labelledby");
+    expect(shortcutsTooltipId).toBeTruthy();
+    const shortcutsTooltip = document.getElementById(shortcutsTooltipId!);
+    expect(shortcutsTooltip?.getAttribute("role")).toBe("tooltip");
+    expect(shortcutsTooltip?.textContent).toContain("?");
     act(() => sidebarBtn.click());
     await flushPaint();
     expect(getHelpDialog()).not.toBeNull();

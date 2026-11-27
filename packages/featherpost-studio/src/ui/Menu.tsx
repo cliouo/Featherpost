@@ -16,6 +16,7 @@ import {
   type ReactNode,
 } from "react";
 
+import { TooltipTriggerSuppressProvider } from "./Tooltip";
 import { useWindowDismiss } from "./windowDismiss";
 import { useFallbackZIndex } from "./zIndex";
 
@@ -119,7 +120,9 @@ export function StudioDropdownMenu({
       modal={modal}
       container={container ?? undefined}
     >
-      <MenuTrigger render={trigger} />
+      <TooltipTriggerSuppressProvider suppressed={open}>
+        <MenuTrigger render={trigger} />
+      </TooltipTriggerSuppressProvider>
       <MenuContent
         className={
           contentClassName

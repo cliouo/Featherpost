@@ -7,6 +7,7 @@ import { useStore } from "../host/hooks";
 import { clockTime } from "../mailbox/format";
 import { useUiLocale } from "../i18n";
 import { STUDIO_SHORTCUT_KEYS, formatShortcutText } from "../shortcuts";
+import { StudioTooltip } from "../ui";
 import type { ComposeController } from "./controller";
 import { RecipientField } from "./RecipientField";
 const size = (n: number) =>
@@ -522,18 +523,23 @@ export function Editor({
                       })
                     : m.compose_hint_offline()}
             </span>
-            <button
-              type="button"
-              className="icon-button danger-action"
-              aria-label={
-                sent ? m.compose_discard_sent() : m.compose_discard()
-              }
-              title={sent ? m.compose_discard_sent() : m.compose_discard()}
-              disabled={s.busy || sending}
-              onClick={() => controller.confirm("discard")}
+            <StudioTooltip
+              label={sent ? m.compose_discard_sent() : m.compose_discard()}
+              roleType="label"
+              side="top"
             >
-              <Icon name="trash" />
-            </button>
+              <button
+                type="button"
+                className="icon-button danger-action"
+                aria-label={
+                  sent ? m.compose_discard_sent() : m.compose_discard()
+                }
+                disabled={s.busy || sending}
+                onClick={() => controller.confirm("discard")}
+              >
+                <Icon name="trash" />
+              </button>
+            </StudioTooltip>
           </div>
         </>
       )}

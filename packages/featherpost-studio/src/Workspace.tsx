@@ -29,11 +29,10 @@ import { ACTIVITY } from "./views";
 import { useContextMenu } from "./ContextMenu";
 import { messageMenu, type MailMenuDeps } from "./menus";
 import { useStudioActions } from "./studioActions";
-import { Checkbox } from "./ui";
+import { Checkbox, StudioTooltip } from "./ui";
 import { ShortcutKeys } from "./ShortcutKeys";
 import {
   STUDIO_SHORTCUT_KEYS,
-  formatShortcutTooltip,
   isGlobalShortcutBlocked,
   isImeEvent,
   isShortcutBlockedTarget,
@@ -223,9 +222,15 @@ export function Workspace({
                   </button>
                 </div>
               )}
-              <span className="list-order" title={m.studio_list_order_title()}>
-                {m.studio_list_order()}
-              </span>
+              <StudioTooltip
+                label={m.studio_list_order_title()}
+                roleType="description"
+                side="bottom"
+              >
+                <span className="list-order">
+                  {m.studio_list_order()}
+                </span>
+              </StudioTooltip>
             </div>
             {s.scope.kind === "search" && chips.length > 0 && (
               <div
@@ -246,27 +251,32 @@ export function Workspace({
                     >
                       <span>{chip.label}</span>
                     </button>
-                    <button
-                      type="button"
-                      className="search-filter-chip-remove"
-                      title={m.studio_search_chip_remove({
+                    <StudioTooltip
+                      label={m.studio_search_chip_remove({
                         label: chip.label,
                       })}
-                      aria-label={m.studio_search_chip_remove({
-                        label: chip.label,
-                      })}
-                      onClick={() => {
-                        if (s.scope.kind !== "search") return;
-                        const next = removeFilterChip(
-                          s.scope.query,
-                          s.scope.meta,
-                          chip.id,
-                        );
-                        applyNextFilterQuery(next.query, next.meta);
-                      }}
+                      roleType="label"
+                      side="bottom"
                     >
-                      ×
-                    </button>
+                      <button
+                        type="button"
+                        className="search-filter-chip-remove"
+                        aria-label={m.studio_search_chip_remove({
+                          label: chip.label,
+                        })}
+                        onClick={() => {
+                          if (s.scope.kind !== "search") return;
+                          const next = removeFilterChip(
+                            s.scope.query,
+                            s.scope.meta,
+                            chip.id,
+                          );
+                          applyNextFilterQuery(next.query, next.meta);
+                        }}
+                      >
+                        ×
+                      </button>
+                    </StudioTooltip>
                   </span>
                 ))}
                 <button
@@ -457,22 +467,24 @@ export function Workspace({
             <span className="list-footer-shortcuts">
               <span>{m.studio_list_keyboard_hint()}</span>
               {actions.openShortcuts && (
-                <button
-                  type="button"
-                  className="list-footer-help"
-                  title={formatShortcutTooltip(
-                    m.studio_shortcuts_open(),
-                    STUDIO_SHORTCUT_KEYS.openShortcuts,
-                  )}
-                  aria-label={m.studio_shortcuts_open()}
-                  onClick={() => actions.openShortcuts?.()}
+                <StudioTooltip
+                  label={m.studio_shortcuts_open()}
+                  roleType="description"
+                  side="top"
                 >
-                  <ShortcutKeys
-                    shortcut={STUDIO_SHORTCUT_KEYS.openShortcuts}
-                    variant="inline"
-                  />
-                  <span>{m.studio_list_shortcuts_button()}</span>
-                </button>
+                  <button
+                    type="button"
+                    className="list-footer-help"
+                    aria-label={m.studio_shortcuts_open()}
+                    onClick={() => actions.openShortcuts?.()}
+                  >
+                    <ShortcutKeys
+                      shortcut={STUDIO_SHORTCUT_KEYS.openShortcuts}
+                      variant="inline"
+                    />
+                    <span>{m.studio_list_shortcuts_button()}</span>
+                  </button>
+                </StudioTooltip>
               )}
             </span>
           </footer>

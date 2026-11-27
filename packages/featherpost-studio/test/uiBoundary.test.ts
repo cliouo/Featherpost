@@ -105,6 +105,14 @@ describe("UI SDK architectural boundary", () => {
           violations.push(`${rel}:${line} imports ${specifier} outside src/ui/TokenInput.tsx`);
           continue;
         }
+        if (
+          (specifier.includes("@ui-sdk/react/tooltip") ||
+            specifier.includes("@ui-sdk/core/tooltip")) &&
+          rel !== "ui/Tooltip.tsx"
+        ) {
+          violations.push(`${rel}:${line} imports ${specifier} outside src/ui/Tooltip.tsx`);
+          continue;
+        }
         if (specifier.includes("@radix-ui/")) {
           violations.push(`${rel}:${line} still imports retired ${specifier}`);
           continue;

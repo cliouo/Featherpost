@@ -21,6 +21,7 @@ import {
   type ReactNode,
 } from "react";
 
+import { TooltipTriggerSuppressProvider } from "./Tooltip";
 import { useWindowDismiss } from "./windowDismiss";
 import { useFallbackZIndex } from "./zIndex";
 
@@ -157,7 +158,9 @@ export function StudioPopover({
       modal={modal}
       container={container ?? undefined}
     >
-      <PopoverTrigger render={trigger} data-tauri-drag-region="false" />
+      <TooltipTriggerSuppressProvider suppressed={open}>
+        <PopoverTrigger render={trigger} data-tauri-drag-region="false" />
+      </TooltipTriggerSuppressProvider>
       <PopoverContent
         className={
           contentClassName
