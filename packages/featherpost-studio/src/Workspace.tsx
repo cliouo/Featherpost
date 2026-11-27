@@ -30,15 +30,16 @@ import { useContextMenu } from "./ContextMenu";
 import { messageMenu, type MailMenuDeps } from "./menus";
 import { useStudioActions } from "./studioActions";
 import { Checkbox } from "./ui";
+import { ShortcutKeys } from "./ShortcutKeys";
+import {
+  STUDIO_SHORTCUT_KEYS,
+  formatShortcutTooltip,
+  isGlobalShortcutBlocked,
+  isImeEvent,
+  isShortcutBlockedTarget,
+} from "./shortcuts";
 
-const SHORTCUT_BLOCKED_SELECTOR =
-  'input,textarea,select,summary,[contenteditable="true"],[data-shortcuts-off],[data-chip-input],[role="checkbox"],[role="switch"],[role="combobox"],[role="listbox"],[role="option"],[role="menu"],[role="menuitem"]';
-
-export function isShortcutBlockedTarget(
-  target: { closest?(selector: string): unknown } | null | undefined,
-): boolean {
-  return Boolean(target && typeof target.closest === "function" && target.closest(SHORTCUT_BLOCKED_SELECTOR));
-}
+export { isShortcutBlockedTarget } from "./shortcuts";
 
 /** Menu actions shared by list rows and the reading pane. */
 export function useMailMenu(
@@ -130,13 +131,13 @@ export function Workspace({
     };
     const key = (e: KeyboardEvent) => {
       if (
-        e.defaultPrevented ||
+        isImeEvent(e) ||
+        isGlobalShortcutBlocked(e) ||
         e.metaKey ||
         e.ctrlKey ||
         e.altKey ||
-        e.isComposing ||
-        document.querySelector('dialog[open], [aria-modal="true"]') ||
-        (e.target instanceof HTMLElement && isShortcutBlockedTarget(e.target))
+        isShortcutBlockedTarget(e.target) ||
+        isShortcutBlockedTarget(document.activeElement)
       )
         return;
       if (e.key === "ArrowDown" || e.key === "j") {
@@ -453,7 +454,27 @@ export function Workspace({
               {s.loadingRows ? m.studio_list_updating() : total(s.total)}
               {unread ? ` · ${m.studio_list_footer_unread()}` : ""}
             </span>
-            <span>{m.studio_list_keyboard_hint()}</span>
+            <span className="list-footer-shortcuts">
+              <span>{m.studio_list_keyboard_hint()}</span>
+              {actions.openShortcuts && (
+                <button
+                  type="button"
+                  className="list-footer-help"
+                  title={formatShortcutTooltip(
+                    m.studio_shortcuts_open(),
+                    STUDIO_SHORTCUT_KEYS.openShortcuts,
+                  )}
+                  aria-label={m.studio_shortcuts_open()}
+                  onClick={() => actions.openShortcuts?.()}
+                >
+                  <ShortcutKeys
+                    shortcut={STUDIO_SHORTCUT_KEYS.openShortcuts}
+                    variant="inline"
+                  />
+                  <span>{m.studio_list_shortcuts_button()}</span>
+                </button>
+              )}
+            </span>
           </footer>
         </section>
         {s.snapshot.phase === "online" && !s.snapshot.accounts.length ? (

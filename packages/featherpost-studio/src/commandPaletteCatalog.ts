@@ -27,6 +27,7 @@ import {
   type LanguageController,
 } from "./settings/language";
 import { SETTINGS_VIEW } from "./settings/module";
+import { STUDIO_SHORTCUTS_COMMAND_ID, STUDIO_SHORTCUT_KEYS } from "./shortcuts";
 import { MAIL } from "./views";
 
 type NoArgMessage = (
@@ -96,6 +97,7 @@ const ACTION_COMMAND_IDS = new Set([
   "maild.mailbox.filter-all",
   "maild.mailbox.filter-unread",
   "maild.settings.add-account",
+  STUDIO_SHORTCUTS_COMMAND_ID,
 ]);
 
 const NAVIGATION_COMMAND_IDS = new Set([
@@ -114,6 +116,7 @@ const FOCUS_HANDOFF_COMMAND_IDS = new Set([
   "maild.mailbox.move",
   "maild.mailbox.delete",
   "maild.settings.add-account",
+  STUDIO_SHORTCUTS_COMMAND_ID,
 ]);
 
 const LEAVE_GUARD_COMMAND_IDS = new Set([
@@ -387,7 +390,7 @@ export function buildCommandPaletteCatalog(
       m.studio_palette_action_search_mail,
       m.studio_palette_action_search_mail_keywords,
     ),
-    shortcut: "mod+shift+f",
+    shortcut: STUDIO_SHORTCUT_KEYS.focusSearch,
     icon: "search",
     focusHandoff: true,
     onSelect: focusSearch,
@@ -414,7 +417,7 @@ export function buildCommandPaletteCatalog(
       m.studio_palette_action_focus_sidebar,
       m.studio_palette_action_focus_sidebar_keywords,
     ),
-    shortcut: "mod+l",
+    shortcut: STUDIO_SHORTCUT_KEYS.focusSidebar,
     icon: "folder",
     focusHandoff: true,
     onSelect: focusSidebarFilter,

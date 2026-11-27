@@ -32,6 +32,8 @@ import { accountMenu, groupMenu } from "./menus";
 import { SyncCount } from "./SyncCount";
 import { useStudioActions } from "./studioActions";
 import { matchingFolderNames } from "./navigation";
+import { ShortcutKeys } from "./ShortcutKeys";
+import { STUDIO_SHORTCUT_KEYS } from "./shortcuts";
 
 export interface NavigationHandle {
   focus(): void;
@@ -234,7 +236,10 @@ export function MailboxNavigation({
           ×
         </button>
       ) : (
-        <kbd>⌘ L</kbd>
+        <ShortcutKeys
+          shortcut={STUDIO_SHORTCUT_KEYS.focusSidebar}
+          variant="inline"
+        />
       )}
     </label>
   );

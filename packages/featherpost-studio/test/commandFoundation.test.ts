@@ -10,6 +10,11 @@ import { ACTIVITY, MAIL, studioMailbox } from "../src/mailbox";
 import { SettingsController } from "../src/settings/controller";
 import { SETTINGS_VIEW, settingsModule } from "../src/settings/module";
 import { Studio } from "../src/Shell";
+import {
+  STUDIO_SHORTCUTS_COMMAND_ID,
+  STUDIO_SHORTCUT_KEYS,
+  studioShellModule,
+} from "../src/shortcuts";
 import { FakeBridge, flush, folder, message, online, summary } from "./fakeBridge";
 import { account } from "./fakeSettings";
 
@@ -61,8 +66,9 @@ function assembleStudio(accounts = online.accounts) {
     mailbox.bundle,
     composeModule(host, composer),
     settingsModule(host, settings),
+    studioShellModule(() => {}),
   ];
-  bundles.forEach((bundle) => host.registerBuiltin(bundle));
+  const handles = bundles.map((bundle) => host.registerBuiltin(bundle));
   host.finishAssembly();
   host.state.patch({
     snapshot: { ...online, accounts },
@@ -75,6 +81,7 @@ function assembleStudio(accounts = online.accounts) {
     mailbox: mailbox.controller,
     setup: mailbox.setup,
     dispose: () => {
+      handles.at(-1)?.dispose();
       bundles.forEach((bundle) => bundle.dispose?.());
       host.stop();
     },
@@ -329,6 +336,7 @@ describe("PR 1：内置命令元数据、活动邮箱作用域与目标重查", 
         "maild.mailbox.toggle-thread",
         "maild.settings.add-account",
         "maild.settings.open",
+        STUDIO_SHORTCUTS_COMMAND_ID,
       ]);
 
       for (const id of paletteCommands) {
@@ -346,8 +354,19 @@ describe("PR 1：内置命令元数据、活动邮箱作用域与目标重查", 
         ).toBe(true);
       }
 
-      expect(app.host.registry.findCommand("maild.compose.new")?.shortcut).toBe("mod+n");
-      expect(app.host.registry.findCommand("maild.settings.open")?.shortcut).toBe("mod+,");
+      expect(app.host.registry.findCommand("maild.compose.new")?.shortcut).toBe(
+        STUDIO_SHORTCUT_KEYS.composeNew,
+      );
+      expect(app.host.registry.findCommand("maild.settings.open")?.shortcut).toBe(
+        STUDIO_SHORTCUT_KEYS.openSettings,
+      );
+      expect(app.host.registry.findCommand(STUDIO_SHORTCUTS_COMMAND_ID)?.shortcut).toBe(
+        STUDIO_SHORTCUT_KEYS.openShortcuts,
+      );
+      expect(app.host.registry.findCommand(STUDIO_SHORTCUTS_COMMAND_ID)?.risk).toBe("read");
+      expect(app.host.registry.findCommand(STUDIO_SHORTCUTS_COMMAND_ID)?.icon).toBe(
+        "keyboard",
+      );
       expect(app.host.registry.findCommand("maild.mailbox.delete")?.risk).toBe("destructive");
       expect(app.host.registry.findCommand("maild.settings.add-account")?.risk).toBe("stage");
     } finally {

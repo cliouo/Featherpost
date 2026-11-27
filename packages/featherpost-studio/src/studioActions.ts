@@ -13,6 +13,8 @@ export interface StudioActions {
   openSearchFilters?(): void;
   /** Updates or clears structured search filters through the single guarded submit path. */
   updateSearchFilters?(query: MailboxQuery, meta?: SearchFilterMeta): void;
+  /** Opens the read-only keyboard shortcuts cheat sheet dialog without triggering view navigation. */
+  openShortcuts?(): void;
   copy(text: string, what: string): void;
 }
 

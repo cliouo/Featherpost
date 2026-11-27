@@ -9,6 +9,7 @@ import {
 } from "./mailbox/controller";
 import { addressOnly, displayName } from "./mailbox/format";
 import { folderIcon, folderNavigationLabels } from "./navigation";
+import { STUDIO_SHORTCUT_KEYS, formatShortcutText } from "./shortcuts";
 
 /**
  * Studio context menus are plain data: each surface builds entries from the
@@ -380,7 +381,7 @@ export function selectionMenu(
   const query = text.replace(/\s+/g, " ").trim();
   if (!query) return [];
   return tidy([
-    { kind: "item", label: m.studio_menu_copy(), icon: "clip", hint: "⌘ C", run: () => deps.copy(text, m.studio_menu_what_selection()) },
+    { kind: "item", label: m.studio_menu_copy(), icon: "clip", hint: formatShortcutText(STUDIO_SHORTCUT_KEYS.copySelection), run: () => deps.copy(text, m.studio_menu_what_selection()) },
     !!deps.search && query.length <= 200 && {
       kind: "item",
       label: m.studio_menu_search_mail({ query: quoted(query) }),

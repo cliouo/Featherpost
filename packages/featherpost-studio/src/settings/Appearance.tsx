@@ -1,9 +1,12 @@
 import { m } from "@featherpost/i18n/messages";
 import { useUiLocale } from "@featherpost/i18n/react";
 import { useEffect } from "react";
+import { Icon } from "../app/Icon";
 import type { Host } from "../host/host";
 import { useStore } from "../host/hooks";
 import type { Preferences } from "../preferences";
+import { STUDIO_SHORTCUTS_COMMAND_ID } from "../shortcuts";
+import { useStudioActions } from "../studioActions";
 import { Choice } from "./Choice";
 import {
   LANGUAGE_OPTIONS,
@@ -72,9 +75,17 @@ function Language({ host, language }: { host: Host; language: LanguageController
 
 export function Appearance({ host, language }: { host: Host; language?: LanguageController }) {
   useUiLocale();
+  const actions = useStudioActions();
   const { preferences } = useStore(host.state);
   const update = (patch: Partial<Preferences>) =>
     host.setPreferences({ ...preferences, ...patch });
+  const openShortcuts = () => {
+    if (actions.openShortcuts) {
+      actions.openShortcuts();
+      return;
+    }
+    host.execute(STUDIO_SHORTCUTS_COMMAND_ID);
+  };
   return (
     <section className="studio-appearance">
       <div className="studio-appearance-label">
@@ -119,6 +130,23 @@ export function Appearance({ host, language }: { host: Host; language?: Language
         ))}
       </div>
       {language && <Language host={host} language={language} />}
+      <div className="studio-appearance-label shortcuts-label">
+        <h3 id="studio-shortcuts-label">
+          {m.studio_appearance_shortcuts_heading()}
+        </h3>
+        <span>{m.studio_appearance_shortcuts_hint()}</span>
+      </div>
+      <div className="studio-appearance-shortcuts">
+        <button
+          type="button"
+          className="secondary"
+          aria-describedby="studio-shortcuts-label"
+          onClick={openShortcuts}
+        >
+          <Icon name="keyboard" />
+          <span>{m.studio_appearance_shortcuts_button()}</span>
+        </button>
+      </div>
       <p className="studio-appearance-note">✓ {m.studio_appearance_persist_note()}</p>
     </section>
   );

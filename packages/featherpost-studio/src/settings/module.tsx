@@ -24,6 +24,7 @@ import { Appearance } from "./Appearance";
 import { LanguageController } from "./language";
 import { Icon } from "../app/Icon";
 import { BRAND } from "../brand";
+import { STUDIO_SHORTCUT_KEYS } from "../shortcuts";
 import { Switch } from "../ui";
 
 export const SETTINGS_VIEW = "maild.settings.page";
@@ -428,7 +429,7 @@ export function settingsModule(
             m.settings_command_open_keywords,
           );
         },
-        shortcut: "mod+,",
+        shortcut: STUDIO_SHORTCUT_KEYS.openSettings,
         risk: "read",
         icon: "settings",
         locations: ["navigation", "palette"],

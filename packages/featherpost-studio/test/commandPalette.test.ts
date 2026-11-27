@@ -298,7 +298,27 @@ describe("Global ⌘K Command Palette", () => {
     expect(searchInput.closest("[inert]")).toBeNull();
     expect(document.activeElement).toBe(searchInput);
 
-    // 5. Open modal blocks ⌘K.
+    // 5. Built-in maild.studio.shortcuts appears in Actions group with `?` shortcut and focusHandoff.
+    const catalog = buildCommandPaletteCatalog({
+      host: app.host,
+      mailbox: app.mailbox,
+      view: "standard",
+      language: app.language,
+      focusSearch: () => {},
+      focusSidebarFilter: () => {},
+      changeView: () => {},
+      openMailbox: () => {},
+      openSettingsSection: () => {},
+    });
+    const actionsGroup = catalog.groups.find((group) => group.id === "actions");
+    const shortcutsEntry = actionsGroup?.items.find(
+      (item) => item.id === "maild.studio.shortcuts",
+    );
+    expect(shortcutsEntry).toBeDefined();
+    expect(shortcutsEntry?.shortcut).toBe("?");
+    expect(shortcutsEntry?.focusHandoff).toBe(true);
+
+    // 6. Open modal blocks ⌘K.
     const blocker = document.createElement("div");
     blocker.setAttribute("aria-modal", "true");
     document.body.appendChild(blocker);

@@ -6,6 +6,7 @@ import { Icon } from "../app/Icon";
 import { useStore } from "../host/hooks";
 import { clockTime } from "../mailbox/format";
 import { useUiLocale } from "../i18n";
+import { STUDIO_SHORTCUT_KEYS, formatShortcutText } from "../shortcuts";
 import type { ComposeController } from "./controller";
 import { RecipientField } from "./RecipientField";
 const size = (n: number) =>
@@ -514,7 +515,11 @@ export function Editor({
                 : sent
                   ? ""
                   : s.online
-                    ? m.compose_hint_online()
+                    ? m.compose_hint_online({
+                        shortcut: formatShortcutText(
+                          STUDIO_SHORTCUT_KEYS.sendMessage,
+                        ),
+                      })
                     : m.compose_hint_offline()}
             </span>
             <button

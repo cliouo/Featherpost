@@ -282,6 +282,20 @@ describe("Phase 0 shortcut gating and dead-code cleanup", () => {
     });
     expect(openRoleSpy).not.toHaveBeenCalled();
 
+    // Repeated Cmd+, is ignored.
+    act(() => {
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: ",",
+          metaKey: true,
+          repeat: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+    expect(openRoleSpy).not.toHaveBeenCalled();
+
     // Unblocked Cmd+, opens settings.
     act(() => {
       window.dispatchEvent(
@@ -294,6 +308,93 @@ describe("Phase 0 shortcut gating and dead-code cleanup", () => {
       );
     });
     expect(openRoleSpy).toHaveBeenCalledWith("settings");
+  });
+
+  it("blocks Workspace j/k navigation during IME keyCode 229, bare contenteditable, and visible data-shortcuts-off while preserving intentional key-repeat", async () => {
+    const bridge = new FakeBridge();
+    const host = new Host(bridge);
+    const controller = new MailboxController(bridge);
+    const documents = new DocumentController(bridge);
+    const composer = new ComposeController(new FakeCompose(), () => {}, () => {});
+    cleanups.push(() => {
+      composer.stop();
+      documents.stop();
+      controller.stop();
+      host.stop();
+    });
+
+    controller.acceptSnapshot(online);
+    for (const req of bridge.folderRequests) {
+      req.d.resolve([folder("INBOX", "inbox")]);
+    }
+    const row1 = summary("INBOX", "1", "First");
+    const row2 = summary("INBOX", "2", "Second");
+    const row3 = summary("INBOX", "3", "Third");
+    bridge.mailbox.queries[0]?.d.resolve({ messages: [row1, row2, row3], total: 3 });
+    await Promise.resolve();
+    controller.selectMessage(row1);
+
+    mount(
+      h(Workspace, {
+        host,
+        controller,
+        documents,
+        composer,
+        setup: () => {},
+      }),
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // IME keyCode 229 blocks j.
+    const imeEvent = new KeyboardEvent("keydown", {
+      key: "j",
+      bubbles: true,
+      cancelable: true,
+    });
+    Object.defineProperty(imeEvent, "keyCode", { value: 229 });
+    act(() => {
+      window.dispatchEvent(imeEvent);
+    });
+    expect(controller.store.getSnapshot().selected?.uid).toBe("1");
+
+    // Visible [data-shortcuts-off] blocks j.
+    const gate = document.createElement("div");
+    gate.setAttribute("data-shortcuts-off", "");
+    document.body.appendChild(gate);
+    act(() => {
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "j", bubbles: true, cancelable: true }),
+      );
+    });
+    expect(controller.store.getSnapshot().selected?.uid).toBe("1");
+    gate.remove();
+
+    // Bare contenteditable blocks j.
+    const editable = document.createElement("div");
+    editable.setAttribute("contenteditable", "");
+    document.body.appendChild(editable);
+    act(() => {
+      editable.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "j", bubbles: true, cancelable: true }),
+      );
+    });
+    expect(controller.store.getSnapshot().selected?.uid).toBe("1");
+    editable.remove();
+
+    // Intentional key-repeat for j still steps through rows.
+    act(() => {
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "j",
+          repeat: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+    expect(controller.store.getSnapshot().selected?.uid).toBe("2");
   });
 
   it("leaves no dead closest('dialog') checks in Studio sources", () => {

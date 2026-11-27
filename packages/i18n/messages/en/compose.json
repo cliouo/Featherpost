@@ -88,7 +88,7 @@
   "compose_field_to": "To",
   "compose_field_to_placeholder": "Email addresses, separated by commas",
   "compose_hint_offline": "Background service not connected; your input stays in this window",
-  "compose_hint_online": "⌘ Enter to send · plain text",
+  "compose_hint_online": "{shortcut} to send · plain text",
   "compose_html_convert": "Convert to plain text and edit",
   "compose_html_note": "This draft has HTML formatting. The editor supports plain text only; converting removes the draft's HTML version.",
   "compose_inline_collapse": "Collapse",
