@@ -289,6 +289,8 @@ where
     // M4-05（ADR-0021）：provider 注册表与具体插件装配解耦——external 未启用时
     // 委托调用按 -32018 快速失败，而不是服务缺失的内部错误。
     ctx.provide(crate::provider::ProviderRegistry::new());
+    // ADR-0050：外部翻译 provider 注册表同样经 Cordis ctx.provide 挂载，与引擎完全解耦。
+    ctx.provide(crate::translation_provider::TranslationProviderRegistry::new());
     let mut assembly = assemble_with_paths_from(
         &ctx,
         &toml_text,

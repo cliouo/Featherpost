@@ -13,6 +13,7 @@ members = [
     "crates/maild-menu",
     "crates/maild-ui",
     "plugins/nodeseek-email",
+    "plugins/example-translator",
 ]
 resolver = "2"
 

@@ -124,6 +124,9 @@ enum ExternalCapability {
     NotificationsRead,
     /// M4-05（ADR-0021）：可注册为 transport provider 并接收反向调用。
     TransportProvider,
+    /// ADR-0050：可注册为外部翻译 provider 并接收 `translation/translate`、`translation/probe`
+    /// 与 `translation/cancel` 反向调用。
+    TranslationProvider,
     /// M4.5-G01（ADR-0030 决策 5）：信箱状态写回与离线队列裁决。自动归档/打标的规则插件
     /// 需要它，而作为**独立声明**开放，正是 ADR-0027 决策 9 当初要的——不要静默，要显式。
     ///
@@ -148,6 +151,7 @@ impl ExternalCapability {
             Self::FrontendOpen => "frontend_open",
             Self::NotificationsRead => "notifications_read",
             Self::TransportProvider => "transport_provider",
+            Self::TranslationProvider => "translation_provider",
             Self::MailboxWrite => "mailbox_write",
             Self::DraftsRead => "drafts_read",
             Self::DraftsWrite => "drafts_write",
@@ -214,6 +218,28 @@ pub(crate) struct RunningUi {
     containment: crate::containment::ChildContainment,
 }
 
+/// 已安装且声明 `translation_provider` 能力的外部包快照（供 `TranslationProviderRegistry` 合并）。
+#[derive(Clone, Debug)]
+pub(crate) struct InstalledTranslationPackage {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) description: Option<String>,
+    pub(crate) l10n: maild_client::PackageL10n,
+    pub(crate) version: String,
+    pub(crate) lifecycle: String,
+    pub(crate) enabled: bool,
+    pub(crate) state: String,
+    pub(crate) has_ui: bool,
+}
+
+impl ExternalRecord {
+    fn has_translation_provider(&self) -> bool {
+        self.capabilities
+            .iter()
+            .any(|cap| cap == "translation_provider")
+    }
+}
+
 /// 只读生命周期目录 + 动态监督控制。内部可变：refresh 差异化启停、
 /// enable/disable 即时生效（ADR-0019）。
 pub struct ExternalPluginManager {
@@ -233,6 +259,9 @@ struct ManagerCore {
     seam: Arc<IdentitySeam>,
     state_path: PathBuf,
     state: std::sync::Arc<crate::plugin_state::PluginState>,
+    /// 宿主 Context：用于在生命周期变更（disable/remove/upgrade/rollback）时撤销
+    /// `TranslationProviderRegistry` 活跃代次并广播 `translation/providers`。
+    ctx: Option<Context>,
 }
 
 /// refresh 的差异化结果（ADR-0019 §4）。
@@ -320,6 +349,7 @@ impl ExternalPluginManager {
                 seam,
                 state,
                 state_path,
+                ctx: None,
             }),
         }
     }
@@ -347,8 +377,12 @@ impl ExternalPluginManager {
         let mut report = RefreshReport::default();
         let mut detached: Vec<RunningChild> = Vec::new();
         let mut detached_ui = Vec::new();
+        let mut to_revoke: Vec<(String, &'static str)> = Vec::new();
+        let mut translation_changed = false;
+        let ctx_clone: Option<Context>;
         {
             let mut core = self.core.lock().unwrap();
+            ctx_clone = core.ctx.clone();
             if !core.seam.is_ready() || !core.state.is_ready() {
                 // 停摆姿态下不做任何变更（与启动时一致：宁可不动也不无身份运行）。
                 return Ok((report, detached, detached_ui));
@@ -371,7 +405,7 @@ impl ExternalPluginManager {
             let ids: Vec<&str> = records.keys().map(String::as_str).collect();
             let _ = core.seam.reconcile(PluginKind::External, &ids);
 
-            // 消失的 id：停止并移除观测。
+            // 消失的 id：停止并移除观测；若是翻译插件则撤销活跃代次。
             let gone: Vec<String> = core
                 .records
                 .keys()
@@ -379,6 +413,14 @@ impl ExternalPluginManager {
                 .cloned()
                 .collect();
             for id in &gone {
+                if core
+                    .records
+                    .get(id)
+                    .is_some_and(ExternalRecord::has_translation_provider)
+                {
+                    translation_changed = true;
+                }
+                to_revoke.push((id.clone(), "插件已移除"));
                 core.enabled.remove(id);
                 core.states.lock().unwrap().remove(id);
                 report.removed.push(id.clone());
@@ -391,7 +433,7 @@ impl ExternalPluginManager {
                 }
             }
 
-            // 版本变化：停止旧 provider（如启用）和旧管理 UI；随后按启用态重启 provider。
+            // 版本变化（升级/回滚，覆盖 supervised 与 independent）：停止旧进程并撤销活跃翻译代次。
             let changed: Vec<String> = records
                 .iter()
                 .filter(|(id, record)| {
@@ -402,12 +444,53 @@ impl ExternalPluginManager {
                 .map(|(id, _)| id.clone())
                 .collect();
             for id in &changed {
+                if core
+                    .records
+                    .get(id)
+                    .is_some_and(ExternalRecord::has_translation_provider)
+                    || records
+                        .get(id)
+                        .is_some_and(ExternalRecord::has_translation_provider)
+                {
+                    translation_changed = true;
+                }
+                to_revoke.push((id.clone(), "插件版本已变更（升级或回滚）"));
                 if let Some(child) = ManagerCore::detach_child(&mut core, id) {
                     report.stopped.push(id.clone());
                     detached.push(child);
                 }
                 if let Some(child) = core.ui_running.remove(id) {
                     detached_ui.push(child);
+                }
+            }
+
+            // 新增包或能力集合变化（如移除 translation_provider 能力）：撤销并触发清单刷新。
+            for (id, record) in &records {
+                match core.records.get(id) {
+                    None => {
+                        if record.has_translation_provider() {
+                            translation_changed = true;
+                        }
+                        if record.lifecycle == ExternalLifecycle::Independent {
+                            set_state(&core.states, id, "independent", None);
+                        } else if !core.enabled.contains(id) {
+                            set_state(&core.states, id, "disabled", None);
+                        }
+                    }
+                    Some(old) => {
+                        if old.has_translation_provider() != record.has_translation_provider() {
+                            translation_changed = true;
+                            if !record.has_translation_provider() {
+                                to_revoke.push((id.clone(), "插件不再声明 translation_provider"));
+                            }
+                        } else if record.has_translation_provider()
+                            && (old.name != record.name
+                                || old.ui_executable.is_some() != record.ui_executable.is_some()
+                                || old.lifecycle != record.lifecycle)
+                        {
+                            translation_changed = true;
+                        }
+                    }
                 }
             }
 
@@ -429,10 +512,25 @@ impl ExternalPluginManager {
 
             core.records = records;
         }
+        if let Some(ctx) = ctx_clone {
+            let mut revoked_any = false;
+            if let Some(registry) = ctx.get::<crate::translation_provider::TranslationProviderRegistry>()
+            {
+                for (id, reason) in &to_revoke {
+                    if registry.revoke_plugin(id, reason) {
+                        revoked_any = true;
+                    }
+                }
+            }
+            if translation_changed || revoked_any {
+                crate::translation_provider::emit_providers_changed(&ctx);
+            }
+        }
         Ok((report, detached, detached_ui))
     }
 
-    /// 启用/停用单个插件：写状态文件；supervised 即时启停，independent 只改意图。
+    /// 启用/停用单个插件：写状态文件；supervised 即时启停，independent 只改意图；
+    /// 停用时对 supervised 与 independent 一律立即撤销翻译 provider 活跃代次（ADR-0050）。
     pub async fn set_enabled(&self, id: &str, enabled: bool) -> Result<(), String> {
         if let Some(mut child) = self.set_enabled_prepare(id, enabled)? {
             let _ = child.stop.send(true);
@@ -445,8 +543,11 @@ impl ExternalPluginManager {
     /// set_enabled 的同步准备阶段（见 refresh_prepare 注释）。
     pub(crate) fn set_enabled_prepare(&self, id: &str, enabled: bool) -> Result<Option<RunningChild>, String> {
         let mut detached = None;
+        let is_translation: bool;
+        let ctx_clone: Option<Context>;
         {
             let mut core = self.core.lock().unwrap();
+            ctx_clone = core.ctx.clone();
             if !core.state.is_ready() {
                 return Err("插件启用状态停摆".into());
             }
@@ -456,6 +557,7 @@ impl ExternalPluginManager {
                 .get(id)
                 .ok_or_else(|| format!("插件未安装: {id}"))?
                 .clone();
+            is_translation = record.has_translation_provider();
             if enabled && record.lifecycle == ExternalLifecycle::Supervised {
                 prepare_plugin_data_directory(&core.data_root, id)?;
             }
@@ -467,24 +569,35 @@ impl ExternalPluginManager {
             }
             core.state.store(&core.state_path, &next)?;
             core.enabled = next;
-            // supervised 才有进程可管；independent 只落状态文件与观测快照。
+            // supervised 才有进程可管；independent 只落状态文件与观测快照，但停用后
+            // 锁外仍必须撤销其活跃翻译 provider 代次。
             if record.lifecycle != ExternalLifecycle::Supervised {
                 set_state(&core.states, id, "independent", None);
-                return Ok(detached);
-            }
-            if enabled {
-                if core.running.contains_key(id) {
-                    return Ok(None);
+            } else if enabled {
+                if !core.running.contains_key(id) {
+                    if !core.seam.is_ready() {
+                        set_state(&core.states, id, "blocked", None);
+                        return Err("身份缝停摆，无法启动 supervised 插件".into());
+                    }
+                    set_state(&core.states, id, "starting", None);
+                    ManagerCore::spawn_child(&mut core, &record);
                 }
-                if !core.seam.is_ready() {
-                    set_state(&core.states, id, "blocked", None);
-                    return Err("身份缝停摆，无法启动 supervised 插件".into());
-                }
-                set_state(&core.states, id, "starting", None);
-                ManagerCore::spawn_child(&mut core, &record);
             } else {
                 detached = ManagerCore::detach_child(&mut core, id);
                 set_state(&core.states, id, "disabled", None);
+            }
+        }
+        if let Some(ctx) = ctx_clone {
+            let mut revoked = false;
+            if !enabled {
+                if let Some(registry) =
+                    ctx.get::<crate::translation_provider::TranslationProviderRegistry>()
+                {
+                    revoked = registry.revoke_plugin(id, "翻译插件已停用");
+                }
+            }
+            if is_translation || revoked {
+                crate::translation_provider::emit_providers_changed(&ctx);
             }
         }
         Ok(detached)
@@ -492,13 +605,21 @@ impl ExternalPluginManager {
 
     /// LIFO teardown：反序停止全部子进程（总计上限等待）。
     pub async fn shutdown(&self) {
-        let (children, ui_children): (Vec<RunningChild>, Vec<RunningUi>) = {
+        let (children, ui_children, ctx_clone): (Vec<RunningChild>, Vec<RunningUi>, Option<Context>) = {
             let mut core = self.core.lock().unwrap();
             (
                 std::mem::take(&mut core.running).into_values().collect(),
                 std::mem::take(&mut core.ui_running).into_values().collect(),
+                core.ctx.clone(),
             )
         };
+        if let Some(ctx) = ctx_clone {
+            if let Some(registry) =
+                ctx.get::<crate::translation_provider::TranslationProviderRegistry>()
+            {
+                registry.revoke_all("daemon 正在关闭");
+            }
+        }
         let deadline = tokio::time::Instant::now() + MAX_SHUTDOWN_WAIT;
         for mut child in children {
             let _ = child.stop.send(true);
@@ -560,6 +681,61 @@ impl ExternalPluginManager {
             .records
             .get(id)
             .map(|record| record.capabilities.clone())
+    }
+
+    /// 查询单个已安装且声明 `translation_provider` 能力的外部包快照。
+    pub(crate) fn installed_translation_provider(
+        &self,
+        id: &str,
+    ) -> Option<InstalledTranslationPackage> {
+        let core = self.core.lock().unwrap();
+        let record = core.records.get(id)?;
+        if !record.has_translation_provider() {
+            return None;
+        }
+        let states = core.states.lock().unwrap();
+        let runtime = states.get(&record.id).copied().unwrap_or(RuntimeState {
+            state: "unknown",
+            restart_count: 0,
+        });
+        Some(InstalledTranslationPackage {
+            id: record.id.clone(),
+            name: record.name.clone(),
+            description: record.text.description.clone(),
+            l10n: record.text.l10n.clone(),
+            version: record.version.clone(),
+            lifecycle: record.lifecycle.as_str().into(),
+            enabled: core.enabled.contains(&record.id),
+            state: runtime.state.into(),
+            has_ui: record.ui_executable.is_some(),
+        })
+    }
+
+    /// 列出全部已安装且声明 `translation_provider` 能力的外部包（按 id 排序）。
+    pub(crate) fn translation_provider_packages(&self) -> Vec<InstalledTranslationPackage> {
+        let core = self.core.lock().unwrap();
+        let states = core.states.lock().unwrap();
+        core.records
+            .values()
+            .filter(|record| record.has_translation_provider())
+            .map(|record| {
+                let runtime = states.get(&record.id).copied().unwrap_or(RuntimeState {
+                    state: "unknown",
+                    restart_count: 0,
+                });
+                InstalledTranslationPackage {
+                    id: record.id.clone(),
+                    name: record.name.clone(),
+                    description: record.text.description.clone(),
+                    l10n: record.text.l10n.clone(),
+                    version: record.version.clone(),
+                    lifecycle: record.lifecycle.as_str().into(),
+                    enabled: core.enabled.contains(&record.id),
+                    state: runtime.state.into(),
+                    has_ui: record.ui_executable.is_some(),
+                }
+            })
+            .collect()
     }
 
     /// Launch a package-declared native UI at most once. The executable is revalidated at the
@@ -850,6 +1026,7 @@ impl Plugin for ExternalPlugin {
                 seam,
                 state,
                 state_path,
+                ctx: Some(ctx.clone()),
             }),
         });
         manager.refresh_prepare()?;
@@ -1206,11 +1383,14 @@ fn validate_manifest(
 
 fn validate_id(value: &str) -> Result<(), String> {
     let bytes = value.as_bytes();
+    let lowered = value.to_ascii_lowercase();
     if value.is_empty()
         || value.len() > MAX_ID_BYTES
         || !bytes.first().is_some_and(u8::is_ascii_alphanumeric)
         || !bytes.last().is_some_and(u8::is_ascii_alphanumeric)
         || value.contains("..")
+        || lowered == "builtin"
+        || lowered.starts_with("builtin.")
         || !value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
@@ -1576,6 +1756,7 @@ mod tests {
                 seam,
                 state,
                 state_path,
+                ctx: None,
             }),
         }
     }
@@ -1583,6 +1764,48 @@ mod tests {
     #[cfg(unix)]
     fn process_exists(pid: u32) -> bool {
         unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn translation_provider_capability_and_builtin_namespace_reservation() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = secure_tempdir();
+        let pkg = root.path().join("org.example.translator");
+        fs::create_dir(&pkg).unwrap();
+        fs::set_permissions(&pkg, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::write(
+            pkg.join(MANIFEST_FILE),
+            "schema_version = 2\nprotocol_version = 1\nid = \"org.example.translator\"\nname = \"Translator\"\ndescription = \"External translator\"\nversion = \"1.0.0\"\nlifecycle = \"independent\"\ncapabilities = [\"translation_provider\"]\n[l10n.\"zh-Hans\"]\nname = \"翻译插件\"\n",
+        )
+        .unwrap();
+        fs::set_permissions(pkg.join(MANIFEST_FILE), fs::Permissions::from_mode(0o600)).unwrap();
+        let record = inspect_package(&pkg).expect("schema v2 translation_provider 应校验通过");
+        assert!(record
+            .capabilities
+            .contains(&"translation_provider".to_string()));
+        assert_eq!(record.text.description.as_deref(), Some("External translator"));
+
+        // builtin.* 保留命名空间必须拒绝。
+        for bad_id in ["builtin.openai_compatible", "Builtin.Custom", "builtin"] {
+            let bad_pkg = root.path().join(bad_id);
+            fs::create_dir(&bad_pkg).unwrap();
+            fs::set_permissions(&bad_pkg, fs::Permissions::from_mode(0o700)).unwrap();
+            fs::write(
+                bad_pkg.join(MANIFEST_FILE),
+                format!(
+                    "schema_version = 2\nprotocol_version = 1\nid = \"{bad_id}\"\nname = \"Hijack\"\nversion = \"1.0.0\"\nlifecycle = \"independent\"\ncapabilities = [\"translation_provider\"]\n"
+                ),
+            )
+            .unwrap();
+            fs::set_permissions(bad_pkg.join(MANIFEST_FILE), fs::Permissions::from_mode(0o600))
+                .unwrap();
+            assert!(
+                inspect_package(&bad_pkg).is_err(),
+                "external manifest 不得注册保留命名空间 {bad_id}"
+            );
+        }
     }
 
     #[cfg(unix)]

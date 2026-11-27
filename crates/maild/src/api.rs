@@ -16,6 +16,7 @@ use std::io;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, SystemTime};
 
@@ -37,7 +38,7 @@ use crate::accounts::Accounts;
 use crate::events::{
     AccountDetailCode, AccountState, AccountStateInfo, AgentLifecycleEvents, FrontendIntentQueued,
     LocalePreferenceChanged, MailFiltered, MailMessage, ProxyPreferenceChanged,
-    ProxyPreferenceEvent,
+    ProxyPreferenceEvent, TranslationProvidersChanged,
 };
 use crate::frontend::is_builtin_frontend;
 use crate::loader::plugin_config;
@@ -498,29 +499,43 @@ pub async fn dispatch_with_origin(
     dispatch_with_session(ctx, origin, &mut session, request).await
 }
 
+static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
+
 /// 会话级认证状态（ADR-0017）。每个连接一份，由 serve 循环持有；
 /// `authenticate` 成功后主体绑定且连接内不可变；`AUTH_REJECTED` 应答后关闭连接。
 /// 主体存于 [`SharedPrincipal`]：推送监听器持同一句柄做投递前过滤（ADR-0018）。
 pub struct SessionAuth {
+    session_id: u64,
     principal: SharedPrincipal,
     close_after_reply: bool,
-    /// 会话输出句柄（providerRegister 时借给端点写反向请求帧）。
+    /// 会话输出句柄（providerRegister / translationProviderRegister 借给端点写反向请求帧）。
     outbound: Option<tokio::sync::mpsc::Sender<String>>,
-    /// 出站反向调用状态：pending 表 + id 分配（ADR-0021）。
+    /// 出站反向调用状态：共享数字 id 分配器 + 按角色隔离的 pending 表（ADR-0021 / ADR-0050）。
     calls: Arc<crate::provider::SessionCallState>,
-    /// 本连接注册的 provider 端点（连接关闭时按属主注销）。
+    /// 本连接注册的 transport provider 端点（连接关闭时按属主注销）。
     registered: Option<(String, Arc<crate::provider::ProviderEndpoint>)>,
+    /// 本连接注册的 translation provider 端点（独立于 transport 角色，互不误伤）。
+    registered_translation: Option<(
+        String,
+        Arc<crate::translation_provider::TranslationProviderEndpoint>,
+    )>,
 }
 
 impl SessionAuth {
     fn new(_origin: RequestOrigin) -> Self {
         Self {
+            session_id: NEXT_SESSION_ID.fetch_add(1, Ordering::Relaxed),
             principal: SharedPrincipal::new(),
             close_after_reply: false,
             outbound: None,
             calls: crate::provider::SessionCallState::new(),
             registered: None,
+            registered_translation: None,
         }
+    }
+
+    pub(crate) fn session_id(&self) -> u64 {
+        self.session_id
     }
 
     /// 当前会话主体的共享句柄（推送过滤用）。
@@ -567,6 +582,28 @@ impl SessionAuth {
         &mut self,
     ) -> Option<(String, Arc<crate::provider::ProviderEndpoint>)> {
         self.registered.take()
+    }
+
+    /// translationProviderRegister 成功后登记翻译端点；与 transport 端点完全独立。
+    fn set_registered_translation(
+        &mut self,
+        plugin_id: String,
+        endpoint: Arc<crate::translation_provider::TranslationProviderEndpoint>,
+    ) -> Option<(
+        String,
+        Arc<crate::translation_provider::TranslationProviderEndpoint>,
+    )> {
+        self.registered_translation.replace((plugin_id, endpoint))
+    }
+
+    /// 连接关闭时的翻译端点属主注销凭据。
+    fn take_registered_translation(
+        &mut self,
+    ) -> Option<(
+        String,
+        Arc<crate::translation_provider::TranslationProviderEndpoint>,
+    )> {
+        self.registered_translation.take()
     }
 }
 
@@ -661,7 +698,8 @@ fn method_policy(method: &str) -> MethodPolicy {
         }
         "listExternalPlugins" | "openExternalPluginUi" | "commitPluginInstall" | "removePlugin"
         | "rollbackPlugin" | "setPluginEnabled" | "refreshPlugins"
-        | "getPluginInstallRoot" | "previewPluginPackage" | "setDefaultFrontend" => {
+        | "getPluginInstallRoot" | "previewPluginPackage" | "setDefaultFrontend"
+        | "listTranslationProviders" => {
             MethodPolicy::Capability("plugins_manage")
         }
         "listFrontends" | "claimNextOpenIntent" | "openFrontend" => {
@@ -671,6 +709,11 @@ fn method_policy(method: &str) -> MethodPolicy {
         // 可声明该词；frontend route 翻译表不含它，前端主体天然拿不到。
         // User 主体在 handler 内显式拒绝（注册是插件主体的动作）。
         "providerRegister" => MethodPolicy::Capability("transport_provider"),
+        // ADR-0050：外部翻译 provider 注册/调用/取消/探测。
+        // 除下述 capability 门控外，handler 进一步收紧来源（同 UID 流式 IPC）与主体（受托 Studio / 已启用 Plugin）。
+        "translationProviderRegister" => MethodPolicy::Capability("translation_provider"),
+        "invokeTranslation" | "cancelTranslation" => MethodPolicy::Capability("messages_read"),
+        "testTranslationProvider" => MethodPolicy::Capability("settings_read"),
         // 提权防线（ADR-0018 决策 1，ADR-0030 决策 6 保留并加强）：持有一份凭证的主体不得
         // 铸造凭证，否则声明上限可以自己给自己改。ADR-0039 另保留原生恢复维护例外。
         "revealPluginToken" | "repairBuiltinFrontend" | "resyncBuiltinFrontend"
@@ -899,6 +942,15 @@ pub async fn dispatch_with_session(
         "updateAddress" => update_address_rpc(ctx, &request.params).await,
         "removeAddress" => remove_address_rpc(ctx, &request.params).await,
         "providerRegister" => provider_register(ctx, origin, session, &request.params).await,
+        "translationProviderRegister" => {
+            translation_provider_register(ctx, origin, session, &request.params).await
+        }
+        "listTranslationProviders" => list_translation_providers(ctx, &request.params).await,
+        "invokeTranslation" => invoke_translation_rpc(ctx, origin, session, &request.params).await,
+        "cancelTranslation" => cancel_translation_rpc(ctx, origin, session, &request.params).await,
+        "testTranslationProvider" => {
+            test_translation_provider_rpc(ctx, origin, session, &request.params).await
+        }
         _ => Err(JsonRpcError {
             code: METHOD_NOT_FOUND,
             message: format!("method not found: {}", request.method),
@@ -4572,7 +4624,7 @@ async fn provider_register(
         session.provider_calls(),
     ));
     if let Some(previous) = registry.register(endpoint.clone()) {
-        previous.calls().fail_all("provider 已被同一插件的另一连接顶替");
+        previous.fail_pending("provider 已被同一插件的另一连接顶替");
         eprintln!(
             "[maild/provider] 顶替 {} 的旧 provider 端点",
             previous.plugin_id()
@@ -4588,6 +4640,414 @@ async fn provider_register(
         origin.as_str()
     );
     Ok(json!({}))
+}
+
+// —— ADR-0050：外部翻译 provider 总线 RPC ——
+
+fn is_local_streaming_ipc(origin: RequestOrigin) -> bool {
+    matches!(
+        origin,
+        RequestOrigin::UnixSocket | RequestOrigin::NamedPipe
+    )
+}
+
+fn ensure_trusted_studio_ipc(
+    ctx: &Context,
+    origin: RequestOrigin,
+    session: &SessionAuth,
+    method: &str,
+) -> Result<(), JsonRpcError> {
+    if !is_local_streaming_ipc(origin) {
+        return Err(JsonRpcError {
+            code: METHOD_NOT_PERMITTED,
+            message: format!(
+                "{method} 仅支持同用户本地流式 IPC 传输（当前 {}）",
+                origin.as_str()
+            ),
+            data: None,
+        });
+    }
+    let principal = session.principal();
+    match &principal {
+        Principal::Frontend(id) if id == maild_brand::BUNDLED_FRONTEND_ID => Ok(()),
+        _ => {
+            if !matches!(principal, Principal::User) {
+                if let Some(seam) = ctx.get::<IdentitySeam>() {
+                    seam.record_denial(&principal.as_str());
+                }
+            }
+            Err(JsonRpcError {
+                code: METHOD_NOT_PERMITTED,
+                message: format!(
+                    "{method} 仅限受托 Studio 前端主体（{}），拒绝 {}",
+                    maild_brand::BUNDLED_FRONTEND_ID,
+                    principal.as_str()
+                ),
+                data: None,
+            })
+        }
+    }
+}
+
+#[derive(Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TranslationProviderRegisterParams {
+    #[serde(default)]
+    supported_languages: Vec<String>,
+    #[serde(default)]
+    max_batch_items: Option<u32>,
+    #[serde(default)]
+    max_batch_chars: Option<u32>,
+    #[serde(default)]
+    max_concurrency: Option<u32>,
+    #[serde(default)]
+    supports_cancel: bool,
+    #[serde(default)]
+    variant_revision: String,
+}
+
+/// `translationProviderRegister`（ADR-0050）：仅限同 UID 流式 IPC 上已认证且已启用
+/// 并声明 `translation_provider` 的外部插件主体。
+async fn translation_provider_register(
+    ctx: &Context,
+    origin: RequestOrigin,
+    session: &mut SessionAuth,
+    params: &Value,
+) -> HandlerResult {
+    if !is_local_streaming_ipc(origin) {
+        return Err(JsonRpcError {
+            code: INVALID_REQUEST,
+            message: format!(
+                "translationProviderRegister 仅支持同用户本地流式 IPC（当前 {}）",
+                origin.as_str()
+            ),
+            data: None,
+        });
+    }
+    let plugin_id = match session.principal() {
+        Principal::Plugin(id) => id,
+        _ => {
+            return Err(JsonRpcError {
+                code: INVALID_REQUEST,
+                message: "translationProviderRegister 仅限已认证的外部插件主体".into(),
+                data: None,
+            });
+        }
+    };
+    let parsed: TranslationProviderRegisterParams = if params.is_null() {
+        TranslationProviderRegisterParams::default()
+    } else {
+        serde_json::from_value(params.clone())
+            .map_err(|_| invalid_params("translationProviderRegister 参数无效"))?
+    };
+    let validated = crate::translation_provider::ValidatedRegistration::validate(
+        &maild_client::TranslationProviderRegisterRequest {
+            supported_languages: parsed.supported_languages,
+            max_batch_items: parsed.max_batch_items,
+            max_batch_chars: parsed.max_batch_chars,
+            max_concurrency: parsed.max_concurrency,
+            supports_cancel: parsed.supports_cancel,
+            variant_revision: parsed.variant_revision,
+        },
+    )
+    .map_err(|reason| invalid_params(&reason))?;
+
+    let manager = ctx
+        .get::<crate::external::ExternalPluginManager>()
+        .ok_or_else(|| unavailable("external"))?;
+    let pkg = manager
+        .installed_translation_provider(&plugin_id)
+        .ok_or_else(|| JsonRpcError {
+            code: METHOD_NOT_PERMITTED,
+            message: format!("插件未安装或未声明 translation_provider: {plugin_id}"),
+            data: None,
+        })?;
+    if !pkg.enabled {
+        return Err(JsonRpcError {
+            code: METHOD_NOT_PERMITTED,
+            message: format!("插件未启用，拒绝注册 translation provider: {plugin_id}"),
+            data: None,
+        });
+    }
+
+    let registry = ctx
+        .get::<crate::translation_provider::TranslationProviderRegistry>()
+        .ok_or_else(|| JsonRpcError {
+            code: crate::translation_provider::PROVIDER_UNAVAILABLE,
+            message: "translation provider 注册表未装配".into(),
+            data: None,
+        })?;
+    let output = session
+        .outbound_handle()
+        .ok_or_else(|| internal("会话输出通道缺失".into()))?;
+
+    let (endpoint, previous) = registry.register(
+        plugin_id.clone(),
+        pkg.version,
+        validated.clone(),
+        output,
+        session.provider_calls(),
+    );
+    if let Some(old) = previous {
+        eprintln!(
+            "[maild/translation] 顶替 {} 的旧翻译端点（generation={} -> {}）",
+            old.plugin_id(),
+            old.generation(),
+            endpoint.generation()
+        );
+    }
+    if let Some((old_id, old_endpoint)) =
+        session.set_registered_translation(plugin_id.clone(), Arc::clone(&endpoint))
+    {
+        if !Arc::ptr_eq(&old_endpoint, &endpoint) {
+            let _ = registry.remove_if_owner(
+                &old_id,
+                &old_endpoint,
+                "同一连接重新注册 translation provider",
+            );
+        }
+    }
+    crate::translation_provider::emit_providers_changed(ctx);
+    eprintln!(
+        "[maild/translation] {} 注册为 translation provider（generation={}, {}）",
+        plugin_id,
+        endpoint.generation(),
+        origin.as_str()
+    );
+    let response = maild_client::TranslationProviderRegisterResult {
+        provider_id: plugin_id,
+        generation: endpoint.generation(),
+        max_batch_items: validated.max_batch_items,
+        max_batch_chars: validated.max_batch_chars,
+        max_concurrency: validated.max_concurrency,
+        supports_cancel: validated.supports_cancel,
+        variant_revision: validated.variant_revision,
+    };
+    serde_json::to_value(response).map_err(|_| internal("翻译注册结果序列化失败".into()))
+}
+
+/// `listTranslationProviders`（ADR-0050）：受 `plugins_manage` 保护，合并已安装包与实时注册代次。
+async fn list_translation_providers(ctx: &Context, params: &Value) -> HandlerResult {
+    require_empty_params(params)?;
+    let manager = ctx
+        .get::<crate::external::ExternalPluginManager>()
+        .ok_or_else(|| unavailable("external"))?;
+    let registry = ctx
+        .get::<crate::translation_provider::TranslationProviderRegistry>()
+        .ok_or_else(|| unavailable("translation provider registry"))?;
+    let snapshot = registry.snapshot_providers(
+        manager.translation_provider_packages(),
+        registry.catalog_generation(),
+    );
+    serde_json::to_value(snapshot).map_err(|_| internal("翻译 provider 清单序列化失败".into()))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InvokeTranslationParams {
+    provider_id: String,
+    generation: u64,
+    job_id: String,
+    #[serde(default)]
+    batch_id: Option<String>,
+    source_lang: String,
+    target_lang: String,
+    content_kind: String,
+    #[serde(default)]
+    timeout_ms: Option<u64>,
+    items: Vec<InvokeTranslationItemParam>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InvokeTranslationItemParam {
+    id: u32,
+    text: String,
+    #[serde(default)]
+    context: Option<String>,
+}
+
+struct PreparedInvokeTranslation {
+    registry: Arc<crate::translation_provider::TranslationProviderRegistry>,
+    session_id: u64,
+    request: maild_client::InvokeTranslationRequest,
+    budget: crate::translation_provider::DispatchBudgetGuard,
+}
+
+fn prepare_invoke_translation(
+    ctx: &Context,
+    origin: RequestOrigin,
+    session: &SessionAuth,
+    params: &Value,
+) -> Result<PreparedInvokeTranslation, JsonRpcError> {
+    ensure_trusted_studio_ipc(ctx, origin, session, "invokeTranslation")?;
+    let parsed: InvokeTranslationParams = serde_json::from_value(params.clone())
+        .map_err(|_| invalid_params("invokeTranslation 参数无效"))?;
+    let request = maild_client::InvokeTranslationRequest {
+        provider_id: parsed.provider_id,
+        generation: parsed.generation,
+        job_id: parsed.job_id,
+        batch_id: parsed.batch_id,
+        source_lang: parsed.source_lang,
+        target_lang: parsed.target_lang,
+        content_kind: parsed.content_kind,
+        timeout_ms: parsed.timeout_ms,
+        items: parsed
+            .items
+            .into_iter()
+            .map(|item| maild_client::TranslationBatchItem {
+                id: item.id,
+                text: item.text,
+                context: item.context,
+            })
+            .collect(),
+    };
+    crate::translation_provider::validate_invoke_request(&request)
+        .map_err(crate::translation_provider::TranslationError::into_rpc_error)?;
+    let registry = ctx
+        .get::<crate::translation_provider::TranslationProviderRegistry>()
+        .ok_or_else(|| JsonRpcError {
+            code: crate::translation_provider::PROVIDER_UNAVAILABLE,
+            message: "translation provider 注册表未装配".into(),
+            data: Some(json!({ "reason": "unavailable" })),
+        })?;
+    let bytes = crate::translation_provider::estimate_invoke_bytes(&request);
+    let budget = registry
+        .try_reserve_budget(session.session_id(), bytes)
+        .map_err(crate::translation_provider::TranslationError::into_rpc_error)?;
+    Ok(PreparedInvokeTranslation {
+        registry,
+        session_id: session.session_id(),
+        request,
+        budget,
+    })
+}
+
+async fn execute_invoke_translation(
+    ctx: &Context,
+    prepared: PreparedInvokeTranslation,
+) -> HandlerResult {
+    let result = prepared
+        .registry
+        .invoke_translation(ctx, prepared.session_id, prepared.request, prepared.budget)
+        .await
+        .map_err(crate::translation_provider::TranslationError::into_rpc_error)?;
+    serde_json::to_value(result).map_err(|_| internal("翻译结果序列化失败".into()))
+}
+
+async fn invoke_translation_rpc(
+    ctx: &Context,
+    origin: RequestOrigin,
+    session: &SessionAuth,
+    params: &Value,
+) -> HandlerResult {
+    let prepared = prepare_invoke_translation(ctx, origin, session, params)?;
+    execute_invoke_translation(ctx, prepared).await
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CancelTranslationParams {
+    job_id: String,
+}
+
+async fn cancel_translation_rpc(
+    ctx: &Context,
+    origin: RequestOrigin,
+    session: &SessionAuth,
+    params: &Value,
+) -> HandlerResult {
+    ensure_trusted_studio_ipc(ctx, origin, session, "cancelTranslation")?;
+    let parsed: CancelTranslationParams = serde_json::from_value(params.clone())
+        .map_err(|_| invalid_params("cancelTranslation 参数无效"))?;
+    let registry = ctx
+        .get::<crate::translation_provider::TranslationProviderRegistry>()
+        .ok_or_else(|| JsonRpcError {
+            code: crate::translation_provider::PROVIDER_UNAVAILABLE,
+            message: "translation provider 注册表未装配".into(),
+            data: Some(json!({ "reason": "unavailable" })),
+        })?;
+    let result = registry
+        .cancel_job(session.session_id(), &parsed.job_id)
+        .map_err(crate::translation_provider::TranslationError::into_rpc_error)?;
+    serde_json::to_value(result).map_err(|_| internal("取消结果序列化失败".into()))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TestTranslationProviderParams {
+    provider_id: String,
+    #[serde(default)]
+    generation: Option<u64>,
+    target_lang: String,
+    #[serde(default)]
+    timeout_ms: Option<u64>,
+}
+
+struct PreparedTestTranslationProvider {
+    registry: Arc<crate::translation_provider::TranslationProviderRegistry>,
+    request: maild_client::TestTranslationProviderRequest,
+    budget: crate::translation_provider::DispatchBudgetGuard,
+}
+
+fn prepare_test_translation_provider(
+    ctx: &Context,
+    origin: RequestOrigin,
+    session: &SessionAuth,
+    params: &Value,
+) -> Result<PreparedTestTranslationProvider, JsonRpcError> {
+    ensure_trusted_studio_ipc(ctx, origin, session, "testTranslationProvider")?;
+    let parsed: TestTranslationProviderParams = serde_json::from_value(params.clone())
+        .map_err(|_| invalid_params("testTranslationProvider 参数无效"))?;
+    crate::translation_provider::validate_safe_id("provider_id", &parsed.provider_id)
+        .map_err(crate::translation_provider::TranslationError::into_rpc_error)?;
+    crate::translation_provider::validate_lang_tag("target_lang", &parsed.target_lang, false)
+        .map_err(crate::translation_provider::TranslationError::into_rpc_error)?;
+    if parsed.generation == Some(0) {
+        return Err(invalid_params("generation 若提供则必须大于 0"));
+    }
+    let registry = ctx
+        .get::<crate::translation_provider::TranslationProviderRegistry>()
+        .ok_or_else(|| JsonRpcError {
+            code: crate::translation_provider::PROVIDER_UNAVAILABLE,
+            message: "translation provider 注册表未装配".into(),
+            data: Some(json!({ "reason": "unavailable" })),
+        })?;
+    let budget = registry
+        .try_reserve_budget(session.session_id(), 1024)
+        .map_err(crate::translation_provider::TranslationError::into_rpc_error)?;
+    Ok(PreparedTestTranslationProvider {
+        registry,
+        request: maild_client::TestTranslationProviderRequest {
+            provider_id: parsed.provider_id,
+            generation: parsed.generation,
+            target_lang: parsed.target_lang,
+            timeout_ms: parsed.timeout_ms,
+        },
+        budget,
+    })
+}
+
+async fn execute_test_translation_provider(
+    ctx: &Context,
+    prepared: PreparedTestTranslationProvider,
+) -> HandlerResult {
+    let result = prepared
+        .registry
+        .test_provider(ctx, prepared.request, prepared.budget)
+        .await
+        .map_err(crate::translation_provider::TranslationError::into_rpc_error)?;
+    serde_json::to_value(result).map_err(|_| internal("翻译探测结果序列化失败".into()))
+}
+
+async fn test_translation_provider_rpc(
+    ctx: &Context,
+    origin: RequestOrigin,
+    session: &SessionAuth,
+    params: &Value,
+) -> HandlerResult {
+    let prepared = prepare_test_translation_provider(ctx, origin, session, params)?;
+    execute_test_translation_provider(ctx, prepared).await
 }
 
 /// `getSettings`：读取 rules 运行时配置（不含账户凭据等秘密）。
@@ -4668,7 +5128,10 @@ fn notification(method: &str, params: Value) -> String {
 
 fn bounded_response(response: JsonRpcResponse) -> JsonRpcResponse {
     let id = response.id.clone();
-    if serde_json::to_vec(&response).is_ok_and(|line| line.len() <= MAX_RESPONSE_BYTES) {
+    // 计入行协议末尾的 `\n`，确保整帧不超过 1 MiB 预算。
+    if serde_json::to_vec(&response)
+        .is_ok_and(|line| line.len().saturating_add(1) <= MAX_RESPONSE_BYTES)
+    {
         return response;
     }
     let fallback = JsonRpcResponse::err(
@@ -4677,7 +5140,9 @@ fn bounded_response(response: JsonRpcResponse) -> JsonRpcResponse {
             "response too large (max {MAX_RESPONSE_BYTES} bytes); reduce page size"
         )),
     );
-    if serde_json::to_vec(&fallback).is_ok_and(|line| line.len() <= MAX_RESPONSE_BYTES) {
+    if serde_json::to_vec(&fallback)
+        .is_ok_and(|line| line.len().saturating_add(1) <= MAX_RESPONSE_BYTES)
+    {
         fallback
     } else {
         JsonRpcResponse::err(
@@ -4768,6 +5233,14 @@ fn proxy_notification(event: ProxyPreferenceEvent) -> String {
     notification(
         "preferences/proxy",
         serde_json::to_value(event).expect("ProxyPreferenceEvent is serializable"),
+    )
+}
+
+/// `translation/providers` 推给持有 `plugins_manage` 权限的流式连接（ADR-0050）。
+fn translation_providers_notification(event: maild_client::TranslationProvidersResult) -> String {
+    notification(
+        maild_client::TRANSLATION_PROVIDERS_NOTIFICATION,
+        serde_json::to_value(event).expect("TranslationProvidersResult is serializable"),
     )
 }
 
@@ -4932,6 +5405,18 @@ async fn serve_with_shutdown<R, W, F>(
             let _ = tx.try_send(proxy_notification(event));
         }))
     };
+    // ADR-0050：外部翻译 provider 注册/状态变化 → 按 `plugins_manage` 权限过滤推送。
+    let translation_providers_listener = {
+        let tx = tx.clone();
+        let filter_ctx = ctx.clone();
+        let principal = session.shared_principal();
+        ListenerGuard::new(ctx.on_emit::<TranslationProvidersChanged>(move |event| {
+            if !principal_has_capability(&filter_ctx, &principal.get(), "plugins_manage") {
+                return;
+            }
+            let _ = tx.try_send(translation_providers_notification(event));
+        }))
+    };
     // 用户请求整体停机 → 已认证前端在排空窗口内刷盘草稿、撤下 Dock 图标后自行退出。
     let stopping_listener = agent_stopping_listener(&ctx, tx.clone(), session.shared_principal());
 
@@ -4950,10 +5435,15 @@ async fn serve_with_shutdown<R, W, F>(
         let _ = writer_done_tx.send(());
     }));
 
+    // 已鉴权的翻译长任务（invokeTranslation / testTranslationProvider）脱离读循环并发执行，
+    // 确保慢翻译期间同一条连接仍可立即处理 cancelTranslation、getMessage 等后续请求。
+    let mut long_tasks = tokio::task::JoinSet::<()>::new();
+
     // 读端：逐行解析 → 分发 → 响应。会话状态（ADR-0017 主体绑定）随连接存续。
     let mut reader = reader;
     tokio::pin!(shutdown);
     loop {
+        while long_tasks.try_join_next().is_some() {}
         let next_frame = tokio::select! {
             result = read_frame(&mut reader) => result,
             _ = &mut writer_done_rx => break,
@@ -4978,11 +5468,14 @@ async fn serve_with_shutdown<R, W, F>(
         if frame.iter().all(u8::is_ascii_whitespace) {
             continue;
         }
-        // ADR-0021：先尝试按反向调用应答路由（result/error + 已知 pending id）；
-        // 未命中的帧照常走请求解析。普通客户端从不发送 result/error 帧，
-        // 命中失败的开销只是一次廉价预筛。
-        if may_be_provider_response(&frame) && route_provider_response(&ctx, &frame, &session) {
-            continue;
+        // ADR-0021 / ADR-0050：按帧形状区分反向应答与普通请求；已命中与迟到丢弃的应答
+        // 均直接 continue，绝不落回 parse_request 误发错误帧。
+        if may_be_provider_response(&frame) {
+            match route_provider_response(&ctx, &frame, &session) {
+                crate::provider::ResponseRouteOutcome::Routed
+                | crate::provider::ResponseRouteOutcome::DroppedLateResponse => continue,
+                crate::provider::ResponseRouteOutcome::NotResponse => {}
+            }
         }
         let request = match parse_request(&frame) {
             Ok(req) => req,
@@ -4996,6 +5489,67 @@ async fn serve_with_shutdown<R, W, F>(
         if request.id.is_null() {
             let _ = dispatch_with_session(&ctx, origin, &mut session, &request).await;
             continue; // JSON-RPC 通知：执行，但不响应。
+        }
+        // ADR-0050：已鉴权的翻译长任务在读循环同步完成鉴权/参数/并发槽预留，随后异步派发。
+        if matches!(
+            request.method.as_str(),
+            "invokeTranslation" | "testTranslationProvider"
+        ) {
+            if let Err(error) = ensure_principal_allowed(&ctx, &session, &request.method) {
+                let resp = JsonRpcResponse::err(request.id.clone(), error);
+                if tx.send(response_line(resp)).await.is_err() {
+                    break;
+                }
+                continue;
+            }
+            let req_id = request.id.clone();
+            let tx_reply = tx.clone();
+            let task_ctx = ctx.clone();
+            if request.method == "invokeTranslation" {
+                match prepare_invoke_translation(&ctx, origin, &session, &request.params) {
+                    Ok(prepared) => {
+                        long_tasks.spawn(async move {
+                            let resp = match execute_invoke_translation(&task_ctx, prepared).await {
+                                Ok(v) => JsonRpcResponse::ok(req_id, v),
+                                Err(e) => JsonRpcResponse::err(req_id, e),
+                            };
+                            let _ = tx_reply.send(response_line(resp)).await;
+                        });
+                    }
+                    Err(error) => {
+                        if tx
+                            .send(response_line(JsonRpcResponse::err(req_id, error)))
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                }
+            } else {
+                match prepare_test_translation_provider(&ctx, origin, &session, &request.params) {
+                    Ok(prepared) => {
+                        long_tasks.spawn(async move {
+                            let resp =
+                                match execute_test_translation_provider(&task_ctx, prepared).await {
+                                    Ok(v) => JsonRpcResponse::ok(req_id, v),
+                                    Err(e) => JsonRpcResponse::err(req_id, e),
+                                };
+                            let _ = tx_reply.send(response_line(resp)).await;
+                        });
+                    }
+                    Err(error) => {
+                        if tx
+                            .send(response_line(JsonRpcResponse::err(req_id, error)))
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                }
+            }
+            continue;
         }
         let resp = dispatch_with_session(&ctx, origin, &mut session, &request).await;
         if tx.send(response_line(resp)).await.is_err() {
@@ -5012,17 +5566,49 @@ async fn serve_with_shutdown<R, W, F>(
     drop(stopping_listener);
     drop(locale_listener);
     drop(proxy_listener);
-    // ADR-0021：连接关闭 → 按属主注销 provider 端点并让其未决调用立即失败。
+    drop(translation_providers_listener);
+    // ADR-0050：调用会话断开 → 立即取消该会话全部在途翻译任务并尽力通知插件。
+    if let Some(tr_registry) = ctx.get::<crate::translation_provider::TranslationProviderRegistry>()
+    {
+        tr_registry.cancel_session(session.session_id());
+    }
+    if tokio::time::timeout(Duration::from_millis(500), async {
+        while long_tasks.join_next().await.is_some() {}
+    })
+    .await
+    .is_err()
+    {
+        long_tasks.abort_all();
+        while long_tasks.join_next().await.is_some() {}
+    }
+    // ADR-0021：连接关闭 → 按属主注销 transport provider 端点并让其未决调用立即失败。
     if let Some((plugin_id, endpoint)) = session.take_registered() {
         let removed = ctx
             .get::<crate::provider::ProviderRegistry>()
             .map(|registry| registry.remove_if_owner(&plugin_id, &endpoint))
             .unwrap_or(false);
-        endpoint.calls().fail_all("provider 连接已关闭");
+        endpoint.fail_pending("provider 连接已关闭");
         if removed {
             eprintln!("[maild/provider] {plugin_id} 的 provider 端点随连接注销");
         }
     }
+    // ADR-0050：连接关闭 → 独立按属主注销 translation provider 端点、撤销活跃代次并广播变更。
+    if let Some((plugin_id, endpoint)) = session.take_registered_translation() {
+        let removed = ctx
+            .get::<crate::translation_provider::TranslationProviderRegistry>()
+            .map(|registry| {
+                registry.remove_if_owner(&plugin_id, &endpoint, "translation provider 连接已关闭")
+            })
+            .unwrap_or(false);
+        if removed {
+            crate::translation_provider::emit_providers_changed(&ctx);
+            eprintln!(
+                "[maild/translation] {plugin_id}（generation={}）的翻译端点随连接注销",
+                endpoint.generation()
+            );
+        }
+    }
+    session.provider_calls().fail_all("provider 连接已关闭");
     drop(tx);
     writer_task.join().await;
 }
@@ -5041,31 +5627,44 @@ fn window_contains(haystack: &[u8], needle: &[u8]) -> bool {
         .any(|window| window == needle)
 }
 
-/// 把入站帧按反向调用应答路由到本会话的 pending 表。返回是否命中。
-/// 迟到应答（pending 已被超时移除）静默丢弃并计数；带 method 的帧不是应答。
-fn route_provider_response(ctx: &Context, frame: &[u8], session: &SessionAuth) -> bool {
+/// 把入站帧按反向调用应答路由到本会话的 pending 表。
+///
+/// 显式区分 `NotResponse`、`Routed`、`DroppedLateResponse`：
+/// - 带 `method` 或缺非空 `id` 或未恰含 `result`/`error` 之一的帧返回 `NotResponse`；
+/// - 命中 pending 表返回 `Routed`；
+/// - 合法应答但 pending 已移除（超时/取消/撤销）则静默丢弃、计数并返回 `DroppedLateResponse`，
+///   调用方不得落入请求解析或回发错误帧。
+fn route_provider_response(
+    ctx: &Context,
+    frame: &[u8],
+    session: &SessionAuth,
+) -> crate::provider::ResponseRouteOutcome {
+    use crate::provider::ResponseRouteOutcome;
     let Ok(value) = serde_json::from_slice::<Value>(frame) else {
-        return false;
+        return ResponseRouteOutcome::NotResponse;
     };
     let Some(object) = value.as_object() else {
-        return false;
+        return ResponseRouteOutcome::NotResponse;
     };
     if object.contains_key("method") || !object.contains_key("id") {
-        return false;
+        return ResponseRouteOutcome::NotResponse;
     }
     let has_result = object.contains_key("result");
     let has_error = object.contains_key("error");
     if has_result == has_error {
-        return false;
+        return ResponseRouteOutcome::NotResponse;
     }
     let Some(id) = object.get("id").filter(|id| !id.is_null()) else {
-        return false;
+        return ResponseRouteOutcome::NotResponse;
     };
     let reply = if has_result {
         crate::provider::ProviderReply::Ok(object.get("result").cloned().unwrap_or(Value::Null))
     } else if let Some(error) = object.get("error").and_then(|error| error.as_object()) {
         crate::provider::ProviderReply::Err {
-            code: error.get("code").and_then(Value::as_i64).unwrap_or(crate::provider::PROVIDER_ERROR),
+            code: error
+                .get("code")
+                .and_then(Value::as_i64)
+                .unwrap_or(crate::provider::PROVIDER_ERROR),
             message: error
                 .get("message")
                 .and_then(Value::as_str)
@@ -5073,19 +5672,23 @@ fn route_provider_response(ctx: &Context, frame: &[u8], session: &SessionAuth) -
                 .to_owned(),
         }
     } else {
-        return false;
+        return ResponseRouteOutcome::NotResponse;
     };
     if session.provider_calls().route(&id.to_string(), reply) {
-        true
-    } else if let Some(registry) = ctx.get::<crate::provider::ProviderRegistry>() {
-        registry.note_late_response();
-        eprintln!(
-            "[maild/provider] 迟到应答丢弃 id={id}（累计 {}）",
-            registry.late_responses()
-        );
-        false
+        ResponseRouteOutcome::Routed
     } else {
-        false
+        if let Some(registry) = ctx.get::<crate::provider::ProviderRegistry>() {
+            registry.note_late_response();
+            eprintln!(
+                "[maild/provider] 迟到应答丢弃 id={id}（累计 {}）",
+                registry.late_responses()
+            );
+        }
+        if let Some(registry) = ctx.get::<crate::translation_provider::TranslationProviderRegistry>()
+        {
+            registry.note_late_response();
+        }
+        ResponseRouteOutcome::DroppedLateResponse
     }
 }
 
@@ -5867,6 +6470,12 @@ mod tests {
             ("refreshPlugins", Capability("plugins_manage")),
             // ADR-0021：仅 external manifest 可声明；frontend 侧既无路由也无授权词。
             ("providerRegister", Capability("transport_provider")),
+            // ADR-0050：外部翻译 provider 总线五方法。
+            ("translationProviderRegister", Capability("translation_provider")),
+            ("listTranslationProviders", Capability("plugins_manage")),
+            ("invokeTranslation", Capability("messages_read")),
+            ("cancelTranslation", Capability("messages_read")),
+            ("testTranslationProvider", Capability("settings_read")),
             // 提权防线（决策 6），另有 ADR-0039 原生维护例外。持证者不得铸证，否则声明上限
             // 可以自己给自己改。
             ("revealPluginToken", UserOnly),

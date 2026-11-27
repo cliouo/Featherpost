@@ -226,6 +226,15 @@ impl Notification {
                         ))
                     })
             }
+            TRANSLATION_PROVIDERS_NOTIFICATION => {
+                serde_json::from_value::<TranslationProvidersResult>(self.params)
+                    .map(|event| ServerNotification::TranslationProviders(Box::new(event)))
+                    .map_err(|error| {
+                        ClientError::rpc(format!(
+                            "{TRANSLATION_PROVIDERS_NOTIFICATION} 通知参数无效: {error}"
+                        ))
+                    })
+            }
             _ => Ok(ServerNotification::Unknown(self)),
         }
     }
@@ -260,6 +269,20 @@ impl Notification {
                 })
         })
     }
+
+    /// ADR-0050：`translation/providers` 的类型化解码。不是这条通知时返回 `None`。
+    pub fn translation_providers_changed(
+        &self,
+    ) -> Option<Result<TranslationProvidersResult, ClientError>> {
+        (self.method == TRANSLATION_PROVIDERS_NOTIFICATION).then(|| {
+            serde_json::from_value::<TranslationProvidersResult>(self.params.clone())
+                .map_err(|error| {
+                    ClientError::rpc(format!(
+                        "{TRANSLATION_PROVIDERS_NOTIFICATION} 通知参数无效: {error}"
+                    ))
+                })
+        })
+    }
 }
 
 /// ADR-0048：语言偏好变化通知的 method 名。
@@ -267,6 +290,9 @@ pub const LOCALE_PREFERENCE_NOTIFICATION: &str = "preferences/locale";
 
 /// 全局代理偏好变化通知的 method 名。
 pub const PROXY_PREFERENCE_NOTIFICATION: &str = "preferences/proxy";
+
+/// ADR-0050：外部翻译 provider 状态/注册变化通知的 method 名（受 `plugins_manage` 过滤）。
+pub const TRANSLATION_PROVIDERS_NOTIFICATION: &str = "translation/providers";
 
 /// `preferences/locale` 的参数：新的解析后有序语言列表（永不为空）。未知字段忽略，便于 additive 扩展。
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
@@ -563,6 +589,8 @@ pub enum ServerNotification {
     },
     /// 全局代理偏好或系统代理变化（非秘密摘要 + `generation`）。装箱避免撑大整个枚举。
     ProxyPreference(Box<ProxyPreferenceChanged>),
+    /// ADR-0050：已安装/已注册的外部翻译 provider 清单变化（受 `plugins_manage` 权限过滤）。
+    TranslationProviders(Box<TranslationProvidersResult>),
     Unknown(Notification),
 }
 
@@ -1525,6 +1553,224 @@ pub struct TestProxyResult {
     pub detail_code: Option<String>,
     #[serde(default)]
     pub detail: String,
+}
+
+// —— ADR-0050：外部翻译 provider 总线 DTO ——
+
+/// 翻译 provider 相关的稳定 JSON-RPC 错误码（接续 ADR-0021 与 ADR-0036）。
+pub const PROVIDER_UNAVAILABLE_CODE: i64 = -32018;
+pub const PROVIDER_TIMEOUT_CODE: i64 = -32019;
+pub const PROVIDER_ERROR_CODE: i64 = -32020;
+pub const PROVIDER_BUSY_CODE: i64 = -32022;
+pub const PROVIDER_CANCELLED_CODE: i64 = -32023;
+
+/// `translationProviderRegister` 请求参数：动态能力元数据（展示名/l10n/版本均取自 manifest）。
+#[derive(Clone, Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
+pub struct TranslationProviderRegisterRequest {
+    #[serde(default)]
+    pub supported_languages: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_batch_items: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_batch_chars: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_concurrency: Option<u32>,
+    #[serde(default)]
+    pub supports_cancel: bool,
+    #[serde(default)]
+    pub variant_revision: String,
+}
+
+/// `translationProviderRegister` 应答：返回 daemon 分配的单调递增 `generation` 与协商后的有效上限。
+#[derive(Clone, Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
+pub struct TranslationProviderRegisterResult {
+    pub provider_id: String,
+    pub generation: u64,
+    pub max_batch_items: u32,
+    pub max_batch_chars: u32,
+    pub max_concurrency: u32,
+    pub supports_cancel: bool,
+    #[serde(default)]
+    pub variant_revision: String,
+}
+
+/// `listTranslationProviders` 与 `translation/providers` 推送中的单个外部翻译 provider 视图。
+#[derive(Clone, Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
+pub struct TranslationProviderInfo {
+    pub id: String,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "PackageL10n::is_empty")]
+    pub l10n: PackageL10n,
+    pub version: String,
+    pub lifecycle: String,
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub state: String,
+    #[serde(default)]
+    pub has_ui: bool,
+    #[serde(default)]
+    pub registered: bool,
+    /// 当前活跃注册代次；未注册时为 `0`。
+    #[serde(default)]
+    pub generation: u64,
+    #[serde(default)]
+    pub supported_languages: Vec<String>,
+    #[serde(default)]
+    pub max_batch_items: u32,
+    #[serde(default)]
+    pub max_batch_chars: u32,
+    #[serde(default)]
+    pub max_concurrency: u32,
+    #[serde(default)]
+    pub supports_cancel: bool,
+    #[serde(default)]
+    pub variant_revision: String,
+}
+
+/// `listTranslationProviders` 应答及 `translation/providers` 推送载荷。
+#[derive(Clone, Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
+pub struct TranslationProvidersResult {
+    /// 目录事件单调代次，客户端按 `generation` 合并并丢弃旧快照。
+    #[serde(default)]
+    pub generation: u64,
+    #[serde(default)]
+    pub providers: Vec<TranslationProviderInfo>,
+}
+
+/// 待翻译的单个有序文本块。
+#[derive(Clone, Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
+pub struct TranslationBatchItem {
+    pub id: u32,
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<String>,
+}
+
+/// 翻译完成的单个有序文本块。
+#[derive(Clone, Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
+pub struct TranslatedBatchItem {
+    pub id: u32,
+    pub text: String,
+}
+
+/// `invokeTranslation` 请求参数。
+#[derive(Clone, Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
+pub struct InvokeTranslationRequest {
+    pub provider_id: String,
+    pub generation: u64,
+    pub job_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub batch_id: Option<String>,
+    pub source_lang: String,
+    pub target_lang: String,
+    pub content_kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
+    pub items: Vec<TranslationBatchItem>,
+}
+
+/// `invokeTranslation` 应答。
+#[derive(Clone, Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
+pub struct InvokeTranslationResult {
+    pub provider_id: String,
+    pub generation: u64,
+    #[serde(default)]
+    pub variant_revision: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detected_source_lang: Option<String>,
+    #[serde(default)]
+    pub items: Vec<TranslatedBatchItem>,
+}
+
+/// `cancelTranslation` 请求参数。
+#[derive(Clone, Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
+pub struct CancelTranslationRequest {
+    pub job_id: String,
+}
+
+/// `cancelTranslation` 应答。
+#[derive(Clone, Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
+pub struct CancelTranslationResult {
+    pub cancelled: bool,
+    #[serde(default)]
+    pub cancelled_requests: u32,
+    #[serde(default)]
+    pub notified_provider: u32,
+}
+
+/// `testTranslationProvider` 请求参数。
+#[derive(Clone, Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
+pub struct TestTranslationProviderRequest {
+    pub provider_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generation: Option<u64>,
+    pub target_lang: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
+}
+
+/// `testTranslationProvider` 应答。
+#[derive(Clone, Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
+pub struct TestTranslationProviderResult {
+    #[serde(default)]
+    pub ok: bool,
+    #[serde(default)]
+    pub provider_id: String,
+    #[serde(default)]
+    pub generation: u64,
+    #[serde(default)]
+    pub stage: String,
+    #[serde(default)]
+    pub reason: String,
+    #[serde(default)]
+    pub latency_ms: u64,
+    #[serde(default)]
+    pub detail: String,
+}
+
+/// daemon → 插件反向请求：`translation/translate`。
+#[derive(Clone, Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
+pub struct PluginTranslateRequest {
+    pub job_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub batch_id: Option<String>,
+    pub source_lang: String,
+    pub target_lang: String,
+    pub content_kind: String,
+    pub items: Vec<TranslationBatchItem>,
+}
+
+/// 插件 → daemon 应答：`translation/translate`。
+#[derive(Clone, Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
+pub struct PluginTranslateResponse {
+    pub items: Vec<TranslatedBatchItem>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detected_source_lang: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub variant_revision: Option<String>,
+}
+
+/// daemon → 插件反向请求：`translation/probe`（固定无邮件样本）。
+#[derive(Clone, Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
+pub struct PluginTranslationProbeRequest {
+    pub target_lang: String,
+}
+
+/// 插件 → daemon 应答：`translation/probe`。
+#[derive(Clone, Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
+pub struct PluginTranslationProbeResponse {
+    pub ok: bool,
+    #[serde(default)]
+    pub detail: String,
+}
+
+/// daemon → 插件单向通知：`translation/cancel`。
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+pub struct PluginTranslationCancelNotification {
+    pub request_id: Value,
 }
 
 /// 按已收字节推进 `offset` 循环取块，拼成完整附件。两道护栏：应答 `size` 中途改变即报错；
@@ -3588,7 +3834,7 @@ impl StreamWriter {
         };
         let mut encoded = serde_json::to_vec(&Value::Object(frame))
             .map_err(|error| ClientError::rpc(format!("序列化 JSON-RPC 响应失败: {error}")))?;
-        if encoded.len() > MAX_FRAME_BYTES {
+        if encoded.len().saturating_add(1) > MAX_FRAME_BYTES {
             return Err(ClientError::rpc(format!(
                 "JSON-RPC 响应超过 {MAX_FRAME_BYTES} bytes"
             )));
@@ -3607,7 +3853,7 @@ impl StreamWriter {
     async fn write_request(&mut self, request: &Value) -> Result<(), ClientError> {
         let mut encoded = serde_json::to_vec(request)
             .map_err(|error| ClientError::rpc(format!("序列化 JSON-RPC 请求失败: {error}")))?;
-        if encoded.len() > MAX_FRAME_BYTES {
+        if encoded.len().saturating_add(1) > MAX_FRAME_BYTES {
             return Err(ClientError::rpc(format!(
                 "JSON-RPC 请求超过 {MAX_FRAME_BYTES} bytes"
             )));
@@ -5146,6 +5392,24 @@ mod tests {
         assert_eq!(
             serde_json::to_value(ProxyConfigUpdate::direct()).unwrap(),
             json!({ "mode": "direct" })
+        );
+    }
+
+    #[test]
+    fn translation_providers_notification_and_dtos_round_trip() {
+        let frame = r#"{"jsonrpc":"2.0","method":"translation/providers","params":{"generation":4,"providers":[{"id":"org.example.translator","name":"Example Translator","description":"Local demo","l10n":{"zh-Hans":{"name":"示例翻译"}},"version":"1.0.0","lifecycle":"supervised","enabled":true,"state":"running","has_ui":false,"registered":true,"generation":2,"supported_languages":["en","zh-Hans"],"max_batch_items":16,"max_batch_chars":12000,"max_concurrency":2,"supports_cancel":true,"variant_revision":"demo-v1"}]}}"#.as_bytes();
+        let Incoming::Notification(notification) = decode_incoming(frame).unwrap() else {
+            panic!("translation/providers 应解码为通知帧");
+        };
+        let parsed = notification.translation_providers_changed().unwrap().unwrap();
+        assert_eq!(parsed.generation, 4);
+        assert_eq!(parsed.providers.len(), 1);
+        assert_eq!(parsed.providers[0].id, "org.example.translator");
+        assert_eq!(parsed.providers[0].generation, 2);
+        assert!(parsed.providers[0].supports_cancel);
+        assert_eq!(
+            notification.into_server_notification().unwrap(),
+            ServerNotification::TranslationProviders(Box::new(parsed))
         );
     }
 

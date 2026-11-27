@@ -54,6 +54,7 @@ pub mod rules;
 pub mod scheduler;
 pub mod search;
 pub mod store;
+pub mod translation_provider;
 pub mod transport;
 pub mod uploads;
 

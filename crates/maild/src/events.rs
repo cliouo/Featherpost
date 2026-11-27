@@ -483,3 +483,13 @@ pub struct ProxyPreferenceChanged;
 impl EmitEvent for ProxyPreferenceChanged {
     type Args = ProxyPreferenceEvent;
 }
+
+/// `translation/providers`：外部翻译 provider 安装/启用/版本变更/注册/注销时广播。
+///
+/// API 层按 `plugins_manage` capability 过滤（与 `listTranslationProviders` 同权限），
+/// 载荷内含单调递增 `generation` 供前端合并并丢弃旧快照（ADR-0050）。
+pub struct TranslationProvidersChanged;
+
+impl EmitEvent for TranslationProvidersChanged {
+    type Args = maild_client::TranslationProvidersResult;
+}

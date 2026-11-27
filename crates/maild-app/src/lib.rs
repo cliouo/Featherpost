@@ -15,17 +15,22 @@ use tokio::time::Instant;
 
 pub use maild_client::{
     compat_from_response, AccountDraftInput, AccountProfileView, AccountSecretUpdate,
-    AccountSource, AccountsResult, AccountState, CompatVerdict, CreateAccountResult,
-    CredentialsView, CustomProxyConfig, CustomProxyUpdate, ExternalPluginInfo,
-    ExternalPluginsResult, FrontendInfo, FrontendsResult, IncomingInput, IncomingView, MailMessage,
-    MessageResult, MessageSummariesResult, MessageSummary, MessagesResult, Notification,
+    AccountSource, AccountsResult, AccountState, CancelTranslationRequest, CancelTranslationResult,
+    CompatVerdict, CreateAccountResult, CredentialsView, CustomProxyConfig, CustomProxyUpdate,
+    ExternalPluginInfo, ExternalPluginsResult, FrontendInfo, FrontendsResult, IncomingInput,
+    IncomingView, InvokeTranslationRequest, InvokeTranslationResult, MailMessage, MessageResult,
+    MessageSummariesResult, MessageSummary, MessagesResult, Notification,
     NotificationAuthorization, NotificationAvailability, NotificationStatus,
     OpenExternalPluginUiResult, OpenFrontendResult, OpenIntent, OpenIntentResult, OutgoingInput,
     OutgoingView, ProbeOutcomeView, ProbeReportView, ProfilesResult, ProxyConfig,
     ProxyConfigResult, ProxyConfigUpdate, ProxyEndpointInfo, ProxyPreferenceChanged, QuietHours,
     RemoveAccountResult, RulesPatch, RulesSettings, RuntimeView, SendRequest, ServerNotification,
     SettingsResult, StatusResult, SystemProxySnapshot, TestProxyRequest, TestProxyResult,
-    UpdatePatchInput, DEFAULT_FRONTEND,
+    TestTranslationProviderRequest, TestTranslationProviderResult, TranslatedBatchItem,
+    TranslationBatchItem, TranslationProviderInfo, TranslationProviderRegisterRequest,
+    TranslationProviderRegisterResult, TranslationProvidersResult, UpdatePatchInput,
+    DEFAULT_FRONTEND, PROVIDER_BUSY_CODE, PROVIDER_CANCELLED_CODE, PROVIDER_ERROR_CODE,
+    PROVIDER_TIMEOUT_CODE, PROVIDER_UNAVAILABLE_CODE, TRANSLATION_PROVIDERS_NOTIFICATION,
 };
 
 const COMMAND_CAPACITY: usize = 64;
@@ -354,10 +359,21 @@ impl ConnectionHandle {
         method: impl Into<String>,
         params: Value,
     ) -> Result<Value, ClientError> {
+        self.request_with_timeout(method, params, self.request_timeout)
+            .await
+    }
+
+    pub async fn request_with_timeout(
+        &self,
+        method: impl Into<String>,
+        params: Value,
+        timeout: Duration,
+    ) -> Result<Value, ClientError> {
         if self.state.borrow().phase != ConnectionPhase::Online {
             return Err(ClientError::connection("连接尚未就绪"));
         }
-        let deadline = Instant::now() + self.request_timeout;
+        let timeout = timeout.clamp(MIN_TIMER_DURATION, MAX_REQUEST_TIMEOUT);
+        let deadline = Instant::now() + timeout;
         let (reply_tx, reply_rx) = oneshot::channel();
         tokio::time::timeout_at(
             deadline,
@@ -385,8 +401,23 @@ impl ConnectionHandle {
     where
         T: DeserializeOwned,
     {
+        self.request_typed_with_timeout(method, params, self.request_timeout)
+            .await
+    }
+
+    pub async fn request_typed_with_timeout<T>(
+        &self,
+        method: impl Into<String>,
+        params: Value,
+        timeout: Duration,
+    ) -> Result<T, ClientError>
+    where
+        T: DeserializeOwned,
+    {
         let method = method.into();
-        let value = self.request(method.clone(), params).await?;
+        let value = self
+            .request_with_timeout(method.clone(), params, timeout)
+            .await?;
         serde_json::from_value(value)
             .map_err(|error| ClientError::rpc(format!("{method} 响应结构无效: {error}")))
     }
@@ -501,6 +532,47 @@ impl ConnectionHandle {
         let params = serde_json::to_value(request)
             .map_err(|_| ClientError::rpc("testProxy 请求序列化失败"))?;
         self.request_typed("testProxy", params).await
+    }
+
+    // —— ADR-0050：外部翻译 provider 总线 ——
+
+    pub async fn list_translation_providers(
+        &self,
+    ) -> Result<TranslationProvidersResult, ClientError> {
+        self.request_typed("listTranslationProviders", json!({}))
+            .await
+    }
+
+    pub async fn invoke_translation(
+        &self,
+        request: &InvokeTranslationRequest,
+    ) -> Result<InvokeTranslationResult, ClientError> {
+        let params = serde_json::to_value(request)
+            .map_err(|_| ClientError::rpc("invokeTranslation 请求序列化失败"))?;
+        let base_ms = request.timeout_ms.unwrap_or(45_000);
+        let timeout = Duration::from_millis(base_ms.saturating_add(5_000));
+        self.request_typed_with_timeout("invokeTranslation", params, timeout)
+            .await
+    }
+
+    pub async fn cancel_translation(
+        &self,
+        job_id: &str,
+    ) -> Result<CancelTranslationResult, ClientError> {
+        self.request_typed("cancelTranslation", json!({ "job_id": job_id }))
+            .await
+    }
+
+    pub async fn test_translation_provider(
+        &self,
+        request: &TestTranslationProviderRequest,
+    ) -> Result<TestTranslationProviderResult, ClientError> {
+        let params = serde_json::to_value(request)
+            .map_err(|_| ClientError::rpc("testTranslationProvider 请求序列化失败"))?;
+        let base_ms = request.timeout_ms.unwrap_or(15_000);
+        let timeout = Duration::from_millis(base_ms.saturating_add(5_000));
+        self.request_typed_with_timeout("testTranslationProvider", params, timeout)
+            .await
     }
 
     pub async fn send(&self, message: &SendRequest) -> Result<(), ClientError> {

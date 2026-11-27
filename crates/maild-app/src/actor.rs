@@ -659,6 +659,13 @@ impl Actor {
                         )));
                     return Ok(None);
                 }
+                // ADR-0050：外部翻译 provider 注册/状态变更不进快照缓冲，直接转发给前端监听方按 generation 合并。
+                if let ServerNotification::TranslationProviders(event) = notification {
+                    let _ = self.events.send(AppEvent::Notification(
+                        ServerNotification::TranslationProviders(event),
+                    ));
+                    return Ok(None);
+                }
                 let synchronizing = snapshot.is_some();
                 if let Some(snapshot) = snapshot.as_mut() {
                     snapshot.buffer(notification.clone());
@@ -1213,6 +1220,23 @@ fn notification_bytes(notification: &ServerNotification) -> usize {
             }
             total
         }
+        ServerNotification::TranslationProviders(event) => {
+            let mut total = OVERHEAD;
+            for provider in &event.providers {
+                total = total
+                    .saturating_add(provider.id.len())
+                    .saturating_add(provider.name.len())
+                    .saturating_add(provider.description.as_deref().map_or(0, str::len))
+                    .saturating_add(provider.version.len())
+                    .saturating_add(provider.lifecycle.len())
+                    .saturating_add(provider.state.len())
+                    .saturating_add(provider.variant_revision.len());
+                for lang in &provider.supported_languages {
+                    total = total.saturating_add(lang.len());
+                }
+            }
+            total
+        }
         ServerNotification::Unknown(value) => OVERHEAD
             .saturating_add(value.method.len())
             .saturating_add(value.params.to_string().len()),
@@ -1340,8 +1364,60 @@ fn validate_notification(notification: &ServerNotification) -> Result<(), Client
         ),
         ServerNotification::LocalePreference { effective } => validate_locale(effective),
         ServerNotification::ProxyPreference(event) => validate_proxy_preference(event),
+        ServerNotification::TranslationProviders(event) => validate_translation_providers(event),
         ServerNotification::AgentStopping | ServerNotification::Unknown(_) => Ok(()),
     }
+}
+
+const MAX_TRANSLATION_PROVIDERS_IN_EVENT: usize = 64;
+const MAX_TRANSLATION_LANGUAGES_IN_EVENT: usize = 256;
+
+fn validate_translation_providers(
+    event: &maild_client::TranslationProvidersResult,
+) -> Result<(), ClientError> {
+    if event.providers.len() > MAX_TRANSLATION_PROVIDERS_IN_EVENT {
+        return Err(ClientError::rpc(format!(
+            "translation/providers 超过 {MAX_TRANSLATION_PROVIDERS_IN_EVENT} 项上限"
+        )));
+    }
+    for provider in &event.providers {
+        validate_text("translation provider id", &provider.id, MAX_NOTIFICATION_TEXT_BYTES)?;
+        validate_text("translation provider name", &provider.name, MAX_NOTIFICATION_TEXT_BYTES)?;
+        if let Some(description) = &provider.description {
+            validate_text(
+                "translation provider description",
+                description,
+                MAX_NOTIFICATION_TEXT_BYTES,
+            )?;
+        }
+        validate_text(
+            "translation provider version",
+            &provider.version,
+            MAX_NOTIFICATION_TEXT_BYTES,
+        )?;
+        validate_text(
+            "translation provider lifecycle",
+            &provider.lifecycle,
+            MAX_NOTIFICATION_TEXT_BYTES,
+        )?;
+        validate_text(
+            "translation provider state",
+            &provider.state,
+            MAX_NOTIFICATION_TEXT_BYTES,
+        )?;
+        validate_text(
+            "translation provider variant_revision",
+            &provider.variant_revision,
+            MAX_NOTIFICATION_TEXT_BYTES,
+        )?;
+        if provider.supported_languages.len() > MAX_TRANSLATION_LANGUAGES_IN_EVENT {
+            return Err(ClientError::rpc("translation provider 语言列表超过上限"));
+        }
+        for lang in &provider.supported_languages {
+            validate_text("translation provider language", lang, MAX_LOCALE_TAG_BYTES)?;
+        }
+    }
+    Ok(())
 }
 
 /// `effective` 的形状上限（ADR-0048 决策 2：永不为空）。内容是否合法 BCP 47 由前端协商时自行判断，
@@ -1596,6 +1672,7 @@ fn apply_notification(
         | ServerNotification::AgentStopping
         | ServerNotification::LocalePreference { .. }
         | ServerNotification::ProxyPreference(_)
+        | ServerNotification::TranslationProviders(_)
         | ServerNotification::Unknown(_) => false,
     }
 }
@@ -3005,6 +3082,80 @@ mod tests {
         let serialized = serde_json::to_string(&event).unwrap();
         assert!(!serialized.contains("must-never-leak-through-actor"));
         assert!(!serialized.contains("sys-secret-must-be-stripped"));
+    }
+
+    #[test]
+    fn translation_providers_notification_forwards_directly_without_buffering() {
+        let client = RpcClient::new(Endpoint::Http {
+            url: "http://127.0.0.1:7394/rpc".into(),
+            token: "t".repeat(32),
+        })
+        .unwrap();
+        let (_cmd_tx, cmd_rx) = mpsc::channel(4);
+        let (state_tx, _state_rx) = watch::channel(ViewState::new(TransportKind::Unix));
+        let (event_tx, mut events) = broadcast::channel(8);
+        let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+        let mut actor = Actor {
+            client: Arc::new(client),
+            options: test_options(),
+            commands: cmd_rx,
+            state_tx,
+            events: event_tx,
+            shutdown: shutdown_rx,
+            state: ViewState::new(TransportKind::Unix),
+        };
+        let mut pending = BTreeMap::new();
+        let mut snapshot = Some(SnapshotTracker::new());
+        let mut synchronized = false;
+
+        let notification = maild_client::Notification {
+            method: maild_client::TRANSLATION_PROVIDERS_NOTIFICATION.into(),
+            params: json!({
+                "generation": 7,
+                "providers": [{
+                    "id": "org.example.translator",
+                    "name": "Example Translator",
+                    "version": "1.0.0",
+                    "lifecycle": "supervised",
+                    "enabled": true,
+                    "state": "running",
+                    "has_ui": false,
+                    "registered": true,
+                    "generation": 3,
+                    "supported_languages": ["en", "zh-Hans"],
+                    "max_batch_items": 16,
+                    "max_batch_chars": 12000,
+                    "max_concurrency": 2,
+                    "supports_cancel": true,
+                    "variant_revision": "demo-v1"
+                }]
+            }),
+        };
+
+        let follow_up = actor
+            .handle_incoming(
+                Incoming::Notification(notification),
+                &mut pending,
+                &mut snapshot,
+                &mut synchronized,
+                true,
+            )
+            .unwrap();
+        assert!(follow_up.is_none());
+        assert!(
+            snapshot.as_ref().unwrap().buffered.is_empty(),
+            "translation/providers 不应进入快照缓冲"
+        );
+
+        let AppEvent::Notification(ServerNotification::TranslationProviders(event)) =
+            events.try_recv().unwrap()
+        else {
+            panic!("expected TranslationProviders event");
+        };
+        assert_eq!(event.generation, 7);
+        assert_eq!(event.providers.len(), 1);
+        assert_eq!(event.providers[0].id, "org.example.translator");
+        assert_eq!(event.providers[0].generation, 3);
     }
 
     #[cfg(unix)]

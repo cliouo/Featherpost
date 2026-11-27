@@ -67,6 +67,11 @@ struct PackageManifest {
     executable: Option<PathBuf>,
     #[serde(default)]
     ui_executable: Option<PathBuf>,
+    /// ADR-0048 决策 5：仅 `schema_version = 2` 起允许。
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    l10n: std::collections::BTreeMap<String, crate::PackageL10nEntry>,
 }
 
 /// Read enough package metadata to present an exact install confirmation. The daemon remains the
@@ -89,8 +94,13 @@ pub fn inspect_plugin_package(source: &Path) -> Result<PluginPackageSummary, Str
     let text = std::str::from_utf8(&bytes).map_err(|_| "plugin.toml 必须是 UTF-8")?;
     let manifest: PackageManifest =
         toml::from_str(text).map_err(|error| format!("plugin.toml 无效: {error}"))?;
-    if manifest.schema_version != 1 || manifest.protocol_version != 1 {
+    if !matches!(manifest.schema_version, 1 | 2) || manifest.protocol_version != 1 {
         return Err("插件包协议版本不受支持".into());
+    }
+    if manifest.schema_version < 2
+        && (manifest.description.is_some() || !manifest.l10n.is_empty())
+    {
+        return Err("description 与 l10n 需要 schema_version = 2".into());
     }
     if manifest.id.trim().is_empty()
         || manifest.name.trim().is_empty()
@@ -98,6 +108,10 @@ pub fn inspect_plugin_package(source: &Path) -> Result<PluginPackageSummary, Str
         || manifest.lifecycle.trim().is_empty()
     {
         return Err("plugin.toml 缺少 id、name、version 或 lifecycle".into());
+    }
+    let lowered_id = manifest.id.to_ascii_lowercase();
+    if lowered_id == "builtin" || lowered_id.starts_with("builtin.") {
+        return Err("plugin.toml id 不能占用保留命名空间 builtin.*".into());
     }
     let _ = (manifest.capabilities, manifest.executable);
     Ok(PluginPackageSummary {
@@ -491,6 +505,35 @@ mod tests {
         assert_eq!(summary.id, "org.example.mail");
         assert_eq!(summary.version, "1.2.3");
         assert!(summary.has_ui);
+    }
+
+    #[test]
+    fn inspection_accepts_schema_v2_translation_provider_and_rejects_builtin_namespace() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(
+            root.path().join(MANIFEST_NAME),
+            "schema_version = 2\nprotocol_version = 1\nid = \"org.example.translator\"\nname = \"Example Translator\"\ndescription = \"Local translation provider\"\nversion = \"1.0.0\"\nlifecycle = \"independent\"\ncapabilities = [\"translation_provider\"]\n[l10n.\"zh-Hans\"]\nname = \"示例翻译\"\n",
+        )
+        .unwrap();
+        let summary = inspect_plugin_package(root.path()).unwrap();
+        assert_eq!(summary.id, "org.example.translator");
+        assert_eq!(summary.lifecycle, "independent");
+
+        let v1_with_l10n = tempfile::tempdir().unwrap();
+        fs::write(
+            v1_with_l10n.path().join(MANIFEST_NAME),
+            "schema_version = 1\nprotocol_version = 1\nid = \"org.example.bad\"\nname = \"Bad\"\ndescription = \"not allowed in v1\"\nversion = \"1.0.0\"\nlifecycle = \"independent\"\ncapabilities = [\"translation_provider\"]\n",
+        )
+        .unwrap();
+        assert!(inspect_plugin_package(v1_with_l10n.path()).is_err());
+
+        let builtin = tempfile::tempdir().unwrap();
+        fs::write(
+            builtin.path().join(MANIFEST_NAME),
+            "schema_version = 2\nprotocol_version = 1\nid = \"builtin.openai_compatible\"\nname = \"Fake Builtin\"\nversion = \"1.0.0\"\nlifecycle = \"independent\"\ncapabilities = [\"translation_provider\"]\n",
+        )
+        .unwrap();
+        assert!(inspect_plugin_package(builtin.path()).is_err());
     }
 
     #[cfg(unix)]

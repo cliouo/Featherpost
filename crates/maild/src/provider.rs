@@ -57,7 +57,7 @@ pub(crate) enum ProviderReply {
 }
 
 impl ProviderReply {
-    fn unavailable(message: &str) -> Self {
+    pub(crate) fn unavailable(message: &str) -> Self {
         Self::Err {
             code: PROVIDER_UNAVAILABLE,
             message: message.to_owned(),
@@ -65,12 +65,40 @@ impl ProviderReply {
     }
 }
 
+/// 入站帧按反向调用应答解析的结果（ADR-0021 / ADR-0050）。
+///
+/// 必须显式区分「非应答帧」与「已丢弃的迟到应答」：后者绝不能落回请求解析并回发错误帧。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ResponseRouteOutcome {
+    /// 不是 JSON-RPC 应答帧（例如请求、通知或非应答格式），交由后续请求解析处理。
+    NotResponse,
+    /// 命中本会话的未决反向调用并已投递给等待方。
+    Routed,
+    /// 合法的 JSON-RPC 应答帧（无 `method`、有非空 `id` 与 `result`/`error`），但对应 pending
+    /// 已因超时/取消/撤销而移除；已静默丢弃并计数，绝不落入请求解析。
+    DroppedLateResponse,
+}
+
+/// 同一条插件长连接上不同角色的属主标识。
+///
+/// 双角色连接（同时注册 `transport_provider` 与 `translation_provider`）共享同一份数字
+/// `next_id` 分配器与 pending 表，但替换/撤销某一角色时只让该角色对应属主的未决调用失败，
+/// 绝不误伤同一连接上的另一角色。
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub(crate) enum CallOwner {
+    Transport(u64),
+    Translation(u64),
+}
+
+static NEXT_TRANSPORT_OWNER_ID: AtomicU64 = AtomicU64::new(1);
+
 /// 每条连接的出站请求状态：id 分配 + pending 表。
 ///
-/// 属于会话（[`crate::api::SessionAuth`]）而非端点：端点只是把同一张表
-/// 借给注册表。普通客户端请求从不进入这张表——只有守护进程主动外呼才登记。
+/// 属于会话（[`crate::api::SessionAuth`]）而非端点：各角色端点借用同一张表与同一个
+/// 递增数字 id 分配器，按 `CallOwner` 隔离失效范围。普通客户端请求从不进入这张表——
+/// 只有守护进程主动外呼才登记。
 pub(crate) struct SessionCallState {
-    pending: Mutex<HashMap<String, oneshot::Sender<ProviderReply>>>,
+    pending: Mutex<HashMap<String, (CallOwner, oneshot::Sender<ProviderReply>)>>,
     next_id: AtomicU64,
 }
 
@@ -82,10 +110,15 @@ impl SessionCallState {
         })
     }
 
+    /// 在本连接上分配下一个单调递增的数字 JSON-RPC id（跨角色共享，避免碰撞）。
+    pub(crate) fn allocate_id(&self) -> u64 {
+        self.next_id.fetch_add(1, Ordering::Relaxed)
+    }
+
     /// serve 读循环：把带 result/error 的入站帧路由到未决调用。
-    /// 返回 false 表示无此 pending（迟到应答或普通客户端帧）。
+    /// 返回 false 表示无此 pending（迟到应答）。
     pub(crate) fn route(&self, id: &str, reply: ProviderReply) -> bool {
-        if let Some(sender) = self.pending.lock().unwrap().remove(id) {
+        if let Some((_, sender)) = self.pending.lock().unwrap().remove(id) {
             let _ = sender.send(reply);
             true
         } else {
@@ -93,20 +126,43 @@ impl SessionCallState {
         }
     }
 
-    /// 端点失效（被顶替/连接关闭）时让所有未决调用立即失败（-32018），
-    /// 调用方拿到明确错误而不是干等超时。迟到的真实应答此后落入「未知 id」丢弃。
+    /// 仅让属于 `owner` 的未决调用立即失败（-32018），不影响同连接上的其他角色。
+    pub(crate) fn fail_owner(&self, owner: CallOwner, message: &str) {
+        let mut pending = self.pending.lock().unwrap();
+        let keys: Vec<String> = pending
+            .iter()
+            .filter(|(_, (entry_owner, _))| *entry_owner == owner)
+            .map(|(key, _)| key.clone())
+            .collect();
+        for key in keys {
+            if let Some((_, sender)) = pending.remove(&key) {
+                let _ = sender.send(ProviderReply::unavailable(message));
+            }
+        }
+    }
+
+    /// 整条连接失效（EOF/强制断开）时让全部未决调用立即失败（-32018）。
+    /// 迟到的真实应答此后落入「未知 id」丢弃。
     pub(crate) fn fail_all(&self, message: &str) {
         let mut pending = self.pending.lock().unwrap();
-        for (_, sender) in pending.drain() {
+        for (_, (_, sender)) in pending.drain() {
             let _ = sender.send(ProviderReply::unavailable(message));
         }
     }
 
-    fn insert(&self, id: &str, sender: oneshot::Sender<ProviderReply>) {
-        self.pending.lock().unwrap().insert(id.to_owned(), sender);
+    pub(crate) fn insert_owned(
+        &self,
+        id: &str,
+        owner: CallOwner,
+        sender: oneshot::Sender<ProviderReply>,
+    ) {
+        self.pending
+            .lock()
+            .unwrap()
+            .insert(id.to_owned(), (owner, sender));
     }
 
-    fn remove(&self, id: &str) {
+    pub(crate) fn remove(&self, id: &str) {
         self.pending.lock().unwrap().remove(id);
     }
 }
@@ -114,9 +170,10 @@ impl SessionCallState {
 /// 一个已注册 provider 端点：输出句柄指向所属会话的写任务。
 pub(crate) struct ProviderEndpoint {
     plugin_id: String,
+    owner_id: u64,
     output: mpsc::Sender<String>,
     calls: Arc<SessionCallState>,
-    /// 单飞：同一连接同时至多一条在途反向调用（与客户端暂存上限对齐）。
+    /// 单飞：同一连接同时至多一条在途 transport 反向调用（与客户端暂存上限对齐）。
     call_lock: tokio::sync::Mutex<()>,
 }
 
@@ -139,6 +196,7 @@ impl ProviderEndpoint {
     ) -> Self {
         Self {
             plugin_id,
+            owner_id: NEXT_TRANSPORT_OWNER_ID.fetch_add(1, Ordering::Relaxed),
             output,
             calls,
             call_lock: tokio::sync::Mutex::new(()),
@@ -149,6 +207,15 @@ impl ProviderEndpoint {
         &self.plugin_id
     }
 
+    pub(crate) fn owner(&self) -> CallOwner {
+        CallOwner::Transport(self.owner_id)
+    }
+
+    pub(crate) fn fail_pending(&self, message: &str) {
+        self.calls.fail_owner(self.owner(), message);
+    }
+
+    #[cfg(test)]
     pub(crate) fn calls(&self) -> &Arc<SessionCallState> {
         &self.calls
     }
@@ -161,10 +228,10 @@ impl ProviderEndpoint {
         timeout: Duration,
     ) -> Result<Value, ProviderCallError> {
         let _guard = self.call_lock.lock().await;
-        let id = self.calls.next_id.fetch_add(1, Ordering::Relaxed);
+        let id = self.calls.allocate_id();
         let key = id.to_string();
         let (tx, rx) = oneshot::channel();
-        self.calls.insert(&key, tx);
+        self.calls.insert_owned(&key, self.owner(), tx);
         struct PendingGuard<'a> {
             calls: &'a SessionCallState,
             key: String,
@@ -334,7 +401,7 @@ mod tests {
 
         // 直接往 pending 表登记一个等待者来模拟在途调用。
         let (reply_tx, reply_rx) = oneshot::channel();
-        calls.insert("42", reply_tx);
+        calls.insert_owned("42", ep.owner(), reply_tx);
 
         calls.fail_all("superseded");
         match reply_rx.await.expect("等待者收到应答") {
@@ -346,6 +413,33 @@ mod tests {
         }
         // 之后迟到的应答找不到 pending。
         assert!(!calls.route("42", ProviderReply::Ok(json!({}))));
+    }
+
+    #[tokio::test]
+    async fn fail_owner_isolates_transport_and_translation_roles_on_shared_connection() {
+        let calls = SessionCallState::new();
+        let (tx_transport, mut rx_transport) = oneshot::channel();
+        let (tx_translation, mut rx_translation) = oneshot::channel();
+        calls.insert_owned("1", CallOwner::Transport(10), tx_transport);
+        calls.insert_owned("2", CallOwner::Translation(20), tx_translation);
+
+        calls.fail_owner(CallOwner::Transport(10), "transport replaced");
+        match rx_transport.try_recv().unwrap() {
+            ProviderReply::Err { code, message } => {
+                assert_eq!(code, PROVIDER_UNAVAILABLE);
+                assert_eq!(message, "transport replaced");
+            }
+            other => panic!("expected transport failure, got {other:?}"),
+        }
+        assert!(
+            rx_translation.try_recv().is_err(),
+            "translation role must remain intact when transport role is replaced"
+        );
+        assert!(calls.route("2", ProviderReply::Ok(json!({ "ok": true }))));
+        assert!(matches!(
+            rx_translation.try_recv().unwrap(),
+            ProviderReply::Ok(_)
+        ));
     }
 
     #[tokio::test]

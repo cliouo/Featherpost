@@ -1,0 +1,13 @@
+schema_version = 2
+protocol_version = 1
+id = "org.featherpost.example-translator"
+name = "Example Translation Provider"
+description = "Minimal runnable translation provider demonstrating non-blocking translate, probe, and cancel"
+version = "0.1.0"
+lifecycle = "supervised"
+capabilities = ["translation_provider"]
+executable = "bin/example-translator"
+
+[l10n."zh-Hans"]
+name = "示例翻译插件"
+description = "最小可运行外部翻译 Provider 示例，演示非阻塞翻译、探测与取消"
