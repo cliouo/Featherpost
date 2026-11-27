@@ -28,7 +28,8 @@ it.each([
     );
     if (!subtitle) expect(html).not.toContain("<p>me@example.test</p>");
     expect(html).toMatch(new RegExp(`aria-label="[^"]*${label}[^"]*"`));
-    expect(html).toMatch(new RegExp(`title="[^"]*${label}[^"]*"`));
+    expect(html).not.toMatch(/<button[^>]*\btitle="/);
+    expect(html).toMatch(new RegExp(`role="tooltip"[^>]*>[^<]*<span[^>]*>[^<]*${label}`));
     controller.confirmAccount(bridge.profileRows[0], false);
     expect(controller.store.getSnapshot().confirm?.title).toContain(label);
     controller.cancelConfirmation();

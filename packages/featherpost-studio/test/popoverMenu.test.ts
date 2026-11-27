@@ -536,7 +536,11 @@ describe("ReaderMoreMenu and AccountMore integration", () => {
     );
 
     const trigger = container.querySelector<HTMLButtonElement>("button.icon-button")!;
-    expect(trigger.getAttribute("title")).toBeTruthy();
+    expect(trigger.getAttribute("title")).toBeNull();
+    expect(trigger.getAttribute("aria-label")).toBeTruthy();
+    const tooltipId = trigger.getAttribute("aria-labelledby");
+    expect(tooltipId).toBeTruthy();
+    expect(document.getElementById(tooltipId!)?.getAttribute("role")).toBe("tooltip");
     expect(trigger.getAttribute("aria-haspopup")).toBe("menu");
 
     act(() => {
