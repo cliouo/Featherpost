@@ -64,6 +64,12 @@ export {
   type TabsValueChangeReason,
 } from "./Tabs";
 export {
+  TokenInput,
+  type TokenInputItem,
+  type TokenInputProps,
+  type TokenInputSuggestion,
+} from "./TokenInput";
+export {
   attachWindowDismissal,
   closeAllPopovers,
   useWindowDismiss,

@@ -116,6 +116,7 @@ describe("Shared scrollbar styling and layout stability (#29)", () => {
       // Shared compose
       ["compose .compose-scroll", composeCss, ".compose-scroll"],
       ["compose textarea", composeCss, ".compose-body textarea"],
+      ["compose .recipient-suggest-list", composeCss, ".recipient-suggest-list"],
     ];
 
     for (const [label, css, selector] of containers) {

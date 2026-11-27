@@ -2,11 +2,33 @@ import { m } from "@featherpost/i18n/messages";
 
 import { Store } from "../host/store";
 import { uiLocale } from "../i18n";
-import { bridgeErrorText, errorCode } from "../bridge/errors";
-import type { MessageIdentity } from "../bridge/types";
+import { BridgeError, bridgeErrorText, errorCode } from "../bridge/errors";
+import type { MessageIdentity, UiContactSuggestion } from "../bridge/types";
+import {
+  buildFallbackContactSuggestions,
+  canonicalAddrSpec,
+  checkRecipientDraftLimits,
+  cleanDisplayName,
+  createRecipientMap,
+  effectiveRecipientValues,
+  hasControlChar,
+  hasTopLevelDelimiter,
+  isValidAddrSpec,
+  MAX_CONTACT_QUERY_BYTES,
+  mergeRecipientTokens,
+  parseRecipientList,
+  parseRecipientToken,
+  RECIPIENT_FIELDS,
+  recipientDedupKey,
+  utf8ByteLength,
+  type RecipientFieldName,
+  type RecipientLimitError,
+  type RecipientMap,
+} from "./recipients";
 import {
   attachmentInput,
   type ComposeBridge,
+  type ContactSearchSource,
   type Draft,
   type DraftSummary,
   type Patch,
@@ -35,6 +57,8 @@ export type Upload = PickedFile & {
 export interface ComposeState {
   draft: Draft | null;
   fields: Fields | null;
+  recipients: RecipientMap | null;
+  recipientNames: Record<string, string>;
   revision: number;
   savedRevision: number;
   saving: boolean;
@@ -64,16 +88,39 @@ const fieldsOf = (d: Draft): Fields => ({
   body: d.body,
 });
 export const addresses = (value: string) =>
-  value
-    .split(/[,;\n]/)
-    .map((v) => v.trim())
-    .filter(Boolean);
-const patchOf = (f: Fields): Patch => ({
-  ...f,
-  to: addresses(f.to),
-  cc: addresses(f.cc),
-  bcc: addresses(f.bcc),
-});
+  parseRecipientList(value).map((item) => item.value);
+const recipientArraysOf = (
+  fields: Fields,
+  recipients: RecipientMap | null,
+): Record<RecipientFieldName, string[]> =>
+  recipients
+    ? {
+        to: effectiveRecipientValues(recipients.to),
+        cc: effectiveRecipientValues(recipients.cc),
+        bcc: effectiveRecipientValues(recipients.bcc),
+      }
+    : {
+        to: addresses(fields.to),
+        cc: addresses(fields.cc),
+        bcc: addresses(fields.bcc),
+      };
+const limitMessage = (kind: RecipientLimitError): string =>
+  kind === "too_many"
+    ? m.compose_validate_too_many_recipients()
+    : kind === "too_long"
+      ? m.compose_validate_address_too_long()
+      : m.compose_validate_address_control_char();
+const patchOf = (f: Fields, recipients: RecipientMap | null): Patch => {
+  const lists = recipientArraysOf(f, recipients);
+  return {
+    ...f,
+    to: lists.to,
+    cc: lists.cc,
+    bcc: lists.bcc,
+  };
+};
+const isRecipientField = (field: keyof Fields): field is RecipientFieldName =>
+  field === "to" || field === "cc" || field === "bcc";
 export const sourceKey = (i: MessageIdentity) =>
   JSON.stringify([i.account, i.folder, i.uid]);
 const failure = (e: unknown) =>
@@ -85,6 +132,8 @@ export class ComposeController {
   readonly store = new Store<ComposeState>({
     draft: null,
     fields: null,
+    recipients: null,
+    recipientNames: {},
     revision: 0,
     savedRevision: 0,
     saving: false,
@@ -110,6 +159,7 @@ export class ComposeController {
   private replies = new Map<string, string>();
   private stops: Array<() => void> = [];
   private sending = false;
+  private contactSource: ContactSearchSource = {};
   private dropScope = () => true;
   private beforeClose = async () => true;
   private leaveGuard: (
@@ -120,6 +170,9 @@ export class ComposeController {
     next();
     return true;
   };
+  setContactSource(source: Partial<ContactSearchSource>) {
+    this.contactSource = { ...this.contactSource, ...source };
+  }
   setBeforeClose(guard:()=>Promise<boolean>) { this.beforeClose = guard; }
   setBeforeNavigate(
     guard: (id: string, next: () => void, cancel?: () => void) => boolean,
@@ -210,6 +263,309 @@ export class ComposeController {
       !s.uncertain
     );
   }
+  private canEdit() {
+    const s = this.store.getSnapshot();
+    return (
+      !!s.fields &&
+      !!s.recipients &&
+      !s.busy &&
+      !s.closing &&
+      this.editable() &&
+      !s.draft?.has_html
+    );
+  }
+  private scheduleAutosave() {
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = setTimeout(() => {
+      void this.flush().catch(() => {});
+    }, 500);
+  }
+  private applyRecipients(
+    nextRecipients: RecipientMap,
+    extraNames?: Record<string, string>,
+    touchedField?: RecipientFieldName,
+  ) {
+    const s = this.store.getSnapshot();
+    if (!s.fields) return;
+    const lists = recipientArraysOf(s.fields, nextRecipients);
+    const nextFields: Fields = {
+      ...s.fields,
+      to: lists.to.join(", "),
+      cc: lists.cc.join(", "),
+      bcc: lists.bcc.join(", "),
+    };
+    const limits = checkRecipientDraftLimits(lists);
+    const nextErrors: ComposeState["errors"] = { ...s.errors };
+    if (touchedField) {
+      nextErrors[touchedField] = undefined;
+    }
+    for (const key of RECIPIENT_FIELDS) {
+      const limitKind = limits[key];
+      if (limitKind) {
+        nextErrors[key] = limitMessage(limitKind);
+      } else if (
+        nextErrors[key] === m.compose_validate_too_many_recipients() ||
+        nextErrors[key] === m.compose_validate_address_too_long() ||
+        nextErrors[key] === m.compose_validate_address_control_char()
+      ) {
+        nextErrors[key] = undefined;
+      }
+    }
+    const nextNames =
+      extraNames && Object.keys(extraNames).length > 0
+        ? { ...s.recipientNames, ...extraNames }
+        : s.recipientNames;
+    const clearLimitBanner =
+      Object.keys(limits).length === 0 &&
+      (s.error === m.compose_validate_too_many_recipients() ||
+        s.error === m.compose_validate_address_too_long() ||
+        s.error === m.compose_validate_address_control_char());
+    this.store.patch({
+      fields: nextFields,
+      recipients: nextRecipients,
+      recipientNames: nextNames,
+      revision: s.revision + 1,
+      errors: nextErrors,
+      ...(clearLimitBanner ? { error: null } : {}),
+      confirm: null,
+    });
+    this.scheduleAutosave();
+  }
+  setRecipientPending(field: RecipientFieldName, value: string) {
+    if (!this.canEdit()) return;
+    const s = this.store.getSnapshot();
+    const current = s.recipients![field];
+    if (current.pending === value) return;
+    const nextRecipients: RecipientMap = {
+      ...s.recipients!,
+      [field]: { ...current, pending: value },
+    };
+    this.applyRecipients(nextRecipients, undefined, field);
+  }
+  commitRecipientInput(field: RecipientFieldName, raw?: string) {
+    if (!this.canEdit()) return;
+    const s = this.store.getSnapshot();
+    const current = s.recipients![field];
+    const sourceText = raw ?? current.pending;
+    if (current.editingIndex === null && !sourceText.trim() && !current.pending) {
+      return;
+    }
+    const parsed = parseRecipientList(sourceText);
+    const merged = mergeRecipientTokens(
+      current.chips,
+      parsed,
+      current.editingIndex,
+    );
+    const nextRecipients: RecipientMap = {
+      ...s.recipients!,
+      [field]: {
+        chips: merged.chips,
+        pending: "",
+        editingIndex: null,
+        editingOriginal: null,
+      },
+    };
+    this.applyRecipients(nextRecipients, merged.names, field);
+  }
+  pasteRecipientText(
+    field: RecipientFieldName,
+    pasted: string,
+    selectionStart: number,
+    selectionEnd: number,
+  ) {
+    if (!this.canEdit()) return;
+    const s = this.store.getSnapshot();
+    const current = s.recipients![field];
+    const safeStart = Math.max(0, Math.min(selectionStart, current.pending.length));
+    const safeEnd = Math.max(safeStart, Math.min(selectionEnd, current.pending.length));
+    const combined =
+      current.pending.slice(0, safeStart) +
+      pasted +
+      current.pending.slice(safeEnd);
+    if (hasTopLevelDelimiter(pasted)) {
+      this.commitRecipientInput(field, combined);
+    } else {
+      this.setRecipientPending(field, combined);
+    }
+  }
+  selectRecipientSuggestion(
+    field: RecipientFieldName,
+    suggestion: UiContactSuggestion,
+  ) {
+    if (!this.canEdit()) return;
+    const s = this.store.getSnapshot();
+    const current = s.recipients![field];
+    const parsed = parseRecipientToken(suggestion.address);
+    const displayName = cleanDisplayName(suggestion.name, parsed.value);
+    const item = displayName ? { ...parsed, displayName } : parsed;
+    const merged = mergeRecipientTokens(
+      current.chips,
+      [item],
+      current.editingIndex,
+    );
+    const nextRecipients: RecipientMap = {
+      ...s.recipients!,
+      [field]: {
+        chips: merged.chips,
+        pending: "",
+        editingIndex: null,
+        editingOriginal: null,
+      },
+    };
+    this.applyRecipients(nextRecipients, merged.names, field);
+  }
+  removeRecipient(field: RecipientFieldName, index: number) {
+    if (!this.canEdit()) return;
+    const s = this.store.getSnapshot();
+    const current = s.recipients![field];
+    if (index < 0 || index >= current.chips.length) return;
+    const chips = current.chips.filter((_, i) => i !== index);
+    let editingIndex = current.editingIndex;
+    let editingOriginal = current.editingOriginal;
+    let pending = current.pending;
+    if (editingIndex !== null) {
+      if (editingIndex === index) {
+        editingIndex = null;
+        editingOriginal = null;
+        pending = "";
+      } else if (editingIndex > index) {
+        editingIndex -= 1;
+      }
+    }
+    const nextRecipients: RecipientMap = {
+      ...s.recipients!,
+      [field]: { chips, pending, editingIndex, editingOriginal },
+    };
+    this.applyRecipients(nextRecipients, undefined, field);
+  }
+  startEditRecipient(field: RecipientFieldName, index: number) {
+    if (!this.canEdit()) return;
+    const before = this.store.getSnapshot().recipients![field];
+    if (before.editingIndex === index) return;
+    if (before.editingIndex !== null || before.pending.trim().length > 0) {
+      this.commitRecipientInput(field);
+    }
+    const s = this.store.getSnapshot();
+    const current = s.recipients![field];
+    if (index < 0 || index >= current.chips.length) return;
+    const original = current.chips[index]!;
+    const nextRecipients: RecipientMap = {
+      ...s.recipients!,
+      [field]: {
+        ...current,
+        editingIndex: index,
+        editingOriginal: original,
+        pending: original,
+      },
+    };
+    this.store.patch({ recipients: nextRecipients });
+  }
+  cancelEditRecipient(field: RecipientFieldName) {
+    const s = this.store.getSnapshot();
+    if (!s.fields || !s.recipients) return;
+    const current = s.recipients[field];
+    if (current.editingIndex === null) return;
+    const chips = [...current.chips];
+    if (
+      current.editingOriginal !== null &&
+      current.editingIndex >= 0 &&
+      current.editingIndex < chips.length
+    ) {
+      chips[current.editingIndex] = current.editingOriginal;
+    }
+    const nextRecipients: RecipientMap = {
+      ...s.recipients,
+      [field]: {
+        chips,
+        pending: "",
+        editingIndex: null,
+        editingOriginal: null,
+      },
+    };
+    const lists = recipientArraysOf(s.fields, nextRecipients);
+    const nextFields: Fields = {
+      ...s.fields,
+      [field]: lists[field].join(", "),
+    };
+    const changed = nextFields[field] !== s.fields[field];
+    this.store.patch({
+      recipients: nextRecipients,
+      fields: nextFields,
+      ...(changed ? { revision: s.revision + 1 } : {}),
+    });
+    if (changed) this.scheduleAutosave();
+  }
+  commitAllPendingRecipients() {
+    if (!this.canEdit()) return;
+    for (const field of RECIPIENT_FIELDS) {
+      const state = this.store.getSnapshot().recipients?.[field];
+      if (!state) continue;
+      if (state.editingIndex !== null || state.pending.trim().length > 0) {
+        this.commitRecipientInput(field);
+      }
+    }
+  }
+  async searchContacts(
+    account: string,
+    query: string,
+    limit = 8,
+  ): Promise<UiContactSuggestion[]> {
+    const trimmed = query.trim();
+    if (
+      !account ||
+      utf8ByteLength(trimmed) > MAX_CONTACT_QUERY_BYTES ||
+      hasControlChar(trimmed)
+    ) {
+      return [];
+    }
+    const fallback = (): UiContactSuggestion[] => {
+      const rows = this.contactSource.fallbackRows?.(account) ?? [];
+      return buildFallbackContactSuggestions(
+        account,
+        rows,
+        this.store.getSnapshot().senders,
+        trimmed,
+        limit,
+      );
+    };
+    const s = this.store.getSnapshot();
+    if (!s.online || !this.contactSource.searchContacts) {
+      return fallback();
+    }
+    try {
+      const raw = await this.contactSource.searchContacts(
+        account,
+        trimmed || undefined,
+        limit,
+      );
+      const out: UiContactSuggestion[] = [];
+      const seen = new Set<string>();
+      for (const item of raw) {
+        const canonical = canonicalAddrSpec(item.address);
+        if (!canonical || seen.has(canonical)) continue;
+        seen.add(canonical);
+        const name = cleanDisplayName(item.name, canonical);
+        out.push(name ? { address: canonical, name } : { address: canonical });
+      }
+      return out;
+    } catch (e) {
+      const code = errorCode(e);
+      const reason = e instanceof BridgeError ? e.detail.reason : undefined;
+      if (code === "denied") {
+        return [];
+      }
+      if (
+        code === "offline" ||
+        reason === "contacts_unsupported" ||
+        code === "failed" ||
+        code === "not_found" ||
+        code === "incompatible"
+      ) {
+        return fallback();
+      }
+      return [];
+    }
+  }
   change(field: keyof Fields, value: string) {
     const s = this.store.getSnapshot();
     if (
@@ -220,16 +576,33 @@ export class ComposeController {
       s.draft?.has_html
     )
       return;
+    if (isRecipientField(field) && s.recipients) {
+      const parsed = parseRecipientList(value);
+      const names: Record<string, string> = {};
+      for (const item of parsed) {
+        if (item.displayName) {
+          names[recipientDedupKey(item.value)] = item.displayName;
+        }
+      }
+      const nextRecipients: RecipientMap = {
+        ...s.recipients,
+        [field]: {
+          chips: parsed.map((p) => p.value),
+          pending: "",
+          editingIndex: null,
+          editingOriginal: null,
+        },
+      };
+      this.applyRecipients(nextRecipients, names, field);
+      return;
+    }
     this.store.patch({
       fields: { ...s.fields, [field]: value },
       revision: s.revision + 1,
       errors: { ...s.errors, [field]: undefined },
       confirm: null,
     });
-    if (this.timer) clearTimeout(this.timer);
-    this.timer = setTimeout(() => {
-      void this.flush().catch(() => {});
-    }, 500);
+    this.scheduleAutosave();
   }
   setSender(value: string) {
     const [account, from] = JSON.parse(value) as [string, string];
@@ -249,12 +622,26 @@ export class ComposeController {
         this.store.patch({ error: m.compose_error_offline_kept() });
         throw new Error(m.compose_error_offline_short());
       }
+      const recipientLists = recipientArraysOf(s.fields, s.recipients);
+      const limitErrors = checkRecipientDraftLimits(recipientLists);
+      const limitEntries = Object.entries(limitErrors) as Array<
+        [RecipientFieldName, RecipientLimitError]
+      >;
+      if (limitEntries.length > 0) {
+        const mappedErrors: ComposeState["errors"] = { ...s.errors };
+        for (const [field, kind] of limitEntries) {
+          mappedErrors[field] = limitMessage(kind);
+        }
+        const firstMessage = limitMessage(limitEntries[0]![1]);
+        this.store.patch({ errors: mappedErrors, error: firstMessage });
+        throw new Error(firstMessage);
+      }
       this.store.patch({ saving: true });
       try {
         const result = await this.bridge.save(
           s.draft.id,
           s.draft.version,
-          patchOf(s.fields),
+          patchOf(s.fields, s.recipients),
         );
         this.store.patch({
           draft: result,
@@ -277,9 +664,23 @@ export class ComposeController {
     return this.queue(() => this.saveLoop());
   }
   private load(draft: Draft, source: string | null = null, inline = false) {
+    const { recipients, names } = createRecipientMap(draft);
+    const fields: Fields = {
+      ...fieldsOf(draft),
+      to: recipients.to.chips.join(", "),
+      cc: recipients.cc.chips.join(", "),
+      bcc: recipients.bcc.chips.join(", "),
+    };
+    const prev = this.store.getSnapshot();
+    const keepNames =
+      prev.draft && prev.draft.account === draft.account
+        ? { ...prev.recipientNames, ...names }
+        : names;
     this.store.patch({
       draft,
-      fields: fieldsOf(draft),
+      fields,
+      recipients,
+      recipientNames: keepNames,
       revision: 0,
       savedRevision: 0,
       error: null,
@@ -450,38 +851,32 @@ export class ComposeController {
   private validate() {
     const s = this.store.getSnapshot(),
       f = s.fields!;
+    const lists = recipientArraysOf(f, s.recipients);
     const errors: ComposeState["errors"] = {};
     const sender = s.senders.find(
       (v) => v.account === f.account && (v.address === f.from || !f.from),
     );
     if (!sender?.available)
       errors.from = m.compose_validate_sender_unavailable();
-    if (
-      !addresses(f.to).length &&
-      !addresses(f.cc).length &&
-      !addresses(f.bcc).length
-    )
+    if (!lists.to.length && !lists.cc.length && !lists.bcc.length)
       errors.to = m.compose_validate_to_required();
-    for (const key of ["to", "cc", "bcc"] as const) {
-      if (addresses(f[key]).some((v) => !/^[^\s<>@,;]+@[^\s<>@,;]+$/.test(v)))
+    const limitErrors = checkRecipientDraftLimits(lists);
+    for (const key of RECIPIENT_FIELDS) {
+      if (limitErrors[key]) {
+        errors[key] = limitMessage(limitErrors[key]!);
+      } else if (lists[key].some((v) => !isValidAddrSpec(v))) {
         errors[key] = m.compose_validate_address_invalid();
+      }
     }
-    if (
-      addresses(f.to).length +
-        addresses(f.cc).length +
-        addresses(f.bcc).length >
-      100
-    )
-      errors.to = m.compose_validate_too_many_recipients();
-    if (new TextEncoder().encode(f.subject).length > 998)
+    if (utf8ByteLength(f.subject) > 998)
       errors.subject = m.compose_validate_subject_too_long();
-    if (new TextEncoder().encode(f.body).length > 256 * 1024)
+    if (utf8ByteLength(f.body) > 256 * 1024)
       errors.body = m.compose_validate_body_too_long();
     if (
       sender?.simple &&
-      (addresses(f.to).length !== 1 ||
-        addresses(f.cc).length ||
-        addresses(f.bcc).length ||
+      (lists.to.length !== 1 ||
+        lists.cc.length ||
+        lists.bcc.length ||
         s.draft!.attachments.length)
     )
       errors.from = m.compose_validate_simple_sender();
@@ -501,22 +896,24 @@ export class ComposeController {
       before.closing
     )
       return;
+    this.commitAllPendingRecipients();
+    const afterCommit = this.store.getSnapshot();
     if (!this.validate()) return;
     if (
-      before.uploads.length ||
-      before.draft.attachments.some((a) => !a.stored)
+      afterCommit.uploads.length ||
+      afterCommit.draft!.attachments.some((a) => !a.stored)
     ) {
       this.store.patch({ error: m.compose_error_attachments_not_ready() });
       return;
     }
     if (!confirmed) {
-      if (!before.fields!.subject.trim()) {
+      if (!afterCommit.fields!.subject.trim()) {
         this.confirm("subject");
         return;
       }
       if (
-        MENTIONS_ATTACHMENT.test(before.fields!.body) &&
-        !before.draft.attachments.length
+        MENTIONS_ATTACHMENT.test(afterCommit.fields!.body) &&
+        !afterCommit.draft!.attachments.length
       ) {
         this.confirm("attachment");
         return;
@@ -658,6 +1055,8 @@ export class ComposeController {
         this.store.patch({
           draft: null,
           fields: null,
+          recipients: null,
+          recipientNames: {},
           confirm: null,
           error: null,
           uploads: [],

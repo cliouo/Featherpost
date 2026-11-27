@@ -67,6 +67,19 @@ export function studioMailbox(
     groupedBridge(host.bridge),
     (selection) => host.setSelection(selection),
   );
+  composer.setContactSource({
+    fallbackRows: (account) => {
+      const mState = controller.store.getSnapshot();
+      const rows = [
+        ...mState.rows,
+        ...mState.threadRows,
+        ...mState.remote.rows,
+        ...(mState.selectedRow ? [mState.selectedRow] : []),
+        ...(mState.detail ? [mState.detail] : []),
+      ];
+      return rows.filter((row) => row.account === account);
+    },
+  });
   const isUnfetchedRemote = (row: UiSummary) =>
     controller.isRemote(row) &&
     !controller.state.remote.fetched.includes(messageKey(row));
