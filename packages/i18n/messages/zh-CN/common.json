@@ -43,6 +43,7 @@
   "common_bridge_reason_attachment_read_error": "读取附件失败。",
   "common_bridge_reason_attachment_read_failed": "无法读取附件。",
   "common_bridge_reason_browser_failed": "无法打开系统浏览器。",
+  "common_bridge_reason_contacts_unsupported": "后台版本不支持联系人自动补全。",
   "common_bridge_reason_credential_store_locked": "无法访问系统凭据库，请解锁后重试。",
   "common_bridge_reason_credentials_invalid": "认证信息无效或过长。",
   "common_bridge_reason_denied": "当前前端没有执行这项操作的授权。",

@@ -40,8 +40,8 @@ use tauri::{Emitter as _, Manager as _, Url, WindowEvent};
 
 use bridge::UiLink;
 pub use bridge::{
-    Bridge, UiError, UiErrorCode, UiLocale, UiSnapshot, FRONTEND_ID, INTENT_EVENT, LINK_EVENT,
-    LOCALE_EVENT, PROXY_EVENT, STATE_EVENT,
+    Bridge, UiContactSuggestion, UiError, UiErrorCode, UiLocale, UiSnapshot, FRONTEND_ID,
+    INTENT_EVENT, LINK_EVENT, LOCALE_EVENT, PROXY_EVENT, STATE_EVENT,
 };
 use documents::{
     document_response, navigation_verdict, not_found, part_response, remote_image_response, route,
@@ -193,6 +193,7 @@ pub fn run_with_options(bridge: Arc<Bridge>, custom_connection: bool) -> Result<
             commands::ui_list_folders,
             commands::ui_list_messages,
             commands::ui_get_message,
+            commands::ui_search_contacts,
             commands::ui_refresh,
             commands::ui_frontend_info,
             commands::ui_claim_intent,

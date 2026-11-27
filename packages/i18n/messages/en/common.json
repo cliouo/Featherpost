@@ -43,6 +43,7 @@
   "common_bridge_reason_attachment_read_error": "Reading the attachment failed.",
   "common_bridge_reason_attachment_read_failed": "Couldn't read the attachment.",
   "common_bridge_reason_browser_failed": "Couldn't open the system browser.",
+  "common_bridge_reason_contacts_unsupported": "This version of the background service doesn't support contact autocomplete.",
   "common_bridge_reason_credential_store_locked": "Couldn't access the system credential store. Unlock it and try again.",
   "common_bridge_reason_credentials_invalid": "The credentials are invalid or too long.",
   "common_bridge_reason_denied": "This frontend isn't authorized to do that.",

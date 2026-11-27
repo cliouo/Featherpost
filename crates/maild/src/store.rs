@@ -1237,6 +1237,158 @@ impl Store {
         Ok((rows.collect::<Result<Vec<_>, _>>()?, total))
     }
 
+    /// 联系人检索阶段 1（锁内只取原始头行）：从指定账户拉取有界近期样本与近期已发送样本。
+    ///
+    /// ADR-0034：绝不查询 `drafts` 表；仅读取存在且非 spam/trash/drafts 文件夹下的可见未删消息
+    /// （`pending_removal = 0 AND deleted = 0`），严格绑定单个 `account`。
+    pub fn recent_contact_rows(
+        &self,
+        account: &str,
+        recent_limit: usize,
+        sent_limit: usize,
+    ) -> Result<Vec<crate::contacts::ContactMessageRow>, rusqlite::Error> {
+        let decode_contact_row = |row: &rusqlite::Row<'_>| {
+            Ok(crate::contacts::ContactMessageRow {
+                id: row.get(0)?,
+                sender: row.get(1)?,
+                recipient: row.get(2)?,
+                cc: row.get(3)?,
+                sort_at: row.get::<_, i64>(4)?.max(0) as u64,
+                folder_role: row.get(5)?,
+            })
+        };
+
+        let conn = self.conn.lock().unwrap();
+        let mut out = Vec::new();
+        if recent_limit > 0 {
+            let mut stmt = conn.prepare(
+                "SELECT m.id, m.sender, m.recipient, m.cc, m.sort_at, f.role
+                 FROM messages m
+                 JOIN folders f ON f.id = m.folder_id AND f.account = m.account
+                 WHERE m.account = ?1
+                   AND m.pending_removal = 0
+                   AND m.deleted = 0
+                   AND f.role NOT IN ('spam', 'trash', 'drafts')
+                 ORDER BY m.sort_at DESC, m.id DESC
+                 LIMIT ?2",
+            )?;
+            let rows = stmt.query_map(params![account, recent_limit as i64], decode_contact_row)?;
+            for row in rows {
+                out.push(row?);
+            }
+        }
+
+        if sent_limit > 0 {
+            let sent_folder_ids: Vec<i64> = {
+                let mut stmt = conn.prepare(
+                    "SELECT id FROM folders WHERE account = ?1 AND role = 'sent'",
+                )?;
+                let rows = stmt.query_map(params![account], |row| row.get::<_, i64>(0))?;
+                rows.collect::<Result<Vec<_>, _>>()?
+            };
+            if !sent_folder_ids.is_empty() {
+                let mut stmt = conn.prepare(
+                    "SELECT m.id, m.sender, m.recipient, m.cc, m.sort_at, 'sent'
+                     FROM messages m
+                     WHERE m.folder_id = ?1
+                       AND m.account = ?2
+                       AND m.pending_removal = 0
+                       AND m.deleted = 0
+                     ORDER BY m.sort_at DESC, m.id DESC
+                     LIMIT ?3",
+                )?;
+                for folder_id in sent_folder_ids {
+                    let rows = stmt.query_map(
+                        params![folder_id, account, sent_limit as i64],
+                        decode_contact_row,
+                    )?;
+                    for row in rows {
+                        out.push(row?);
+                    }
+                }
+            }
+        }
+
+        Ok(out)
+    }
+
+    /// 联系人检索阶段 2（锁内只取原始头行）：仅在近期样本不足时执行有界转义 FTS5 前缀回退。
+    ///
+    /// `fts_match` 必须已限定 `{sender recipients}` 列并经转义，且 SQL 层再次强约束账户、可见性与文件夹角色。
+    pub fn prefix_contact_rows(
+        &self,
+        account: &str,
+        fts_match: &str,
+        limit: usize,
+    ) -> Result<Vec<crate::contacts::ContactMessageRow>, rusqlite::Error> {
+        if limit == 0 || fts_match.is_empty() {
+            return Ok(Vec::new());
+        }
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT m.id, m.sender, m.recipient, m.cc, m.sort_at, f.role
+             FROM messages_fts
+             JOIN messages m ON m.id = messages_fts.rowid
+             JOIN folders f ON f.id = m.folder_id AND f.account = m.account
+             WHERE messages_fts MATCH ?1
+               AND m.account = ?2
+               AND m.pending_removal = 0
+               AND m.deleted = 0
+               AND f.role NOT IN ('spam', 'trash', 'drafts')
+             ORDER BY m.sort_at DESC, m.id DESC
+             LIMIT ?3",
+        )?;
+        let rows = stmt.query_map(params![fts_match, account, limit as i64], |row| {
+            Ok(crate::contacts::ContactMessageRow {
+                id: row.get(0)?,
+                sender: row.get(1)?,
+                recipient: row.get(2)?,
+                cc: row.get(3)?,
+                sort_at: row.get::<_, i64>(4)?.max(0) as u64,
+                folder_role: row.get(5)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    /// 按发件账户检索联系人建议：SQLite 锁仅覆盖有界原始行读取，所有 `mailparse` 解析、
+    /// `validate_send_field` 校验、去重与加权排名均在锁外完成。
+    pub fn search_contacts(
+        &self,
+        account: &str,
+        query: &str,
+        own_addresses: &[String],
+        limit: usize,
+    ) -> Result<Vec<crate::contacts::ContactSuggestion>, rusqlite::Error> {
+        let limit = limit.clamp(1, crate::contacts::MAX_CONTACT_LIMIT);
+        let mut rows = self.recent_contact_rows(
+            account,
+            crate::contacts::RECENT_CONTACT_SAMPLE_LIMIT,
+            crate::contacts::SENT_CONTACT_SAMPLE_LIMIT,
+        )?;
+        let first_pass = crate::contacts::rank_contacts(&rows, query, own_addresses, limit, None);
+        if !query.trim().is_empty() && first_pass.len() < limit {
+            if let Some(fts_expr) = crate::contacts::build_contact_fts_prefix_expression(query) {
+                let extra = self.prefix_contact_rows(
+                    account,
+                    &fts_expr,
+                    crate::contacts::FALLBACK_PREFIX_ROW_LIMIT,
+                )?;
+                if !extra.is_empty() {
+                    rows.extend(extra);
+                    return Ok(crate::contacts::rank_contacts(
+                        &rows,
+                        query,
+                        own_addresses,
+                        limit,
+                        None,
+                    ));
+                }
+            }
+        }
+        Ok(first_pass)
+    }
+
     /// 一条线程的全部消息，**时间正序**——线程是要从头读到尾的，不是列表。
     /// 跨文件夹：收件箱里的来信与已发送里的回复本来就属于同一条会话。
     pub fn thread_summaries(
@@ -2590,5 +2742,39 @@ mod tests {
         }
         assert!(store.list_addresses(None).is_err());
         assert!(store.get_address(&first.id).is_err());
+    }
+
+    #[test]
+    fn recent_contact_query_uses_account_sort_index_without_temp_btree() {
+        let store = Store::open("").unwrap();
+        let conn = store.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "EXPLAIN QUERY PLAN
+                 SELECT m.id, m.sender, m.recipient, m.cc, m.sort_at, f.role
+                 FROM messages m
+                 JOIN folders f ON f.id = m.folder_id AND f.account = m.account
+                 WHERE m.account = ?1
+                   AND m.pending_removal = 0
+                   AND m.deleted = 0
+                   AND f.role NOT IN ('spam', 'trash', 'drafts')
+                 ORDER BY m.sort_at DESC, m.id DESC
+                 LIMIT ?2",
+            )
+            .unwrap();
+        let plan: Vec<String> = stmt
+            .query_map(params!["acc", 800_i64], |row| row.get::<_, String>(3))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        let joined = plan.join("\n");
+        assert!(
+            joined.contains("idx_messages_account_sort"),
+            "近期样本查询必须走 idx_messages_account_sort: {joined}"
+        );
+        assert!(
+            !joined.contains("USE TEMP B-TREE FOR ORDER BY"),
+            "近期样本查询不得引入临时 B-Tree 排序: {joined}"
+        );
     }
 }

@@ -22,6 +22,7 @@ export const BRIDGE_ERROR_REASONS: Readonly<Record<string, () => string>> = {
   attachment_read_error: m.common_bridge_reason_attachment_read_error,
   attachment_read_failed: m.common_bridge_reason_attachment_read_failed,
   browser_failed: m.common_bridge_reason_browser_failed,
+  contacts_unsupported: m.common_bridge_reason_contacts_unsupported,
   credential_store_locked: m.common_bridge_reason_credential_store_locked,
   credentials_invalid: m.common_bridge_reason_credentials_invalid,
   denied: m.common_bridge_reason_denied,

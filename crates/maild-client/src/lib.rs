@@ -1032,6 +1032,29 @@ pub struct SearchRequest<'a> {
     pub offset: u64,
 }
 
+/// `searchContacts` 的单条联系人建议。`address` 恒为经发送校验的裸 ASCII `addr-spec`。
+#[derive(Clone, Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
+pub struct ContactSuggestion {
+    pub address: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+/// `searchContacts` 的应答。
+#[derive(Clone, Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
+pub struct SearchContactsResult {
+    #[serde(default)]
+    pub contacts: Vec<ContactSuggestion>,
+}
+
+/// `searchContacts` 的请求参数。`account` 必填；`limit` 缺省由服务端取 8、上限 20。
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct SearchContactsRequest<'a> {
+    pub account: &'a str,
+    pub query: Option<&'a str>,
+    pub limit: Option<u64>,
+}
+
 /// 写队列里的一条待办（ADR-0027）。
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
 pub struct PendingOp {
@@ -2833,6 +2856,21 @@ impl RpcClient {
     /// `getSearchIndexStatus`：索引回填进度。
     pub async fn search_index_status(&self) -> Result<SearchIndexStatus, ClientError> {
         self.call_typed("getSearchIndexStatus", json!({})).await
+    }
+
+    /// `searchContacts`：按发件账户检索近期与历史联系人建议（只读，`messages_read`）。
+    pub async fn search_contacts(
+        &self,
+        request: &SearchContactsRequest<'_>,
+    ) -> Result<SearchContactsResult, ClientError> {
+        let mut params = json!({ "account": request.account });
+        if let Some(query) = request.query {
+            params["query"] = json!(query);
+        }
+        if let Some(limit) = request.limit {
+            params["limit"] = json!(limit.clamp(1, 20));
+        }
+        self.call_typed("searchContacts", params).await
     }
 
     /// `markMessages`：置位或取消一个标记。本地立刻生效，写回排队（ADR-0027）。

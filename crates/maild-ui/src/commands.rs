@@ -7,8 +7,9 @@
 use tauri::State;
 
 use crate::bridge::{
-    UiDocument, UiError, UiFolder, UiFrontendInfo, UiLocale, UiLocalePreference, UiLocaleUpdate,
-    UiMessage, UiPage, UiReadingPolicy, UiReadingPolicyPatch, UiSnapshot,
+    UiContactSuggestion, UiDocument, UiError, UiFolder, UiFrontendInfo, UiLocale,
+    UiLocalePreference, UiLocaleUpdate, UiMessage, UiPage, UiReadingPolicy, UiReadingPolicyPatch,
+    UiSnapshot,
 };
 use crate::html::LinkKind;
 use crate::mailbox::UiMailboxSyncOutcome;
@@ -49,6 +50,19 @@ pub(crate) async fn ui_get_message(
     uid: String,
 ) -> Result<UiMessage, UiError> {
     state.bridge.get_message(&account, &folder, &uid).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub(crate) async fn ui_search_contacts(
+    state: State<'_, AppState>,
+    account: String,
+    query: Option<String>,
+    limit: Option<u64>,
+) -> Result<Vec<UiContactSuggestion>, UiError> {
+    state
+        .bridge
+        .search_contacts(&account, query.as_deref(), limit)
+        .await
 }
 
 #[tauri::command]

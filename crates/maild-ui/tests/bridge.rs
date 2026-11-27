@@ -1559,3 +1559,82 @@ async fn proxy_config_roundtrip_push_secret_guard_and_corrupt_file_readonly() {
     let _ = shutdown2.send(());
     task2.await.unwrap().unwrap();
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn bridge_search_contacts_enforces_account_isolation_and_param_validation() {
+    let directory = tempfile::tempdir().unwrap();
+    let paths = test_paths(directory.path());
+    write_config(&paths);
+    install_frontend_package(&paths);
+
+    {
+        let db = paths.data_dir.join("mail.sqlite3");
+        let store = Store::open(db.to_str().unwrap()).unwrap();
+        store
+            .upsert_folder("demo", "INBOX", "收件箱", Some(FolderRole::Inbox))
+            .unwrap();
+        store
+            .upsert_folder("demo", "Sent", "已发送", Some(FolderRole::Sent))
+            .unwrap();
+        store
+            .upsert_folder("other", "INBOX", "收件箱", Some(FolderRole::Inbox))
+            .unwrap();
+
+        let mut sent_msg = seeded("demo", "Sent", "1", "发给 Alice", 1_757_300_000);
+        sent_msg.sender = "me@example.test".into();
+        sent_msg.recipient = "Alice <Alice@Example.TEST>".into();
+        store.insert_message(&sent_msg).unwrap();
+
+        let mut inbox_msg = seeded("demo", "INBOX", "2", "来自 Bob", 1_757_200_000);
+        inbox_msg.sender = "Bob <bob@example.test>".into();
+        inbox_msg.recipient = "me@example.test".into();
+        store.insert_message(&inbox_msg).unwrap();
+
+        let mut other_msg = seeded("other", "INBOX", "1", "另一账户", 1_757_400_000);
+        other_msg.sender = "Secret Other <secret@other.test>".into();
+        other_msg.recipient = "other@other.test".into();
+        store.insert_message(&other_msg).unwrap();
+    }
+
+    let (mut task, shutdown) = spawn_daemon(&paths);
+    let socket = paths.runtime_dir.join("mail.sock");
+    wait_socket_or_fail(&mut task, &socket).await;
+
+    let bridge = Bridge::spawn(Endpoint::Unix { path: socket }).unwrap();
+    wait_for(&bridge, |s| s.phase == "online").await;
+
+    let all = bridge.search_contacts("demo", None, None).await.unwrap();
+    assert_eq!(all[0].address, "Alice@example.test");
+    assert_eq!(all[0].name.as_deref(), Some("Alice"));
+    assert!(all.iter().any(|c| c.address == "bob@example.test"));
+    assert!(!all.iter().any(|c| c.address == "secret@other.test"));
+
+    let filtered = bridge
+        .search_contacts("demo", Some("ali"), Some(5))
+        .await
+        .unwrap();
+    assert_eq!(filtered.len(), 1);
+    assert_eq!(filtered[0].address, "Alice@example.test");
+
+    let empty_account = bridge
+        .search_contacts("", None, None)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        (empty_account.code, empty_account.reason),
+        (UiErrorCode::Invalid, "account_required")
+    );
+
+    let zero_limit = bridge
+        .search_contacts("demo", None, Some(0))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        (zero_limit.code, zero_limit.reason),
+        (UiErrorCode::Invalid, "invalid_params")
+    );
+
+    bridge.shutdown().await;
+    let _ = shutdown.send(());
+    task.await.unwrap().unwrap();
+}

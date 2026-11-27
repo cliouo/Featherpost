@@ -185,6 +185,11 @@ export interface UiPage {
   total: number;
 }
 
+export interface UiContactSuggestion {
+  address: string;
+  name?: string | null;
+}
+
 export interface UiFrontendInfo {
   id: string;
   name: string;
@@ -272,6 +277,7 @@ export interface MailBridge {
   folders(account: string): Promise<UiFolder[]>;
   messages(folder: FolderIdentity, offset: number, limit: number): Promise<UiPage>;
   message(identity: MessageIdentity): Promise<UiMessage>;
+  searchContacts?(account: string, query?: string, limit?: number): Promise<UiContactSuggestion[]>;
   refresh(): Promise<void>;
   frontendInfo(): Promise<UiFrontendInfo>;
   // —— ADR-0033：HTML 原位阅读 ——

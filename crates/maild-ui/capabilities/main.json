@@ -28,6 +28,7 @@
     "allow-ui-list-folders",
     "allow-ui-list-messages",
     "allow-ui-get-message",
+    "allow-ui-search-contacts",
     "allow-ui-refresh",
     "allow-ui-frontend-info",
     "allow-ui-claim-intent",
