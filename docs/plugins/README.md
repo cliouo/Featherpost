@@ -174,13 +174,20 @@ name = "示例自动化"
 与 v1 完全相同。
 
 可声明的 capability 为 `events_stream`、`messages_read`、`messages_send`、`settings_read`、
-`settings_write`、`frontend_open`、`notifications_read`、`transport_provider`，以及
+`settings_write`、`frontend_open`、`notifications_read`、`transport_provider`、
+`translation_provider`（ADR-0050）、`drafts_read`、`drafts_write`（ADR-0034），以及
 ADR-0030 新增的 `mailbox_write`。经 ADR-0017/0018/0030 它们是真实授权表：
 认证后的插件主体只能调用声明覆盖的方法（如发信需 `messages_send`、自动归档需
-`mailbox_write`），未声明即 `-32016` 并计入 `denied_calls` 观测字段。`messages_read` 自
+`mailbox_write`、注册外部翻译服务需 `translation_provider`），未声明即 `-32016` 并计入
+`denied_calls` 观测字段。`messages_read` 自
 ADR-0032 起同时覆盖 `readAttachment`——附件字节属于同一封信的同一份内容，能读完整 HTML 原文与
 附件元数据的主体读它的字节不构成新的权限面；`getReadingPolicy` / `setReadingPolicy` 分别归
 `settings_read` / `settings_write`。
+
+**保留命名空间**：`builtin` 与 `builtin.*`（大小写不敏感，如 `builtin.openai_compatible`）
+保留给内建 Provider，外部 `plugin.toml` 与安装事务均 fail-closed 拒绝使用。
+`maild-client::inspect_plugin_package` 与 daemon 侧 `external.rs` 现已同步支持
+`schema_version = 1 | 2`（`description` 与 `[l10n.<tag>]` 仅 `schema_version = 2` 允许）。
 
 `accounts_manage` / `addresses_manage` / `plugins_manage` **不在 external 词表内**，写了直接
 拒包：后台插件没有理由改账户配置，更没有理由装下一个插件——**禁止自我繁殖**是这里唯一重要
@@ -191,13 +198,13 @@ ADR-0032 起同时覆盖 `readAttachment`——附件字节属于同一封信的
 是「装了才发现它能干什么」。M5 的进程沙箱之前没有更强的东西可给，把它说成沙箱只会让人依赖
 一个不存在的保证。
 
-`supervised` package 只有被 `maildctl plugin enable <id>` 启用（或配置 allowlist 预置）时才
+`supervised` package 只有被 `featherpostctl plugin enable <id>` 启用（或配置 allowlist 预置）时才
 执行；enable/disable 即时生效并持久化到 `plugin_state.toml`（仅 Agent 写入、未知版本
 fail-closed）。安装/升级/移除/回滚走 ADR-0019 事务 RPC（见上文 frontend 一节），升级后
-Agent 会自动以新包重启子进程，每次 spawn 轮换新凭证。子进程收到空环境中的
-`MAILD_CONFIG=<绝对路径>` 与
-`MAILD_PLUGIN_TOKEN=<凭证>`（ADR-0017），以及
-`MAILD_PLUGIN_DATA_DIR=<绝对路径>`（按受检插件 ID 隔离的 0700 可变数据目录）；stdio 关闭，工作目录固定为 package；它自行用共享
+Agent 会自动以新包重启子进程，每次 spawn 轮换新凭证。子进程收到空环境中的真实品牌环境变量（由
+`crates/maild-brand/src/generated.rs` 单源生成）：
+`FEATHERPOST_CONFIG=<绝对路径>`、`FEATHERPOST_PLUGIN_TOKEN=<凭证>`（ADR-0017）以及
+`FEATHERPOST_PLUGIN_DATA_DIR=<绝对路径>`（按受检插件 ID 隔离的 0700 可变数据目录）；stdio 关闭，工作目录固定为 package；它自行用共享
 client 连接 API，并应先以该凭证调用 `authenticate`（见下节）。正常 `exit 0` 表示主动停止且不
 重启，非零退出按 2s 起、60s 封顶的指数退避，连续重启默认最多 8 次；存活 60s 后重置连续
 失败预算——每次重新 spawn 都会轮换出全新凭证。身份缝停摆时 supervised 插件拒绝启动
@@ -211,15 +218,15 @@ supervised executable 必须保持前台运行，不得 daemonize、double-fork 
 同属当前用户信任域，安装前仍需把它当作可以读取该用户邮件与配置的本地程序审查。
 
 package 目录是可升级/回滚/移除的不可变交付物；数据库、缓存等运行时状态必须写
-`MAILD_PLUGIN_DATA_DIR`。package remove 不删除该目录，也不授权插件或 Agent 删除任何远端
+`FEATHERPOST_PLUGIN_DATA_DIR`。package remove 不删除该目录，也不授权插件或 Agent 删除任何远端
 资源。插件自己的秘密应进入平台凭据库，不能写入 data 目录、manifest、argv 或日志。
 GUI 和 CLI staging 会拒绝符号链接、特殊文件、过深或过大的目录树；macOS 上会把
 `com.apple.quarantine` 从源目录和文件复制到受管 package，安装事务不会移除 Gatekeeper
-隔离标记。系统拒绝启动未经信任的下载插件时，Maild 不会绕过该检查。
+隔离标记。系统拒绝启动未经信任的下载插件时，Featherpost 不会绕过该检查。
 
 `ui_executable` 对两种 lifecycle 都是可选项，与 supervised provider 进程相互独立。用户在
-Maild 插件页点击“管理”后，Agent 重新校验该相对路径仍位于 package 内且不是符号链接，再以
-空环境启动；仅注入 `MAILD_CONFIG` 与同一 `MAILD_PLUGIN_DATA_DIR`，不注入插件 token、API
+Featherpost 插件页点击“管理”后，Agent 重新校验该相对路径仍位于 package 内且不是符号链接，再以
+空环境启动；仅注入 `FEATHERPOST_CONFIG` 与同一 `FEATHERPOST_PLUGIN_DATA_DIR`，不注入插件 token、API
 token 或邮箱内容。每个插件同时最多一个管理进程；自然退出后可重新打开，package 升级、移除、
 重扫发现 package 消失或 Agent 停机时会终止旧管理进程及其同一 containment 内的后代。该回收
 与插件是否启用无关；打开管理界面也不会隐式启用插件。
@@ -238,8 +245,8 @@ token 或邮箱内容。每个插件同时最多一个管理进程；自然退�
   主体不可变。无效或已吊销凭证返回 `-32014` 且连接立即关闭；stdio/HTTP 来源返回
   `-32015`。客户端必须用长连接（`StreamConnection::authenticate`）；每次调用新开
   连接的便捷客户端无法持有插件主体。
-- **凭证获取**：supervised 由 Agent 每 spawn 注入 `MAILD_PLUGIN_TOKEN`；independent
-  与 on_demand frontend 由用户执行 `maildctl plugin-token <id>`（frontend 加
+- **凭证获取**：supervised 由 Agent 每 spawn 注入 `FEATHERPOST_PLUGIN_TOKEN`；independent
+  与 on_demand frontend 由用户执行 `featherpostctl plugin-token <id>`（frontend 加
   `--frontend`）一次性取用——reveal 即轮换，旧凭证对新连接立即失效。
 - **注册表**：`plugin_auth.toml` 与活动配置同目录，只存 SHA-256 哈希，文件纪律与
   `accounts.toml` 相同（仅 Agent 写入、0600、原子发布、未知版本 fail-closed）。
@@ -275,3 +282,32 @@ token 或邮箱内容。每个插件同时最多一个管理进程；自然退�
 provider 插件的 API key 等完全在自己的域内保管（同用户可读，尽力而为）。
 邮件正文会出现在插件进程内存里，安装前请把它当作可以读取该用户邮件的程序审查。
 切换账户的 transport 类型可能更换 uid 空间；推荐改配置走「移除后重加」流程。
+
+## translation provider 契约（ADR-0050）
+
+声明 `translation_provider` 的 external 插件（支持 `schema_version = 2` 与 `[l10n.<tag>]`、
+`lifecycle = "supervised" | "independent"` 以及可选 `ui_executable`）可在运行时热插拔接入
+Featherpost Studio 邮件翻译总线。最小可运行示例见 `plugins/example-translator/`。
+
+1. **连接与注册**：插件通过同 UID 本地流式 IPC（Unix socket / Windows named pipe）连接，先以
+   `FEATHERPOST_PLUGIN_TOKEN` 调用 `authenticate`，再调用 `translationProviderRegister` 注册动态能力：
+   `supported_languages`、`max_batch_items`、`max_batch_chars`、`max_concurrency (1..=4)`、
+   `supports_cancel`、`variant_revision`（展示名、描述、多语言 `l10n` 与包版本始终以 `plugin.toml` 为准）。
+   仅当包已安装且处于 `enabled` 状态时允许注册；注册返回单调递增的 `generation` 与协商后的有效上限。
+2. **双角色连接与独立撤销**：同一条连接可同时注册 `transport_provider` 与 `translation_provider`，
+   共享连接级递增数字 ID 分配器；两个角色持有各自独立的可撤销属主，替换或撤销其一绝不误伤另一角色的在途调用。
+   当插件被 `disable`（含 `independent` 插件）、`remove`、升级、回滚、断线或新连接顶替时，旧 `generation`
+   会立即撤销，所有在途调用快速失败 `-32018`，**绝不**静默回退至其他 Provider。
+3. **反向调用合同**：
+   - `translation/translate { job_id, batch_id?, source_lang, target_lang, content_kind, items: [{ id, text, context? }] }`：
+     返回 `{ items: [{ id, text }], detected_source_lang?, variant_revision? }`。返回项必须与请求的 `id`
+     集合一一对应（无缺失、无重复、无未知 ID），且整帧（含换行符）不超过 `1 MiB`。
+   - `translation/probe { target_lang }`：固定无邮件样本探测，超时上限 15s；返回 `{ ok, detail? }`。
+   - `translation/cancel { request_id }`：单向 JSON-RPC 通知。当 `supports_cancel = true` 且用户取消、
+     切换邮件或关闭连接时，daemon 尽力下发原请求的 `request_id`。
+4. **非阻塞实现要求**：插件必须采用读写分离（独立读循环 + 异步任务处理请求 + 串行写队列），确保慢翻译
+   执行期间仍可即时读取 `translation/cancel` 通知并处理高达 `max_concurrency` 的并发批次。
+5. **代理继承与同 UID 信任边界**：需要访问外网的翻译插件可在本地流式 IPC 上调用 `getProxyConfig`
+   （如需代理密码则传 `{ include_secret: true }`）继承全局代理设置。须注意本地原生插件与守护进程同属当前
+   操作系统用户（同 UID）信任域——`getProxyConfig(include_secret=true)` 会向本地流式连接返回代理密码，
+   邮件正文亦会经过被选中的翻译插件进程内存，安装任何第三方翻译插件前都应像审查本地可执行程序一样审查其来源。

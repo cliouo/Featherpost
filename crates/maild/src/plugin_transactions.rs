@@ -55,11 +55,14 @@ impl TxKind {
 
 fn validate_id(id: &str) -> Result<(), String> {
     let bytes = id.as_bytes();
+    let lowered = id.to_ascii_lowercase();
     if id.is_empty()
         || id.len() > 128
         || !bytes.first().is_some_and(u8::is_ascii_alphanumeric)
         || !bytes.last().is_some_and(u8::is_ascii_alphanumeric)
         || id.contains("..")
+        || lowered == "builtin"
+        || lowered.starts_with("builtin.")
         || !id
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))

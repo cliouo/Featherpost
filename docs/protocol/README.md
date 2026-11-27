@@ -108,17 +108,26 @@
 | `updateAddress` | `{id, state?, label?}` | 地址视图；`state` 只接受 `active` / `disabled` | 受管账户目录 + store |
 | `removeAddress` | `{id}` | `{ok: true}`；历史消息的 recipient 文本保留 | 受管账户目录 + store |
 | `providerRegister` | `{}` | `{}`；把当前连接登记为该插件的 transport provider 端点（latest-wins，断连自动注销）。仅限已认证插件主体且 manifest 声明 `transport_provider`（ADR-0021） | external |
+| `translationProviderRegister` | `{supported_languages?, max_batch_items?, max_batch_chars?, max_concurrency?, supports_cancel?, variant_revision?}` | `{provider_id, generation, max_batch_items, max_batch_chars, max_concurrency, supports_cancel, variant_revision}`；仅限同 UID 流式 IPC 上已认证且已启用的 `Principal::Plugin` + `translation_provider`（ADR-0050） | external |
+| `listTranslationProviders` | `{}` | `{generation, providers}`；合并已安装 `translation_provider` 包、启停/运行态、`has_ui`、`version`、`l10n` 与实时注册 `generation`/能力。受 `plugins_manage` 保护（ADR-0050） | external |
+| `invokeTranslation` | `{provider_id, generation, job_id, batch_id?, source_lang, target_lang, content_kind, timeout_ms?, items}` | `{provider_id, generation, variant_revision, detected_source_lang?, items}`；仅限同 UID 流式 IPC 上受托 Studio `Principal::Frontend` + `messages_read`，脱离读循环异步派发，绝不静默降级（ADR-0050） | external |
+| `cancelTranslation` | `{job_id}` | `{cancelled, cancelled_requests, notified_provider}`；仅限同 UID 流式 IPC 上受托 Studio `Principal::Frontend` + `messages_read`，校验调用会话与 `job_id`（跨会话拒绝 `-32016`），在读循环控制通路立即取消并尽力下发 `translation/cancel`（ADR-0050） | external |
+| `testTranslationProvider` | `{provider_id, generation?, target_lang, timeout_ms?}` | `{ok, provider_id, generation, stage, reason, latency_ms, detail}`；仅限同 UID 流式 IPC 上受托 Studio `Principal::Frontend` + `settings_read`，发送固定无邮件样本 `translation/probe`（上限 15s）（ADR-0050） | external |
 
-### 守护进程 → 插件的反向请求（ADR-0021）
+### 守护进程 → 插件的反向请求（ADR-0021 / ADR-0050）
 
-注册了 provider 的连接上，守护进程会以普通 JSON-RPC 请求帧（带自增 id）调用插件，
-超时预算内未应答按 `-32019` 处理；插件必须以匹配 id 的 result/error 应答：
+注册了 provider 的连接上，守护进程会以普通 JSON-RPC 请求帧（带连接级共享自增数字 id）调用插件，
+超时预算内未应答按 `-32019` 处理；插件必须以匹配 id 的 result/error 应答（原样回显 ID 类型）。
+迟到应答（pending 已因超时/取消/撤销移除）由守护进程计入迟到计数并静默丢弃，不会落回请求解析或触发错误帧。
 
 | 方法 | `params` | `result` | 预算 |
 |---|---|---|---|
 | `transport/probe` | `{account, address, direction: "incoming"\|"outgoing"}`；draft 探测阶段 `account` 为空串，`address` 仍是待绑定的规范邮箱地址 | `{ok, stage: "provider", detail?}` | 10s |
 | `transport/send` | `{account, account_address, from, to, subject, body}`；`account_address` 是 profile 规范地址，`from` 可为它或已验证的 active 别名 | `{}` 或 error（映射 `-32020`） | 30s |
 | `transport/receive` | `{account, address, since_uid, max}`；`address` 是 profile 规范地址，uid 为严格单调递增的十进制数字符串 | `{messages: [{uid, sender, recipient?, subject, body, received_at, date?, message_id?, cc?, reply_to?}]}`；`date` 起为 ADR-0025 可选键（`date` 是 RFC 5322 `Date` 头原文），缺省保持既有行为；单帧 ≤1 MiB，`max` 由内核设定 | 60s |
+| `translation/translate` | `{job_id, batch_id?, source_lang, target_lang, content_kind: "html"\|"plain", items: [{id, text, context?}]}` | `{items: [{id, text}], detected_source_lang?, variant_revision?}`；返回项须与请求 id 集合唯一且完整对应；含换行符整帧 ≤1 MiB（ADR-0050） | 默认 45s（上限 60s） |
+| `translation/probe` | `{target_lang}`（固定无邮件样本） | `{ok, detail?}` | 15s |
+| `translation/cancel`（通知，无 `id`） | `{request_id}` | 无应答；当插件声明 `supports_cancel = true` 时在取消/断线/超时路径尽力发送 | — |
 
 委托方向**绝不静默回退内置 transport**：provider 未注册/掉线 → `-32018`。凭据不跨缝：
 委托方向的账户没有本目录凭据条目，载荷不含任何秘密。未注册 provider 的连接不会收到
@@ -1068,6 +1077,14 @@ M4-01 新增会话级主体：未认证连接恒为 `user`（历史行为不变�
   v1 目录仍可读（禁止 plugin 变体），任何写入落盘 v2。委托方向凭据不跨缝、
   绝不回退内置 transport；`listExternalPlugins` 各项新增
   `provider_registered` 观测位。
+- **外部翻译 provider 总线（ADR-0050）**：manifest 新增 `translation_provider` capability 词并保留
+  `builtin.*` 命名空间。新增五条 additive 方法：`translationProviderRegister`（同 UID 流式 IPC +
+  已启用 `Plugin` + `translation_provider`）、`listTranslationProviders`（`plugins_manage`）、
+  `invokeTranslation` / `cancelTranslation`（同 UID 流式 IPC + 受托 Studio `Frontend` + `messages_read`）
+  与 `testTranslationProvider`（同 UID 流式 IPC + 受托 Studio `Frontend` + `settings_read`），
+  以及受 `plugins_manage` 过滤的 `translation/providers` 服务端推送。已鉴权翻译长任务脱离读循环派发，
+  单端点并发 `1..=4`、队列/会话/全局及 1 MiB 含换行整帧均设硬上限，新增 `-32022`（Busy）与 `-32023`
+  （Cancelled），与 `-32018`/`-32019`/`-32020` 组成完整稳定错误映射；离线/换代快速失败绝不静默回退。
 - 全部为 additive 变更：不晋升协议代数。
 
 ## 错误码
@@ -1097,9 +1114,11 @@ M4-01 新增会话级主体：未认证连接恒为 `user`（历史行为不变�
 | `-32015` | Auth unavailable | `authenticate` 在 stdio/HTTP 上、身份缝未装配或停摆 |
 | `-32016` | Method not permitted | 插件主体缺少方法所需 capability，或方法仅限用户主体；连接不断开 |
 | `-32017` | Plugin transaction failed | 插件事务失败：包校验未通过、升级版本不严格更高、staging 非法或缺失、回滚位不存在等（ADR-0019） |
-| `-32018` | Provider unavailable | 委托方向无活跃 provider 注册、连接刚断或被顶替；快速失败不回退（ADR-0021） |
-| `-32019` | Provider timeout | 反向调用超过各自预算（probe 10s / send 30s / receive 60s）（ADR-0021） |
-| `-32020` | Provider error | provider 插件应答的业务失败；`message` 来自插件且有界脱敏（ADR-0021） |
+| `-32018` | Provider unavailable | 委托方向或外部翻译 provider 无活跃注册、已停用/卸载/换代、连接刚断或被顶替；快速失败不回退（ADR-0021 / ADR-0050） |
+| `-32019` | Provider timeout | 反向调用超过各自预算（transport: probe 10s / send 30s / receive 60s；translation: 默认 45s / probe 15s）（ADR-0021 / ADR-0050） |
+| `-32020` | Provider error | provider 插件应答的业务失败或畸形响应；`message` 经控制字符剥离与有界截断脱敏（ADR-0021 / ADR-0050） |
+| `-32022` | Provider busy | 外部翻译 provider 端点队列、调用会话或全局并发/载荷字节预算已满（ADR-0050） |
+| `-32023` | Provider cancelled | 外部翻译调用已被同会话 `cancelTranslation` 或调用方断线取消（ADR-0050） |
 
 `error.data` 是可选字段。客户端不能依赖中文 `message` 做分支判断，应依赖 `code`。
 方法参数会先于插件依赖校验；因此即使 store 或 transport 未装配，非法参数仍返回
@@ -1117,6 +1136,8 @@ stdio、Unix socket 与 named pipe 连接可收到无 `id` 的服务端通知。
 | `frontend/intent` | `{"frontend":"<id>"}`——只投给主体**恰好**是 `frontend:<id>` 的已认证长连接（ADR-0045） |
 | `agent/stopping` | `{}`——只投给主体为 `frontend:*` 的已认证长连接；守护进程接受 `stopManagedAgent` 后、停机前发出（ADR-0046） |
 | `preferences/locale` | `{"effective":[...]}`——投给**所有**流式连接；`setLocalePreference` 成功且 `effective` 变化时发出（ADR-0048） |
+| `preferences/proxy` | `{config, has_password, effective_system, persisted, generation}`——投给**所有**流式连接（不含密码） |
+| `translation/providers` | `{generation, providers}`——仅投给持有 `plugins_manage` 权限的流式连接；翻译插件安装/启停/版本变更/注册/注销时发出，前端按单调 `generation` 合并（ADR-0050） |
 
 ```json
 {"jsonrpc":"2.0","method":"message/received","params":{"account":"personal","uid":"42","sender":"sender@example.com","recipient":"alias@example.test","subject":"hello","body":"plain text body","received_at":1710000000}}
