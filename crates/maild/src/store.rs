@@ -708,10 +708,16 @@ pub struct SearchQuery {
     pub folder: Option<String>,
     /// 发件人子串（大小写不敏感）。
     pub sender: Option<String>,
+    /// 收件人（`recipient` 或 `cc`）子串（大小写不敏感）。
+    pub recipient: Option<String>,
+    /// 主题子串（大小写不敏感）。
+    pub subject: Option<String>,
     /// 时间范围按 `sort_at` —— 与列表显示的时间是同一个。
     pub since: Option<u64>,
     pub until: Option<u64>,
     pub has_attachments: Option<bool>,
+    pub seen: Option<bool>,
+    pub flagged: Option<bool>,
     pub limit: usize,
     pub offset: usize,
 }
@@ -743,21 +749,50 @@ fn search_clauses(query: &SearchQuery) -> (&'static str, String, Vec<rusqlite::t
         params.push(Value::Text(normalized_folder(folder).to_string()));
         clauses.push(format!("f.name = ?{}", params.len()));
     }
-    if let Some(sender) = &query.sender {
-        params.push(Value::Text(sender.clone()));
+    if let Some(sender) = query.sender.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+        params.push(Value::Text(sender.to_string()));
         clauses.push(format!("instr(lower(m.sender), lower(?{})) > 0", params.len()));
     }
+    if let Some(recipient) = query
+        .recipient
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        params.push(Value::Text(recipient.to_string()));
+        let idx = params.len();
+        clauses.push(format!(
+            "((instr(lower(m.recipient), lower(?{idx})) > 0) OR (instr(lower(m.cc), lower(?{idx})) > 0))"
+        ));
+    }
+    if let Some(subject) = query
+        .subject
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        params.push(Value::Text(subject.to_string()));
+        clauses.push(format!("instr(lower(m.subject), lower(?{})) > 0", params.len()));
+    }
     if let Some(since) = query.since {
-        params.push(Value::Integer(since as i64));
+        params.push(Value::Integer(i64::try_from(since).unwrap_or(i64::MAX)));
         clauses.push(format!("m.sort_at >= ?{}", params.len()));
     }
     if let Some(until) = query.until {
-        params.push(Value::Integer(until as i64));
+        params.push(Value::Integer(i64::try_from(until).unwrap_or(i64::MAX)));
         clauses.push(format!("m.sort_at <= ?{}", params.len()));
     }
     if let Some(has_attachments) = query.has_attachments {
         params.push(Value::Integer(i64::from(has_attachments)));
         clauses.push(format!("m.has_attachments = ?{}", params.len()));
+    }
+    if let Some(seen) = query.seen {
+        params.push(Value::Integer(i64::from(seen)));
+        clauses.push(format!("m.seen = ?{}", params.len()));
+    }
+    if let Some(flagged) = query.flagged {
+        params.push(Value::Integer(i64::from(flagged)));
+        clauses.push(format!("m.flagged = ?{}", params.len()));
     }
     (join, format!("WHERE {}", clauses.join(" AND ")), params)
 }

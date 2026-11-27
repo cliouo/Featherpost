@@ -1495,9 +1495,13 @@ const SEARCH_KEYS: &[&str] = &[
     "account",
     "folder",
     "from",
+    "to",
+    "subject",
     "since",
     "until",
     "hasAttachments",
+    "seen",
+    "flagged",
     "limit",
     "offset",
     "scope",
@@ -1514,15 +1518,58 @@ fn optional_account(
     }
 }
 
+fn optional_search_text(
+    object: &serde_json::Map<String, Value>,
+    key: &str,
+) -> Result<Option<String>, JsonRpcError> {
+    match object.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(value)) => {
+            if value.is_empty() {
+                return Err(invalid_params(&format!("`{key}` 必须是非空字符串或 null")));
+            }
+            if value.len() > crate::search::MAX_QUERY_BYTES {
+                return Err(invalid_params(&format!(
+                    "`{key}` 不能超过 {} 字节",
+                    crate::search::MAX_QUERY_BYTES
+                )));
+            }
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(trimmed.to_string()))
+            }
+        }
+        Some(_) => Err(invalid_params(&format!("`{key}` 必须是非空字符串或 null"))),
+    }
+}
+
+fn optional_search_bool(
+    object: &serde_json::Map<String, Value>,
+    key: &str,
+) -> Result<Option<bool>, JsonRpcError> {
+    match object.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Bool(value)) => Ok(Some(*value)),
+        Some(_) => Err(invalid_params(&format!("`{key}` 必须是布尔或 null"))),
+    }
+}
+
 fn optional_unix_secs(
     object: &serde_json::Map<String, Value>,
     key: &str,
 ) -> Result<Option<u64>, JsonRpcError> {
     match object.get(key) {
         None | Some(Value::Null) => Ok(None),
-        Some(value) => Ok(Some(value.as_u64().ok_or_else(|| {
-            invalid_params(&format!("`{key}` 必须是非负整数 unix 秒"))
-        })?)),
+        Some(value) => Ok(Some(
+            value
+                .as_u64()
+                .filter(|secs| *secs <= i64::MAX as u64)
+                .ok_or_else(|| {
+                    invalid_params(&format!("`{key}` 必须是不超过 i64::MAX 的非负整数 unix 秒"))
+                })?,
+        )),
     }
 }
 
@@ -1535,8 +1582,8 @@ async fn search_messages(ctx: &Context, params: &Value) -> HandlerResult {
         .ok_or_else(|| invalid_params("参数必须是对象"))?;
     if object.keys().any(|key| !SEARCH_KEYS.contains(&key.as_str())) {
         return Err(invalid_params(
-            "参数只能包含 `query`、`account`、`folder`、`from`、`since`、`until`、\
-`hasAttachments`、`limit`、`offset` 和 `scope`",
+            "参数只能包含 `query`、`account`、`folder`、`from`、`to`、`subject`、`since`、`until`、\
+`hasAttachments`、`seen`、`flagged`、`limit`、`offset` 和 `scope`",
         ));
     }
     let text = match object.get("query") {
@@ -1552,14 +1599,19 @@ async fn search_messages(ctx: &Context, params: &Value) -> HandlerResult {
         }
         Some(_) => return Err(invalid_params("`folder` 必须是非空字符串或 null")),
     };
-    let sender = optional_account(object, "from")?;
+    let sender = optional_search_text(object, "from")?;
+    let recipient = optional_search_text(object, "to")?;
+    let subject = optional_search_text(object, "subject")?;
     let since = optional_unix_secs(object, "since")?;
     let until = optional_unix_secs(object, "until")?;
-    let has_attachments = match object.get("hasAttachments") {
-        None | Some(Value::Null) => None,
-        Some(Value::Bool(value)) => Some(*value),
-        Some(_) => return Err(invalid_params("`hasAttachments` 必须是布尔或 null")),
-    };
+    if let (Some(since), Some(until)) = (since, until) {
+        if since > until {
+            return Err(invalid_params("`since` 不能晚于 `until`"));
+        }
+    }
+    let has_attachments = optional_search_bool(object, "hasAttachments")?;
+    let seen = optional_search_bool(object, "seen")?;
+    let flagged = optional_search_bool(object, "flagged")?;
     let limit = match object.get("limit") {
         None => 50,
         Some(value) => value
@@ -1582,6 +1634,11 @@ async fn search_messages(ctx: &Context, params: &Value) -> HandlerResult {
     };
 
     if scope == "server" {
+        if recipient.is_some() || subject.is_some() || seen.is_some() || flagged.is_some() {
+            return Err(invalid_params(
+                "`scope=server` 不支持 `to`、`subject`、`seen` 或 `flagged` 筛选",
+            ));
+        }
         // 服务器检索必须落到一个具体信箱：`SEARCH` 只作用于当前 SELECT 的 mailbox。
         let account = account.ok_or_else(|| invalid_params("`scope=server` 必须指定 `account`"))?;
         let folder = folder.ok_or_else(|| invalid_params("`scope=server` 必须指定 `folder`"))?;
@@ -1616,9 +1673,13 @@ async fn search_messages(ctx: &Context, params: &Value) -> HandlerResult {
         account,
         folder,
         sender,
+        recipient,
+        subject,
         since,
         until,
         has_attachments,
+        seen,
+        flagged,
         limit,
         offset,
     };
@@ -6345,17 +6406,153 @@ mod tests {
             json!({ "offset": -1 }),
             json!({ "scope": "remote" }),
             json!({ "since": -1 }),
+            json!({ "since": (i64::MAX as u64) + 1 }),
+            json!({ "until": (i64::MAX as u64) + 1 }),
+            json!({ "since": 200, "until": 100 }),
             json!({ "hasAttachments": "yes" }),
+            json!({ "seen": "yes" }),
+            json!({ "seen": 1 }),
+            json!({ "flagged": "true" }),
+            json!({ "flagged": 1 }),
+            json!({ "from": "" }),
+            json!({ "to": "" }),
+            json!({ "subject": "" }),
+            json!({ "to": 123 }),
+            json!({ "subject": false }),
+            json!({ "from": "a".repeat(crate::search::MAX_QUERY_BYTES + 1) }),
+            json!({ "to": "a".repeat(crate::search::MAX_QUERY_BYTES + 1) }),
+            json!({ "subject": "a".repeat(crate::search::MAX_QUERY_BYTES + 1) }),
             json!({ "unexpected": true }),
             json!([]),
             // 服务器检索必须落到一个具体信箱，且要有查询词。
             json!({ "scope": "server" }),
             json!({ "scope": "server", "account": "a" }),
             json!({ "scope": "server", "account": "a", "folder": "INBOX" }),
+            // P0：scope=server 不接受新增结构化筛选（to / subject / seen / flagged）。
+            json!({ "scope": "server", "account": "a", "folder": "INBOX", "query": "发票", "to": "bob@example.test" }),
+            json!({ "scope": "server", "account": "a", "folder": "INBOX", "query": "发票", "subject": "合同" }),
+            json!({ "scope": "server", "account": "a", "folder": "INBOX", "query": "发票", "seen": false }),
+            json!({ "scope": "server", "account": "a", "folder": "INBOX", "query": "发票", "seen": true }),
+            json!({ "scope": "server", "account": "a", "folder": "INBOX", "query": "发票", "flagged": true }),
+            json!({ "scope": "server", "account": "a", "folder": "INBOX", "query": "发票", "flagged": false }),
         ] {
-            let response = dispatch(&ctx, &request("searchMessages", params, json!(3))).await;
-            assert_eq!(response.error.unwrap().code, INVALID_PARAMS);
+            let response = dispatch(&ctx, &request("searchMessages", params.clone(), json!(3))).await;
+            assert_eq!(
+                response.error.as_ref().map(|e| e.code),
+                Some(INVALID_PARAMS),
+                "应被 INVALID_PARAMS 拒绝: {params}"
+            );
         }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn search_messages_supports_to_subject_seen_flagged_and_whitespace_normalization() {
+        let ctx = Context::new();
+        let store = Arc::new(Store::open("").unwrap());
+        store
+            .insert_message(&MailMessage {
+                account: "a".into(),
+                uid: "1".into(),
+                sender: "zhang@example.test".into(),
+                recipient: "alice@example.test".into(),
+                cc: String::new(),
+                subject: "项目周报_50%".into(),
+                body: "正文".into(),
+                received_at: 100,
+                date_at: Some(100),
+                seen: false,
+                flagged: true,
+                ..Default::default()
+            })
+            .unwrap();
+        store
+            .insert_message(&MailMessage {
+                account: "a".into(),
+                uid: "2".into(),
+                sender: "li@example.test".into(),
+                recipient: "other@example.test".into(),
+                cc: "cc-only@example.test".into(),
+                subject: "季度预算".into(),
+                body: "正文".into(),
+                received_at: 200,
+                date_at: Some(200),
+                seen: true,
+                flagged: false,
+                ..Default::default()
+            })
+            .unwrap();
+        ctx.provide::<Store>(store);
+
+        // `to` 仅命中 Cc + 前后空白规范化。
+        let cc_hit = dispatch(
+            &ctx,
+            &request("searchMessages", json!({ "to": "  CC-ONLY@example.test  " }), json!(1)),
+        )
+        .await
+        .result
+        .expect("Cc 命中");
+        assert_eq!(cc_hit["total"], 1);
+        assert_eq!(cc_hit["messages"][0]["uid"], "2");
+
+        // `subject` + `seen: false` + `flagged: true` 组合。
+        let combined = dispatch(
+            &ctx,
+            &request(
+                "searchMessages",
+                json!({
+                    "subject": "周报_50%",
+                    "seen": false,
+                    "flagged": true,
+                    "since": 100,
+                    "until": 100
+                }),
+                json!(2),
+            ),
+        )
+        .await
+        .result
+        .expect("多条件命中");
+        assert_eq!(combined["total"], 1);
+        assert_eq!(combined["messages"][0]["uid"], "1");
+
+        // 纯空白字符串规范化为省略（不报错、不误过滤）。
+        let blank_normalized = dispatch(
+            &ctx,
+            &request(
+                "searchMessages",
+                json!({ "from": "   ", "to": " \t ", "subject": "   " }),
+                json!(3),
+            ),
+        )
+        .await
+        .result
+        .expect("纯空白规范化");
+        assert_eq!(blank_normalized["total"], 2);
+
+        // scope=server 带新字段时明确返回不支持筛选的错误（早于账户查找）。
+        let server_rejected = dispatch(
+            &ctx,
+            &request(
+                "searchMessages",
+                json!({
+                    "scope": "server",
+                    "account": "a",
+                    "folder": "INBOX",
+                    "query": "正文",
+                    "seen": false
+                }),
+                json!(4),
+            ),
+        )
+        .await
+        .error
+        .expect("server scope 必须拒新筛选");
+        assert_eq!(server_rejected.code, INVALID_PARAMS);
+        assert!(
+            server_rejected.message.contains("scope=server"),
+            "{}",
+            server_rejected.message
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
