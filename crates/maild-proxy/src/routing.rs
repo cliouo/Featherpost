@@ -36,6 +36,8 @@ pub enum ProxyPurpose {
     Mail,
     /// Remote images fetched on behalf of sandboxed email HTML documents (`Route::Remote`).
     RemoteImage,
+    /// Outbound requests for built-in email translation providers.
+    Translation,
     /// Outbound requests initiated by an external provider or extension plugin.
     Plugin,
     /// Unspecified / generic outbound network request.
@@ -48,6 +50,7 @@ impl ProxyPurpose {
         match self {
             Self::Mail => "mail",
             Self::RemoteImage => "remote_image",
+            Self::Translation => "translation",
             Self::Plugin => "plugin",
             Self::Generic => "generic",
         }
@@ -153,6 +156,13 @@ impl ProxyContextDefaults {
     pub fn remote_image() -> Self {
         Self {
             purpose: ProxyPurpose::RemoteImage,
+            ..Self::default()
+        }
+    }
+
+    pub fn translation() -> Self {
+        Self {
+            purpose: ProxyPurpose::Translation,
             ..Self::default()
         }
     }
@@ -1410,5 +1420,76 @@ mod tests {
             ProxyOverride::Inherit,
         );
         assert!(bad_endpoint.validate().is_err());
+    }
+
+    #[test]
+    fn translation_purpose_routes_public_via_proxy_and_keeps_loopback_direct() {
+        assert_eq!(ProxyPurpose::Translation.as_str(), "translation");
+        let serialized = serde_json::to_string(&ProxyPurpose::Translation).unwrap();
+        assert_eq!(serialized, "\"translation\"");
+        let parsed: ProxyPurpose = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(parsed, ProxyPurpose::Translation);
+
+        let defaults = ProxyContextDefaults::translation();
+        assert_eq!(defaults.purpose, ProxyPurpose::Translation);
+
+        let translation_proxy = ep(ProxyProtocol::Socks5h, "127.0.0.1", 7890);
+        let global_proxy = ep(ProxyProtocol::Http, "127.0.0.1", 8080);
+        let cond = ConditionalProxyConfig::new(
+            vec![ProxyRule::new(
+                ProxyMatcher::default().with_purpose(ProxyPurpose::Translation),
+                ProxyDecision::Use(translation_proxy.clone()),
+            )],
+            ProxyOverride::Inherit,
+        )
+        .compile()
+        .unwrap();
+
+        let chain = ChainedResolver::new()
+            .with_priority_resolver(100, cond)
+            .with_priority_resolver(
+                0,
+                GlobalConfigResolver::new(
+                    ProxyConfig {
+                        mode: ProxyMode::Custom,
+                        custom: Some(CustomProxyConfig {
+                            protocol: ProxyProtocol::Http,
+                            host: global_proxy.host.clone(),
+                            port: global_proxy.port,
+                            username: None,
+                            password: None,
+                            bypass: vec![],
+                        }),
+                    },
+                    SystemProxySnapshot::default(),
+                ),
+            );
+
+        // Public translation endpoint matches the ProxyPurpose::Translation rule.
+        let public_ctx =
+            defaults.build_context(ProxyTarget::new("api.openai.com", 443, TargetScheme::Https));
+        assert_eq!(
+            chain.resolve(&public_ctx),
+            ProxyDecision::Use(translation_proxy)
+        );
+
+        // Non-translation request does not match the translation rule and falls back to global.
+        let mail_ctx = ProxyContextDefaults::mail().build_context(ProxyTarget::new(
+            "imap.example.com",
+            993,
+            TargetScheme::Imaps,
+        ));
+        assert_eq!(chain.resolve(&mail_ctx), ProxyDecision::Use(global_proxy));
+
+        // Local Ollama loopback targets ALWAYS stay Direct even with global + translation proxy.
+        for host in ["127.0.0.1", "localhost", "::1"] {
+            let local_ctx =
+                defaults.build_context(ProxyTarget::new(host, 11434, TargetScheme::Http));
+            assert_eq!(
+                chain.resolve(&local_ctx),
+                ProxyDecision::Direct,
+                "loopback host {host} must remain Direct for ProxyPurpose::Translation"
+            );
+        }
     }
 }
