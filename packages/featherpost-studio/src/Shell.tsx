@@ -16,11 +16,23 @@ import { readStudioView, saveStudioView, type StudioView } from "./layout";
 import { ContextMenuHost, useContextMenu } from "./ContextMenu";
 import { CommandPalette } from "./CommandPalette";
 import { SearchFilterPopover } from "./SearchFilterPopover";
+import { ShortcutHelpDialog } from "./ShortcutHelpDialog";
+import { ShortcutKeys } from "./ShortcutKeys";
 import { folderMenu, selectionMenu } from "./menus";
 import type { LanguageController } from "./settings/language";
 import { SyncCount } from "./SyncCount";
 import { usePersistentOverlay } from "./ui";
-import { isShortcutBlockedTarget } from "./Workspace";
+import {
+  STUDIO_SHELL_MODULE_ID,
+  STUDIO_SHORTCUT_KEYS,
+  formatAriaKeyShortcuts,
+  formatShortcutTooltip,
+  isGlobalShortcutBlocked,
+  isImeEvent,
+  isQuestionMarkShortcut,
+  isShortcutBlockedTarget,
+  studioShellModule,
+} from "./shortcuts";
 import {
   activeFilterCount,
   availableScopeTiers,
@@ -55,38 +67,7 @@ import {
 // i18n-lint-allow-cjk: 全角加号是按钮的装饰图标（aria-hidden），不是文案
 const PLUS = "＋";
 
-export function isGlobalShortcutBlocked(
-  event: Pick<KeyboardEvent, "defaultPrevented" | "target">,
-): boolean {
-  if (event.defaultPrevented) return true;
-  if (typeof document === "undefined") return false;
-  if (document.querySelector('dialog[open], [aria-modal="true"]')) return true;
-  const isActiveGate = (el: Element | null | undefined) =>
-    Boolean(el && !el.closest("[hidden]"));
-  const target = event.target as
-    | { closest?(selector: string): Element | null }
-    | null
-    | undefined;
-  if (
-    target &&
-    typeof target.closest === "function" &&
-    isActiveGate(target.closest("[data-shortcuts-off]"))
-  ) {
-    return true;
-  }
-  const active = document.activeElement;
-  if (
-    active &&
-    typeof active.closest === "function" &&
-    isActiveGate(active.closest("[data-shortcuts-off]"))
-  ) {
-    return true;
-  }
-  for (const el of document.querySelectorAll("[data-shortcuts-off]")) {
-    if (isActiveGate(el)) return true;
-  }
-  return false;
-}
+export { isGlobalShortcutBlocked } from "./shortcuts";
 
 export function Studio({
   host,
@@ -134,13 +115,19 @@ export function Studio({
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [filterFocusHandoff, setFilterFocusHandoff] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [toastText, setToastText] = useState<string | null>(null);
   useEffect(() => {
     if (state.toast) setToastText(state.toast);
   }, [state.toast]);
   const searchInput = useRef<HTMLInputElement>(null),
     navigation = useRef<NavigationHandle>(null),
+    shortcutsTriggerRef = useRef<HTMLButtonElement>(null),
+    paletteInvokerRef = useRef<HTMLElement | null>(null),
+    shortcutsReturnFocusRef = useRef<HTMLElement | null>(null),
+    shortcutsOpenRef = useRef(shortcutsOpen),
     toastRef = useRef<HTMLDivElement>(null);
+  shortcutsOpenRef.current = shortcutsOpen;
   usePersistentOverlay(toastRef);
   const searchContext = scopeContext(mailbox, searchScope);
   const searchScopeContext: SearchScopeContext = useMemo(
@@ -305,16 +292,83 @@ export function Studio({
     },
     [buildPreservedSearch, effectiveScopeTier, mailbox, openMailbox],
   );
+  const openPalette = useCallback((invoker?: HTMLElement | null) => {
+    const active =
+      invoker ??
+      (typeof document !== "undefined" &&
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null);
+    paletteInvokerRef.current = active;
+    setPaletteOpen(true);
+  }, []);
+  const openShortcutsHelp = useCallback((invoker?: HTMLElement | null) => {
+    if (shortcutsOpenRef.current) return;
+    const preservedPaletteInvoker = paletteInvokerRef.current;
+    paletteInvokerRef.current = null;
+    const active =
+      invoker ??
+      preservedPaletteInvoker ??
+      (typeof document !== "undefined" &&
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null);
+    shortcutsReturnFocusRef.current = active;
+    setShortcutsOpen(true);
+  }, []);
+  const openShortcutsHelpRef = useRef(openShortcutsHelp);
+  openShortcutsHelpRef.current = openShortcutsHelp;
+  useEffect(() => {
+    // Runs after child CommandPalette's close effect so handoff actions can consume
+    // paletteInvokerRef first, while normal palette closes clear any stale reference.
+    if (!paletteOpen) {
+      paletteInvokerRef.current = null;
+    }
+  }, [paletteOpen]);
+  useEffect(() => {
+    if (host.registry.has(STUDIO_SHELL_MODULE_ID)) return;
+    const handle = host.registerBuiltin(
+      studioShellModule(() => openShortcutsHelpRef.current()),
+    );
+    return () => handle.dispose();
+  }, [host]);
+  const resolveShortcutsFinalFocus = useCallback((): HTMLElement | null => {
+    const saved = shortcutsReturnFocusRef.current;
+    shortcutsReturnFocusRef.current = null;
+    const isFocusable = (el: HTMLElement | null): el is HTMLElement =>
+      Boolean(
+        el &&
+          el.isConnected &&
+          !el.hasAttribute("disabled") &&
+          !el.closest("[hidden], [inert]") &&
+          el !== document.body &&
+          el !== document.documentElement,
+      );
+    if (isFocusable(saved)) {
+      return saved;
+    }
+    if (
+      typeof document !== "undefined" &&
+      document.body.dataset.studioSettings === "true"
+    ) {
+      const settingsReturn =
+        document.querySelector<HTMLElement>(".studio-return");
+      if (isFocusable(settingsReturn)) return settingsReturn;
+    }
+    if (isFocusable(shortcutsTriggerRef.current)) {
+      return shortcutsTriggerRef.current;
+    }
+    return null;
+  }, []);
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
-      if (e.isComposing || e.keyCode === 229 || isGlobalShortcutBlocked(e))
-        return;
+      if (isImeEvent(e) || isGlobalShortcutBlocked(e)) return;
       if (e.metaKey || e.ctrlKey) {
         if (e.altKey) return;
         const lower = e.key.toLowerCase();
         if (lower === "k" && !e.shiftKey && !e.repeat) {
           e.preventDefault();
-          setPaletteOpen(true);
+          openPalette();
           return;
         }
         if (lower === "f" && e.shiftKey && !e.repeat) {
@@ -322,15 +376,24 @@ export function Studio({
           focusSearch();
           return;
         }
-        if (lower === "l" && !e.shiftKey) {
+        if (lower === "l" && !e.shiftKey && !e.repeat) {
           e.preventDefault();
           focusSidebarFilter();
           return;
         }
-        if (e.key === "," && !e.shiftKey) {
+        if (e.key === "," && !e.shiftKey && !e.repeat) {
           e.preventDefault();
           host.openRole("settings");
         }
+        return;
+      }
+      if (
+        isQuestionMarkShortcut(e) &&
+        !isShortcutBlockedTarget(e.target) &&
+        !isShortcutBlockedTarget(document.activeElement)
+      ) {
+        e.preventDefault();
+        openShortcutsHelp();
         return;
       }
       // Single-character `/` mail search is strictly scoped to message list focus.
@@ -352,7 +415,7 @@ export function Studio({
     };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
-  }, [focusSearch, focusSidebarFilter, host]);
+  }, [focusSearch, focusSidebarFilter, host, openPalette, openShortcutsHelp]);
   const actions: StudioActions = {
     search(text, all = false) {
       setFilterFocusHandoff(true);
@@ -381,6 +444,7 @@ export function Studio({
         applySearchQuery(mailbox, nextQuery, nextMeta);
       });
     },
+    openShortcuts: () => openShortcutsHelp(),
     copy: clipboardCopier((text) => host.notify(text)),
   };
   const folderActions: FolderActions = {
@@ -535,21 +599,34 @@ export function Studio({
               ×
             </button>
           ) : (
-            <kbd>⌘ ⇧ F</kbd>
+            <ShortcutKeys
+              shortcut={STUDIO_SHORTCUT_KEYS.focusSearch}
+              variant="inline"
+            />
           )}
         </form>
         <div className="topbar-actions">
           <button
             type="button"
             className="palette-trigger"
-            title={m.studio_palette_open_title()}
+            title={formatShortcutTooltip(
+              m.studio_palette_open(),
+              STUDIO_SHORTCUT_KEYS.openPalette,
+            )}
             aria-label={m.studio_palette_open()}
-            aria-keyshortcuts="Meta+K Control+K"
-            onClick={() => setPaletteOpen((prev) => !prev)}
+            aria-keyshortcuts={formatAriaKeyShortcuts(
+              STUDIO_SHORTCUT_KEYS.openPalette,
+            )}
+            onClick={(e) =>
+              paletteOpen ? setPaletteOpen(false) : openPalette(e.currentTarget)
+            }
           >
             <Icon name="search" />
             <span>{m.studio_palette_open()}</span>
-            <kbd aria-hidden="true">⌘ K</kbd>
+            <ShortcutKeys
+              shortcut={STUDIO_SHORTCUT_KEYS.openPalette}
+              variant="inline"
+            />
           </button>
           <div className="view-switch" role="group" aria-label={m.studio_view_switch_label()}>
             <button
@@ -596,7 +673,10 @@ export function Studio({
           <button
             className="compose-button"
             onClick={() => void composer.create()}
-            title={m.studio_compose_title()}
+            title={formatShortcutTooltip(
+              m.studio_compose(),
+              STUDIO_SHORTCUT_KEYS.composeNew,
+            )}
           >
             <span aria-hidden="true">{PLUS}</span> {m.studio_compose()}
           </button>
@@ -633,6 +713,19 @@ export function Studio({
             {m.studio_account_add()}
           </button>
           <button
+            ref={shortcutsTriggerRef}
+            type="button"
+            className="icon-button"
+            title={formatShortcutTooltip(
+              m.studio_shortcuts_open(),
+              STUDIO_SHORTCUT_KEYS.openShortcuts,
+            )}
+            aria-label={m.studio_shortcuts_open()}
+            onClick={(e) => openShortcutsHelp(e.currentTarget)}
+          >
+            <Icon name="keyboard" />
+          </button>
+          <button
             className={`icon-button${state.activeViewId === ACTIVITY ? " active" : ""}`}
             title={m.studio_view_activity()}
             aria-label={m.studio_view_activity()}
@@ -642,7 +735,10 @@ export function Studio({
           </button>
           <button
             className="icon-button"
-            title={m.studio_sidebar_settings_title()}
+            title={formatShortcutTooltip(
+              m.studio_sidebar_settings(),
+              STUDIO_SHORTCUT_KEYS.openSettings,
+            )}
             aria-label={m.studio_sidebar_settings()}
             onClick={() => host.openRole("settings")}
           >
@@ -679,6 +775,12 @@ export function Studio({
         openMailbox={openMailbox}
         openSettingsSection={navigateSettingsSection}
         runMailSearch={runPaletteMailSearch}
+      />
+      <ShortcutHelpDialog
+        open={shortcutsOpen}
+        onOpenChange={setShortcutsOpen}
+        host={host}
+        finalFocus={resolveShortcutsFinalFocus}
       />
       <div
         ref={toastRef}

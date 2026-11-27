@@ -41,6 +41,8 @@ import { useContextMenu } from "./ContextMenu";
 import { addressMenu, messageMenu } from "./menus";
 import { useStudioActions } from "./studioActions";
 import { useMailMenu } from "./Workspace";
+import { ShortcutKeys } from "./ShortcutKeys";
+import { STUDIO_SHORTCUT_KEYS } from "./shortcuts";
 
 export function ReaderMoreMenu({
   seen,
@@ -240,14 +242,39 @@ export function ReadingPane({
           <p>{m.studio_reader_empty_hint()}</p>
           <div className="empty-shortcuts">
             <span>
-              <kbd>⌘ N</kbd> {m.studio_reader_shortcut_compose()}
+              <ShortcutKeys
+                shortcut={STUDIO_SHORTCUT_KEYS.composeNew}
+                variant="inline"
+              />{" "}
+              {m.studio_reader_shortcut_compose()}
             </span>
             <span>
-              <kbd>⌘ K</kbd> {m.studio_reader_shortcut_palette()}
+              <ShortcutKeys
+                shortcut={STUDIO_SHORTCUT_KEYS.openPalette}
+                variant="inline"
+              />{" "}
+              {m.studio_reader_shortcut_palette()}
             </span>
             <span>
-              <kbd>⌘ ⇧ F</kbd> {m.studio_reader_shortcut_search()}
+              <ShortcutKeys
+                shortcut={STUDIO_SHORTCUT_KEYS.focusSearch}
+                variant="inline"
+              />{" "}
+              {m.studio_reader_shortcut_search()}
             </span>
+            {actions.openShortcuts && (
+              <button
+                type="button"
+                className="empty-shortcuts-button"
+                onClick={() => actions.openShortcuts?.()}
+              >
+                <ShortcutKeys
+                  shortcut={STUDIO_SHORTCUT_KEYS.openShortcuts}
+                  variant="inline"
+                />
+                <span>{m.studio_reader_shortcut_help()}</span>
+              </button>
+            )}
           </div>
         </div>
       ) : (

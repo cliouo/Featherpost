@@ -5,7 +5,7 @@ import { errorCode } from '../bridge/errors';
 import { compatBlocksWrites } from '../bridge/types';
 import type { Preferences } from '../preferences';
 import { preferenceStorage, readPreferences, savePreferences } from '../preferences';
-import { ContributionRegistry, copyContribution } from './registry';
+import { ContributionRegistry, copyContribution, type Disposable } from './registry';
 import { Store } from './store';
 import type {
   Bundle,
@@ -176,8 +176,8 @@ export class Host {
   constructor(readonly bridge: MailBridge) {}
 
   /** 内置模块：注册失败是宿主 bug，直接抛——没有邮箱视图的壳不该起来。 */
-  registerBuiltin(bundle: Bundle) {
-    this.registry.register(copyContribution(bundle, { builtin: true }));
+  registerBuiltin(bundle: Bundle): Disposable {
+    return this.registry.register(copyContribution(bundle, { builtin: true }));
   }
 
   /** 可选模块：失败只记诊断，不影响其他模块（ADR-0031 决策 5「失败可见」）。 */

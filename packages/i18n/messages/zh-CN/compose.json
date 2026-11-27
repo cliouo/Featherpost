@@ -88,7 +88,7 @@
   "compose_field_to": "收件人",
   "compose_field_to_placeholder": "邮箱地址，多个地址用逗号分隔",
   "compose_hint_offline": "后台未连接，输入保留在当前窗口",
-  "compose_hint_online": "⌘ Enter 发送 · 纯文本编辑",
+  "compose_hint_online": "{shortcut} 发送 · 纯文本编辑",
   "compose_html_convert": "转换为纯文本并编辑",
   "compose_html_note": "这份草稿包含 HTML 版式。当前编辑器仅支持纯文本，转换会移除草稿的 HTML 版本。",
   "compose_inline_collapse": "收起",

@@ -26,6 +26,7 @@ import {
   type ReactNode,
 } from "react";
 
+import { ShortcutKeys } from "../ShortcutKeys";
 import { StudioDialog } from "./Dialog";
 
 export type StudioCommandAnnouncement = ListAnnouncement;
@@ -454,7 +455,9 @@ export function StudioCommandDialog({
             <CommandShortcut
               shortcut={meta.shortcut}
               className="command-palette-shortcut"
-            />
+            >
+              <ShortcutKeys shortcut={meta.shortcut} variant="inline" />
+            </CommandShortcut>
           )}
         </CommandItem>
       );

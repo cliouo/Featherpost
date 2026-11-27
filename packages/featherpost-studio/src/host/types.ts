@@ -20,7 +20,7 @@ export type CommandRisk = 'read' | 'stage' | 'write' | 'destructive';
 export type CommandInputSchema = Record<string, unknown>;
 export type IconName =
   | 'inbox' | 'folder' | 'sent' | 'drafts' | 'archive' | 'trash' | 'spam' | 'star'
-  | 'search' | 'sliders' | 'activity' | 'mail' | 'reply' | 'forward' | 'paperclip' | 'settings' | 'refresh' | 'more' | 'clip' | 'back' | 'puzzle';
+  | 'search' | 'sliders' | 'activity' | 'mail' | 'reply' | 'forward' | 'paperclip' | 'settings' | 'refresh' | 'more' | 'clip' | 'back' | 'puzzle' | 'keyboard';
 
 /** 命令执行时宿主给的上下文；它是命令能知道的全部。 */
 export interface CommandContext {

@@ -8,6 +8,11 @@ import { ComposeController, COMPOSE_VIEW, DRAFTS_VIEW } from "./controller";
 import { Editor } from "./Editor";
 import { fullDate, isoDateTime, shortDate } from "../mailbox/format";
 import { bilingualKeywords, uiLocale, useUiLocale } from "../i18n";
+import {
+  STUDIO_SHORTCUT_KEYS,
+  isGlobalShortcutBlocked,
+  isImeEvent,
+} from "../shortcuts";
 import { MAIL } from "../views";
 
 const REPLY_TITLE = {
@@ -172,12 +177,14 @@ export function composeModule(
     );
   }
   const onKey = (e: KeyboardEvent) => {
+    if (isImeEvent(e) || isGlobalShortcutBlocked(e)) return;
     if (
-      typeof document !== "undefined" &&
-      document.querySelector('dialog[open], [aria-modal="true"]')
-    )
-      return;
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "n") {
+      (e.metaKey || e.ctrlKey) &&
+      !e.altKey &&
+      !e.shiftKey &&
+      !e.repeat &&
+      e.key.toLowerCase() === "n"
+    ) {
       e.preventDefault();
       void controller.create();
     }
@@ -223,7 +230,7 @@ export function composeModule(
             m.compose_command_new_keywords,
           );
         },
-        shortcut: "mod+n",
+        shortcut: STUDIO_SHORTCUT_KEYS.composeNew,
         risk: "stage",
         icon: "drafts",
         locations: ["navigation", "palette"],
