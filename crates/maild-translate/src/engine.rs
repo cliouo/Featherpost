@@ -106,6 +106,21 @@ impl TranslationEngine {
         &self,
         req: TranslateDocumentRequest,
     ) -> Result<TranslateDocumentResult, TranslateError> {
+        self.translate_document_with_progress(req, None, |_, _| {})
+            .await
+    }
+
+    /// Like [`Self::translate_document`], plus an optional [`tokio::sync::Notify`] for immediate
+    /// mid-batch cancellation and a progress callback `(completed_batches, total_batches)`.
+    pub async fn translate_document_with_progress<F>(
+        &self,
+        req: TranslateDocumentRequest,
+        cancel_notify: Option<Arc<tokio::sync::Notify>>,
+        mut on_progress: F,
+    ) -> Result<TranslateDocumentResult, TranslateError>
+    where
+        F: FnMut(usize, usize),
+    {
         let provider = match req.expected_generation {
             Some(gen) => self.registry.get_with_generation(&req.provider_id, gen)?,
             None => self.registry.get(&req.provider_id).ok_or_else(|| {
@@ -163,6 +178,8 @@ impl TranslationEngine {
         let effective_limits =
             BatchLimits::negotiate(req.host_limits, frozen_meta.capabilities.limits);
         let plan = plan_batches(&req.blocks, effective_limits)?;
+        let total_batches = plan.batches.len();
+        on_progress(0, total_batches);
         let deadline = req.total_deadline.map(|d| Instant::now() + d);
 
         let mut chunk_outputs: HashMap<u32, String> = HashMap::new();
@@ -205,7 +222,31 @@ impl TranslationEngine {
                 deadline,
             };
 
-            let resp = current_provider.translate_batch(batch_req).await?;
+            let resp = if let Some(ref notify) = cancel_notify {
+                let fut = current_provider.translate_batch(batch_req);
+                tokio::pin!(fut);
+                let notified = notify.notified();
+                tokio::pin!(notified);
+                // Re-check flag right after pinning notified() to avoid missed wakeups.
+                if req
+                    .cancel_flag
+                    .as_ref()
+                    .is_some_and(|flag| flag.load(Ordering::SeqCst))
+                {
+                    let _ = current_provider.cancel(&req.job_id).await;
+                    return Err(TranslateError::Cancelled);
+                }
+                tokio::select! {
+                    res = &mut fut => res?,
+                    () = &mut notified => {
+                        let _ = current_provider.cancel(&req.job_id).await;
+                        return Err(TranslateError::Cancelled);
+                    }
+                }
+            } else {
+                current_provider.translate_batch(batch_req).await?
+            };
+
             let validated = validate_batch_response(
                 &batch.items,
                 &resp.items,
@@ -214,6 +255,17 @@ impl TranslationEngine {
             for item in validated {
                 chunk_outputs.insert(item.id, item.text);
             }
+            on_progress(idx + 1, total_batches);
+        }
+
+        // Re-check cancellation before committing cache / returning result.
+        if req
+            .cancel_flag
+            .as_ref()
+            .is_some_and(|flag| flag.load(Ordering::SeqCst))
+        {
+            let _ = provider.cancel(&req.job_id).await;
+            return Err(TranslateError::Cancelled);
         }
 
         // Reassemble any split oversized single blocks and validate the full document result.

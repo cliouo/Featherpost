@@ -76,6 +76,16 @@
     "allow-ui-settings-discover-provider",
     "allow-ui-discover-provider",
     "allow-ui-open-external-url",
-    "allow-ui-open-native-recovery"
+    "allow-ui-open-native-recovery",
+    "allow-ui-translation-get-preference",
+    "allow-ui-translation-save-preference",
+    "allow-ui-translation-list-providers",
+    "allow-ui-translation-test-provider",
+    "allow-ui-translation-detect-language",
+    "allow-ui-translation-translate-html",
+    "allow-ui-translation-translate-plain",
+    "allow-ui-translation-cancel",
+    "allow-ui-translation-cache-stats",
+    "allow-ui-translation-clear-cache"
   ]
 }
