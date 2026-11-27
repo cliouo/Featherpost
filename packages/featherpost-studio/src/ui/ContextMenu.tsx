@@ -15,12 +15,15 @@ import {
 } from "@ui-sdk/react/menu";
 import {
   createContext,
+  isValidElement,
   useCallback,
   useContext,
   useEffect,
   useMemo,
   useRef,
   useState,
+  type HTMLAttributes,
+  type HTMLElementType,
   type MouseEvent,
   type ReactElement,
   type ReactNode,
@@ -44,7 +47,14 @@ export interface MenuOffers {
 }
 
 export interface ContextMenuHostProps {
-  children: ReactElement;
+  /**
+   * Must be a single intrinsic host DOM element (e.g. `<div>`) because
+   * `<MenuContextTrigger render={children}>` clones `onContextMenu`,
+   * `onContextMenuCapture`, `ref`, and `data-slot` directly onto it.
+   * Passing a React Context Provider or non-forwarding component silently
+   * drops those bindings.
+   */
+  children: ReactElement<HTMLAttributes<HTMLElement>, HTMLElementType>;
   selection(text: string): MenuEntry[];
 }
 
@@ -89,6 +99,11 @@ function resolveModalContainer(target: EventTarget | null): HTMLElement | null {
  *   `data-tauri-drag-region="false"`, and `data-shortcuts-off=""`.
  */
 export function ContextMenuHost({ children, selection }: ContextMenuHostProps) {
+  if (!isValidElement(children) || typeof children.type !== "string") {
+    throw new Error(
+      "<ContextMenuHost> requires a single intrinsic host DOM element (e.g. <div>) as its direct child so MenuContextTrigger can attach contextmenu handlers and ref.",
+    );
+  }
   const offers = useRef(
     new WeakMap<Event, { build: Build; target: Element | null }>(),
   );
