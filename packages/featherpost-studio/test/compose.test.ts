@@ -413,3 +413,52 @@ it("validation errors and command titles follow the UI language", async () => {
     vi.unstubAllGlobals();
   }
 });
+
+it("persists uncommitted pending recipient input across 500ms autosave, closeWindow, and copy without dropping text", async () => {
+  vi.useFakeTimers();
+  const { bridge, controller: c } = await setup();
+  c.setRecipientPending("to", "Alice <Alice@EXAMPLE.COM>");
+  expect(c.store.getSnapshot().revision).toBe(1);
+  expect(c.store.getSnapshot().fields?.to).toBe("Alice@example.com");
+
+  await vi.advanceTimersByTimeAsync(500);
+  expect(bridge.saves).toHaveLength(1);
+  expect(bridge.saves[0]!.patch.to).toEqual(["Alice@example.com"]);
+  // Pending input stays undisturbed in controller until explicitly committed.
+  expect(c.store.getSnapshot().recipients?.to.pending).toBe(
+    "Alice <Alice@EXAMPLE.COM>",
+  );
+
+  // Native window close flushes pending recipient text too.
+  c.setRecipientPending("cc", "cc-pending@example.com");
+  await c.closeWindow();
+  expect(bridge.closed).toBe(true);
+  expect(bridge.saves.at(-1)!.patch.cc).toEqual(["cc-pending@example.com"]);
+});
+
+it("blocks autosave and keeps unsaved status when an individual recipient exceeds 320 bytes", async () => {
+  vi.useFakeTimers();
+  const { bridge, controller: c } = await setup();
+  const huge = `${"a".repeat(315)}@example.com`;
+  c.pasteRecipientText("to", `ok@example.com\n${huge}`, 0, 0);
+  expect(c.store.getSnapshot().recipients?.to.chips).toEqual([
+    "ok@example.com",
+    huge,
+  ]);
+  expect(c.store.getSnapshot().errors.to).toBeTruthy();
+
+  await vi.advanceTimersByTimeAsync(500);
+  expect(bridge.saves).toHaveLength(0);
+  expect(c.store.getSnapshot().revision).toBeGreaterThan(
+    c.store.getSnapshot().savedRevision,
+  );
+
+  // Removing the oversized chip clears the error and lets autosave succeed.
+  c.removeRecipient("to", 1);
+  await vi.advanceTimersByTimeAsync(500);
+  expect(bridge.saves).toHaveLength(1);
+  expect(bridge.saves[0]!.patch.to).toEqual(["ok@example.com"]);
+  expect(c.store.getSnapshot().savedRevision).toBe(
+    c.store.getSnapshot().revision,
+  );
+});

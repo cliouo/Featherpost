@@ -32,7 +32,7 @@ import { useStudioActions } from "./studioActions";
 import { Checkbox } from "./ui";
 
 const SHORTCUT_BLOCKED_SELECTOR =
-  'input,textarea,select,summary,[contenteditable="true"],[data-shortcuts-off],[role="checkbox"],[role="switch"],[role="combobox"],[role="listbox"],[role="option"],[role="menu"],[role="menuitem"]';
+  'input,textarea,select,summary,[contenteditable="true"],[data-shortcuts-off],[data-chip-input],[role="checkbox"],[role="switch"],[role="combobox"],[role="listbox"],[role="option"],[role="menu"],[role="menuitem"]';
 
 export function isShortcutBlockedTarget(
   target: { closest?(selector: string): unknown } | null | undefined,

@@ -97,6 +97,14 @@ describe("UI SDK architectural boundary", () => {
           violations.push(`${rel}:${line} imports forbidden stylesheet ${specifier}`);
           continue;
         }
+        if (specifier.includes("@ui-sdk/react/token-input")) {
+          violations.push(`${rel}:${line} imports forbidden ${specifier}; use @ui-sdk/react/combobox via src/ui/TokenInput.tsx`);
+          continue;
+        }
+        if (specifier.includes("@ui-sdk/react/combobox") && rel !== "ui/TokenInput.tsx") {
+          violations.push(`${rel}:${line} imports ${specifier} outside src/ui/TokenInput.tsx`);
+          continue;
+        }
         if (specifier.includes("@radix-ui/")) {
           violations.push(`${rel}:${line} still imports retired ${specifier}`);
           continue;

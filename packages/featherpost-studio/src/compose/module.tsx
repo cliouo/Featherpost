@@ -41,6 +41,12 @@ export function composeModule(
   const stop = host.state.subscribe(() =>
     controller.setOnline(host.state.getSnapshot().snapshot.phase === "online"),
   );
+  if (host.bridge.searchContacts) {
+    controller.setContactSource({
+      searchContacts: (account, query, limit) =>
+        host.bridge.searchContacts!(account, query, limit),
+    });
+  }
   const stopContext = host.registerContextProvider("compose", () => {
     const s = controller.store.getSnapshot();
     return {

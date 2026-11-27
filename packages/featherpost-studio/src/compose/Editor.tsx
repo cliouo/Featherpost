@@ -7,6 +7,7 @@ import { useStore } from "../host/hooks";
 import { clockTime } from "../mailbox/format";
 import { useUiLocale } from "../i18n";
 import type { ComposeController } from "./controller";
+import { RecipientField } from "./RecipientField";
 const size = (n: number) =>
   n >= 1048576
     ? `${(n / 1048576).toFixed(1)} MiB`
@@ -20,14 +21,30 @@ export function Editor({
 }) {
   useUiLocale();
   const s = useStore(controller.store),
-    root = useRef<HTMLFormElement>(null);
+    root = useRef<HTMLFormElement>(null),
+    composingRef = useRef(false);
   const [extras, setExtras] = useState(false);
   useEffect(() => {
-    setExtras(!!(s.fields?.cc || s.fields?.bcc));
+    setExtras(
+      Boolean(
+        s.fields?.cc ||
+          s.fields?.bcc ||
+          s.recipients?.cc.chips.length ||
+          s.recipients?.cc.pending ||
+          s.recipients?.bcc.chips.length ||
+          s.recipients?.bcc.pending,
+      ),
+    );
   }, [s.draft?.id]);
   useEffect(() => {
+    if (s.errors.cc || s.errors.bcc) {
+      setExtras(true);
+    }
+  }, [s.errors.cc, s.errors.bcc]);
+  useEffect(() => {
+    if (!Object.values(s.errors).some(Boolean)) return;
     root.current?.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus();
-  }, [s.errors]);
+  }, [s.errors, extras]);
   if (!s.draft || !s.fields)
     return (
       <div className="empty">
@@ -70,7 +87,7 @@ export function Editor({
           ? m.compose_status_saved_at({ time: savedClock })
           : m.compose_status_saved();
   const field = (
-    name: "to" | "cc" | "bcc" | "subject",
+    name: "subject",
     label: string,
     placeholder: string,
   ) => (
@@ -99,13 +116,49 @@ export function Editor({
     <form
       ref={root}
       className={`composer${inline ? " inline-composer" : ""}${s.collapsed && inline ? " collapsed" : ""}`}
+      onCompositionStartCapture={() => {
+        composingRef.current = true;
+      }}
+      onCompositionEndCapture={() => {
+        composingRef.current = false;
+      }}
+      onBlurCapture={(e) => {
+        const next = e.relatedTarget as Node | null;
+        if (!next || !root.current?.contains(next)) {
+          composingRef.current = false;
+        }
+      }}
       onSubmit={(e) => {
         e.preventDefault();
+        controller.commitAllPendingRecipients();
         void controller.send();
       }}
-      onKeyDown={(e) => {
-        if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+      onKeyDownCapture={(e) => {
+        if (
+          s.confirm ||
+          !(e.target instanceof Node) ||
+          !root.current?.contains(e.target)
+        ) {
+          return;
+        }
+        const native = e.nativeEvent;
+        if (
+          native.isComposing ||
+          native.keyCode === 229 ||
+          composingRef.current
+        ) {
+          return;
+        }
+        if (
+          (e.metaKey || e.ctrlKey) &&
+          !e.altKey &&
+          !e.shiftKey &&
+          e.key === "Enter"
+        ) {
           e.preventDefault();
+          e.stopPropagation();
+          if (e.repeat) return;
+          controller.commitAllPendingRecipients();
           void controller.send();
         }
       }}
@@ -300,15 +353,32 @@ export function Editor({
                 {m.compose_field_cc_bcc()}
               </button>
             </div>
-            {field("to", m.compose_field_to(), m.compose_field_to_placeholder())}
+            <RecipientField
+              controller={controller}
+              field="to"
+              label={m.compose_field_to()}
+              placeholder={m.compose_field_to_placeholder()}
+              disabled={locked}
+              error={s.errors.to}
+            />
             {extras && (
               <>
-                {field("cc", m.compose_field_cc(), m.compose_field_cc_placeholder())}
-                {field(
-                  "bcc",
-                  m.compose_field_bcc(),
-                  m.compose_field_bcc_placeholder(),
-                )}
+                <RecipientField
+                  controller={controller}
+                  field="cc"
+                  label={m.compose_field_cc()}
+                  placeholder={m.compose_field_cc_placeholder()}
+                  disabled={locked}
+                  error={s.errors.cc}
+                />
+                <RecipientField
+                  controller={controller}
+                  field="bcc"
+                  label={m.compose_field_bcc()}
+                  placeholder={m.compose_field_bcc_placeholder()}
+                  disabled={locked}
+                  error={s.errors.bcc}
+                />
               </>
             )}
             {field(

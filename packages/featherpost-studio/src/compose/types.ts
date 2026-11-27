@@ -1,5 +1,19 @@
-import type { MessageIdentity, UiError } from "../bridge/types";
+import type {
+  MessageIdentity,
+  UiContactSuggestion,
+  UiError,
+} from "../bridge/types";
+import type { FallbackContactRow } from "./recipients";
 export type ReplyMode = "reply" | "reply_all" | "forward";
+
+export interface ContactSearchSource {
+  searchContacts?: (
+    account: string,
+    query?: string,
+    limit?: number,
+  ) => Promise<UiContactSuggestion[]>;
+  fallbackRows?: (account: string) => readonly FallbackContactRow[];
+}
 export interface DraftAttachment {
   upload_id?: string;
   account: string;
