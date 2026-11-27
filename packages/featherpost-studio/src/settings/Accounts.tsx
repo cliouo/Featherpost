@@ -25,6 +25,7 @@ import {
   type ProviderPreset,
 } from "./providers";
 import { Icon } from "../app/Icon";
+import { StudioTooltip } from "../ui";
 import { BRAND } from "../brand";
 import { Field } from "./Field";
 
@@ -618,9 +619,11 @@ export function AccountMore({ profile, controller, disabled = false }: { profile
       align="end"
       forceClosed={s.closeLocked}
       trigger={
-        <button type="button" aria-label={label} title={label}>
-          {m.studio_account_more()} <Icon name="more" />
-        </button>
+        <StudioTooltip label={label} roleType="description" side="bottom">
+          <button type="button" aria-label={label}>
+            {m.studio_account_more()} <Icon name="more" />
+          </button>
+        </StudioTooltip>
       }
     >
       <StudioDropdownMenuItem disabled={itemDisabled} onSelect={() => confirm(false)}>

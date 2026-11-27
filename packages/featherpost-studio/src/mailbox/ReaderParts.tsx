@@ -10,6 +10,7 @@ import { addressOnly, humanSize, plural } from './format';
 import type { DocumentController, DocumentState } from './document';
 import { messageKey } from './controller';
 import { BRAND } from '../brand';
+import { StudioTooltip } from '../ui';
 
 /** 发件人地址的域名（信任「整个域」的选项用）。 */
 export function senderDomain(sender: string): string | null {
@@ -86,9 +87,15 @@ export function RemoteBanner({ host, detail, state, documents, onPolicyChanged }
         {m.mailbox_remote_allow_once()}
       </button>
       {address.includes('@') && (
-        <button type="button" className="text-button" disabled={busy} onClick={() => void patch({ trust: [address] })} title={m.mailbox_remote_trust_address_title()}>
-          {m.mailbox_remote_trust_address({ address })}
-        </button>
+        <StudioTooltip
+          label={m.mailbox_remote_trust_address_title()}
+          roleType="description"
+          side="bottom"
+        >
+          <button type="button" className="text-button" disabled={busy} onClick={() => void patch({ trust: [address] })}>
+            {m.mailbox_remote_trust_address({ address })}
+          </button>
+        </StudioTooltip>
       )}
     </div>
   );

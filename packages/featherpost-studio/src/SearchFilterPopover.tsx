@@ -26,6 +26,7 @@ import {
 import {
   StudioPopover,
   StudioPopoverClose,
+  StudioTooltip,
   Switch,
 } from "./ui";
 
@@ -217,30 +218,41 @@ export function SearchFilterPopover({
       finalFocus={focusHandoff ? "none" : undefined}
       container={container}
       trigger={
-        <button
-          type="button"
-          className={`search-filter-trigger${activeCount > 0 ? " is-active" : ""}`}
-          data-tauri-drag-region="false"
-          title={triggerLabel}
-          aria-label={triggerLabel}
+        <StudioTooltip
+          label={triggerLabel}
+          roleType="label"
+          side="bottom"
+          suppress={open}
         >
-          <Icon name="sliders" />
-          {activeCount > 0 && (
-            <span className="search-filter-badge" aria-hidden="true">
-              {activeCount}
-            </span>
-          )}
-        </button>
+          <button
+            type="button"
+            className={`search-filter-trigger${activeCount > 0 ? " is-active" : ""}`}
+            data-tauri-drag-region="false"
+            aria-label={triggerLabel}
+          >
+            <Icon name="sliders" />
+            {activeCount > 0 && (
+              <span className="search-filter-badge" aria-hidden="true">
+                {activeCount}
+              </span>
+            )}
+          </button>
+        </StudioTooltip>
       }
     >
-      <StudioPopoverClose
-        type="button"
-        className="icon-button search-filter-close"
-        title={m.studio_search_filter_close()}
-        aria-label={m.studio_search_filter_close()}
+      <StudioTooltip
+        label={m.studio_search_filter_close()}
+        roleType="label"
+        side="bottom"
       >
-        ×
-      </StudioPopoverClose>
+        <StudioPopoverClose
+          type="button"
+          className="icon-button search-filter-close"
+          aria-label={m.studio_search_filter_close()}
+        >
+          ×
+        </StudioPopoverClose>
+      </StudioTooltip>
       <form
         className="search-filter-form"
         noValidate
@@ -439,16 +451,21 @@ export function SearchFilterPopover({
             aria-labelledby={scopeLegendId}
           >
             {tiers.map((tier) => (
-              <button
+              <StudioTooltip
                 key={tier}
-                type="button"
-                className={draft.scope === tier ? "is-selected" : undefined}
-                aria-pressed={draft.scope === tier}
-                title={scopeHints?.[tier]}
-                onClick={() => setDraft((prev) => ({ ...prev, scope: tier }))}
+                label={scopeHints?.[tier]}
+                roleType="description"
+                disabled={!scopeHints?.[tier]}
               >
-                {scopeTierLabel(tier)}
-              </button>
+                <button
+                  type="button"
+                  className={draft.scope === tier ? "is-selected" : undefined}
+                  aria-pressed={draft.scope === tier}
+                  onClick={() => setDraft((prev) => ({ ...prev, scope: tier }))}
+                >
+                  {scopeTierLabel(tier)}
+                </button>
+              </StudioTooltip>
             ))}
           </div>
         </fieldset>

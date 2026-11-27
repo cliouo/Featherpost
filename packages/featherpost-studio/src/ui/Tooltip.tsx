@@ -367,6 +367,7 @@ function mergeTriggerProps(
   tooltipProps: AnyProps | null,
   outerProps: AnyProps,
   childProps: AnyProps,
+  childType: unknown,
   shortcut?: string,
 ): AnyProps {
   const result: AnyProps = {};
@@ -433,7 +434,10 @@ function mergeTriggerProps(
   const id = outerProps.id ?? childProps.id;
   if (id !== undefined) result.id = id;
 
-  const type = childProps.type ?? outerProps.type ?? tooltipProps?.type;
+  const type =
+    childProps.type ??
+    outerProps.type ??
+    (childType === "button" ? tooltipProps?.type : undefined);
   if (type !== undefined) result.type = type;
 
   const describedBy = mergeIdTokens(
@@ -609,6 +613,7 @@ export const StudioTooltip = /* @__PURE__ */ forwardRef<
             isDisabled ? null : tp,
             rest as AnyProps,
             childProps,
+            children.type,
             isDisabled ? undefined : shortcut,
           );
           merged.ref = mergedRef;

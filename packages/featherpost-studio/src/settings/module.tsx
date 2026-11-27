@@ -25,7 +25,7 @@ import { LanguageController } from "./language";
 import { Icon } from "../app/Icon";
 import { BRAND } from "../brand";
 import { STUDIO_SHORTCUT_KEYS } from "../shortcuts";
-import { Switch } from "../ui";
+import { StudioTooltip, Switch } from "../ui";
 
 export const SETTINGS_VIEW = "maild.settings.page";
 
@@ -343,7 +343,9 @@ export function settingsModule(
                   </button>
                 ) : active?.id === "maild.settings.appearance" ? (
                   <div className="studio-heading-actions"><span className="studio-instant">✓ {m.studio_settings_instant()}</span>
-                    <button type="button" className="text-button" aria-label={m.studio_settings_refresh_label()} title={m.studio_settings_refresh_label()} disabled={refreshDisabled} onClick={refresh}><Icon name="refresh" /></button>
+                    <StudioTooltip label={m.studio_settings_refresh_label()} roleType="label" side="bottom">
+                      <button type="button" className="text-button" aria-label={m.studio_settings_refresh_label()} disabled={refreshDisabled} onClick={refresh}><Icon name="refresh" /></button>
+                    </StudioTooltip>
                   </div>
                 ) : (
                   <button type="button" className="text-button" disabled={refreshDisabled} onClick={refresh}><Icon name="refresh" />{m.studio_settings_refresh()}</button>
