@@ -480,6 +480,7 @@ export function Studio({
   );
   return (
     <StudioActionsContext.Provider value={actions}>
+    <StudioTooltipProvider>
     <ContextMenuHost
       selection={(text) =>
         selectionMenu(text, {
@@ -488,7 +489,6 @@ export function Studio({
         })
       }
     >
-    <StudioTooltipProvider>
     <div className={`studio studio-${view}`} data-studio-view={view}>
       <a className="skip-link" href="#workspace">
         {m.studio_shell_skip_to_content()}
@@ -829,8 +829,8 @@ export function Studio({
         {state.toast ?? toastText}
       </div>
     </div>
-    </StudioTooltipProvider>
     </ContextMenuHost>
+    </StudioTooltipProvider>
     </StudioActionsContext.Provider>
   );
 }

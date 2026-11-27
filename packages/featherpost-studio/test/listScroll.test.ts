@@ -565,13 +565,17 @@ describe("selection transition CSS & SSR rendering (issues #23 & #24)", () => {
             { value: { search: () => {}, copy: () => {} } },
             createElement(ContextMenuHost, {
               selection: () => [],
-              children: createElement(Workspace, {
-                host,
-                controller,
-                documents,
-                composer,
-                setup: () => {},
-              }),
+              children: createElement(
+                "div",
+                { className: "studio" },
+                createElement(Workspace, {
+                  host,
+                  controller,
+                  documents,
+                  composer,
+                  setup: () => {},
+                }),
+              ),
             }),
           ),
         );

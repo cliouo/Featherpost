@@ -4,6 +4,9 @@ import {
   createElement as h,
   useRef,
   useState,
+  type HTMLAttributes,
+  type HTMLElementType,
+  type ReactElement,
   type ReactNode,
 } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -11,10 +14,21 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { applyEffectiveLocales } from "@featherpost/i18n";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { StudioDialog } from "../src/app/Dialog";
+import { ComposeController } from "../src/compose/controller";
+import { composeModule } from "../src/compose/module";
 import { ContextMenuHost, useContextMenu } from "../src/ContextMenu";
+import { Host } from "../src/host/host";
+import { studioMailbox } from "../src/mailbox";
+import { SettingsController } from "../src/settings/controller";
+import { settingsModule } from "../src/settings/module";
+import { Studio } from "../src/Shell";
 import { SyncCount } from "../src/SyncCount";
 import { clipboardCopier } from "../src/studioActions";
-import { acquireFallbackLayer, closeAllPopovers } from "../src/ui";
+import {
+  acquireFallbackLayer,
+  closeAllPopovers,
+  StudioTooltipProvider,
+} from "../src/ui";
 import { isShortcutBlockedTarget } from "../src/Workspace";
 import {
   accountMenu,
@@ -29,7 +43,7 @@ import {
   type MailMenuDeps,
   type MenuEntry,
 } from "../src/menus";
-import { folder, online, summary } from "./fakeBridge";
+import { FakeBridge, flush, folder, online, summary } from "./fakeBridge";
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -1064,5 +1078,202 @@ describe("ContextMenuHost (@ui-sdk/react/menu + MenuContextTrigger)", () => {
     const cancelBtn = document.body.querySelector<HTMLButtonElement>("button.dialog-cancel")!;
     expect(cancelBtn).not.toBeNull();
     expect(document.activeElement).toBe(cancelBtn);
+  });
+
+  it("rejects non-host React components (e.g. Context Providers) as direct children of ContextMenuHost", () => {
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(() =>
+        mount(
+          h(ContextMenuHost, {
+            selection: () => [],
+            children: h(
+              StudioTooltipProvider,
+              null,
+              h("div", { className: "studio" }, "wrapped"),
+            ) as unknown as ReactElement<HTMLAttributes<HTMLElement>, HTMLElementType>,
+          }),
+        ),
+      ).toThrow(/ContextMenuHost.*host DOM element/i);
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
+  });
+
+  it("wires MenuContextTrigger onto real <Studio> .studio root so message/folder context menus and tooltips both work", async () => {
+    const bridge = new FakeBridge();
+    const host = new Host(bridge);
+    const composer = new ComposeController(
+      bridge.compose,
+      (id) => host.openView(id),
+      () => {},
+    );
+    const settings = new SettingsController(bridge.settings, () => {});
+    const mailbox = studioMailbox(host, composer, () => {});
+    const bundles = [
+      mailbox.bundle,
+      composeModule(host, composer),
+      settingsModule(host, settings),
+    ];
+    bundles.forEach((b) => host.registerBuiltin(b));
+    host.finishAssembly();
+    host.start();
+
+    let perfNowSpy: ReturnType<typeof vi.spyOn> | null = null;
+    try {
+      const { container } = mount(
+        h(Studio, {
+          host,
+          mailbox: mailbox.controller,
+          composer,
+          setup: () => {},
+          manageAccounts: () => {},
+        }),
+      );
+
+      await act(async () => {
+        await flush();
+        bridge.folderRequests
+          .at(-1)!
+          .d.resolve([folder("INBOX", "inbox"), folder("Archive", "archive")]);
+        await flush();
+        if (bridge.mailbox.queries.length) {
+          bridge.mailbox.queries.at(-1)!.d.resolve({
+            messages: [summary("INBOX", "1", "Weekly Sync")],
+            total: 1,
+          });
+        }
+        if (bridge.pageRequests.length) {
+          bridge.pageRequests.at(-1)!.d.resolve({
+            messages: [summary("INBOX", "1", "Weekly Sync")],
+            total: 1,
+          });
+        }
+        await flush();
+      });
+
+      const studioRoot = container.querySelector<HTMLElement>(".studio")!;
+      expect(studioRoot).not.toBeNull();
+      expect(studioRoot.getAttribute("data-slot")).toBe("menu-context-trigger");
+
+      // 1. Right-click a message row -> opens message menu and marks [data-menu-target].
+      const messageRow = container.querySelector<HTMLElement>(".message-row")!;
+      expect(messageRow).not.toBeNull();
+      const msgEv = dispatchContextMenu(messageRow, {
+        button: 2,
+        clientX: 120,
+        clientY: 160,
+      });
+      await flushTimers();
+      expect(msgEv.defaultPrevented).toBe(true);
+      const msgMenu = openMenu();
+      expect(msgMenu).not.toBeNull();
+      expect(messageRow.hasAttribute("data-menu-target")).toBe(true);
+      expect(
+        [...msgMenu!.querySelectorAll('[role="menuitem"]')].map(
+          (el) => el.textContent,
+        ),
+      ).toContain("删除");
+
+      // Dismiss before opening next menu.
+      dispatchPointerDown(studioRoot, { button: 0, pointerType: "mouse" });
+      await flushTimers();
+      expect(openMenu()).toBeNull();
+      expect(messageRow.hasAttribute("data-menu-target")).toBe(false);
+
+      // 2. Right-click a folder row -> opens folder menu and marks [data-menu-target].
+      const folderRow = container.querySelector<HTMLElement>(".folder-row")!;
+      expect(folderRow).not.toBeNull();
+      const folderEv = dispatchContextMenu(folderRow, {
+        button: 2,
+        clientX: 60,
+        clientY: 140,
+      });
+      await flushTimers();
+      expect(folderEv.defaultPrevented).toBe(true);
+      const flMenu = openMenu();
+      expect(flMenu).not.toBeNull();
+      expect(folderRow.hasAttribute("data-menu-target")).toBe(true);
+      expect(
+        [...flMenu!.querySelectorAll('[role="menuitem"]')].map(
+          (el) => el.textContent,
+        ),
+      ).toContain("立即同步");
+
+      keydown(flMenu!, "Escape");
+      await flushTimers();
+      expect(openMenu()).toBeNull();
+      expect(folderRow.hasAttribute("data-menu-target")).toBe(false);
+
+      // 3. Tooltips inside <Studio> still open and close cleanly alongside <ContextMenuHost>.
+      let fakeNow = 50_000;
+      vi.useFakeTimers({
+        toFake: [
+          "setTimeout",
+          "clearTimeout",
+          "setInterval",
+          "clearInterval",
+          "Date",
+          "requestAnimationFrame",
+          "cancelAnimationFrame",
+        ],
+      });
+      perfNowSpy = vi.spyOn(performance, "now").mockImplementation(() => fakeNow);
+
+      const composeBtn = container.querySelector<HTMLButtonElement>(".compose-button")!;
+      expect(composeBtn).not.toBeNull();
+      act(() => {
+        composeBtn.dispatchEvent(
+          new PointerEvent("pointerenter", {
+            bubbles: false,
+            pointerType: "mouse",
+          }),
+        );
+      });
+      act(() => {
+        vi.advanceTimersByTime(0);
+      });
+      fakeNow += 450;
+      act(() => {
+        vi.advanceTimersByTime(450);
+      });
+
+      const tooltips = [
+        ...document.body.querySelectorAll<HTMLElement>('[role="tooltip"]:not([hidden])'),
+      ];
+      expect(tooltips).toHaveLength(1);
+      expect(tooltips[0]!.textContent).toContain("写邮件");
+
+      act(() => {
+        composeBtn.dispatchEvent(
+          new PointerEvent("pointerleave", {
+            bubbles: false,
+            pointerType: "mouse",
+            clientX: 500,
+            clientY: 500,
+          }),
+        );
+      });
+      fakeNow += 50;
+      act(() => {
+        vi.advanceTimersByTime(50);
+      });
+      expect(
+        document.body.querySelectorAll('[role="tooltip"]:not([hidden])'),
+      ).toHaveLength(0);
+    } finally {
+      perfNowSpy?.mockRestore();
+      vi.useRealTimers();
+      while (mountedRoots.length) {
+        const entry = mountedRoots.pop()!;
+        act(() => {
+          entry.root.unmount();
+        });
+        entry.container.remove();
+      }
+      bundles.forEach((b) => b.dispose?.());
+      composer.stop();
+      host.stop();
+    }
   });
 });

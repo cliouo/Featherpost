@@ -190,13 +190,17 @@ describe("format.ts：边界与防崩保护", () => {
         { value: { search: () => {}, copy: () => {} } },
         createElement(ContextMenuHost, {
           selection: () => [],
-          children: createElement(Workspace, {
-            host,
-            controller: mailbox,
-            documents: docs,
-            composer: workspaceComposer,
-            setup: () => {},
-          }),
+          children: createElement(
+            "div",
+            { className: "studio" },
+            createElement(Workspace, {
+              host,
+              controller: mailbox,
+              documents: docs,
+              composer: workspaceComposer,
+              setup: () => {},
+            }),
+          ),
         }),
       ),
     );
