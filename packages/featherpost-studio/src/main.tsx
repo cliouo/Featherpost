@@ -24,6 +24,7 @@ import "./contextmenu.css";
 import "./command-palette.css";
 import "./search-filters.css";
 import "./shortcut-help.css";
+import "./tooltip.css";
 
 const host = new Host(tauriBridge);
 const composer = new ComposeController(

@@ -70,8 +70,16 @@ export {
   type TokenInputSuggestion,
 } from "./TokenInput";
 export {
+  StudioTooltip,
+  StudioTooltipProvider,
+  type StudioTooltipDefaults,
+  type StudioTooltipProps,
+  type StudioTooltipProviderProps,
+} from "./Tooltip";
+export {
   attachWindowDismissal,
   closeAllPopovers,
+  subscribeGlobalDismiss,
   useWindowDismiss,
   type UseWindowDismissOptions,
   type WindowDismissDocumentLike,
@@ -83,6 +91,7 @@ export {
   Z_INDEX_TOKENS,
   acquireFallbackLayer,
   useFallbackLayer,
+  useFallbackTooltipZIndex,
   useFallbackZIndex,
   usePersistentOverlay,
   type FallbackLayer,

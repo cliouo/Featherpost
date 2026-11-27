@@ -53,6 +53,7 @@
   --z-dialog: 65;
   --z-skip-link: 100;
   --z-popover: 1000;
+  --z-tooltip: 1900;
   --z-toast: 2000;
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
   font-size: 13px;

@@ -179,7 +179,12 @@ export function StudioDialog({
 
   const handleContentKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     onKeyDown?.(event);
-    event.stopPropagation();
+    // Let Escape bubble to `@ui-sdk`'s document layer stack so nested overlays
+    // (such as a Tooltip opened on a button inside the Dialog) dismiss first
+    // before the Dialog itself handles Escape.
+    if (event.key !== "Escape") {
+      event.stopPropagation();
+    }
   };
 
   if (isAlert) {

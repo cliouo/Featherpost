@@ -42,12 +42,59 @@ export interface WindowDismissOptions {
 }
 
 const openDismissers = new Set<() => void>();
+const globalDismissers = new Set<(reason: WindowDismissReason) => void>();
 
 /** Closes any open dropdown/popover menus registered with window dismissal (e.g. when a modal dialog opens). */
 export function closeAllPopovers(): void {
   for (const dismiss of [...openDismissers]) {
     dismiss();
   }
+  for (const listener of [...globalDismissers]) {
+    listener("external");
+  }
+}
+
+/**
+ * Persistent (non-single-shot) global window-dismissal subscription used by root
+ * coordinators such as `StudioTooltipProvider` to invalidate in-flight cold-hover
+ * timers and close open tooltips on every `window.blur`, `window.pagehide`,
+ * `document.visibilitychange(hidden)`, and `closeAllPopovers()` call.
+ */
+export function subscribeGlobalDismiss(
+  onDismiss: (reason: WindowDismissReason) => void,
+  options?: {
+    doc?: WindowDismissDocumentLike;
+    win?: WindowDismissWindowLike;
+  },
+): () => void {
+  const doc =
+    options?.doc ??
+    (typeof document !== "undefined"
+      ? (document as unknown as WindowDismissDocumentLike)
+      : undefined);
+  const win =
+    options?.win ??
+    (typeof window !== "undefined"
+      ? (window as unknown as WindowDismissWindowLike)
+      : undefined);
+
+  const onBlur = () => onDismiss("window-blur");
+  const onPageHide = () => onDismiss("window-hidden");
+  const onVisibility = () => {
+    if (doc?.hidden) onDismiss("window-hidden");
+  };
+
+  globalDismissers.add(onDismiss);
+  doc?.addEventListener("visibilitychange", onVisibility);
+  win?.addEventListener("blur", onBlur);
+  win?.addEventListener("pagehide", onPageHide);
+
+  return () => {
+    globalDismissers.delete(onDismiss);
+    doc?.removeEventListener("visibilitychange", onVisibility);
+    win?.removeEventListener("blur", onBlur);
+    win?.removeEventListener("pagehide", onPageHide);
+  };
 }
 
 /**
