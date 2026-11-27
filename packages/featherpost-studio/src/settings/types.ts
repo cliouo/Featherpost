@@ -261,4 +261,6 @@ export interface SettingsBridge {
   openExternalUrl?(url: string): Promise<void>;
   /** 可选：不依赖后台直接打开原生修复与后台管理窗口（离线或独立前端兜底）。 */
   openRecovery?(): Promise<void>;
+  /** 可选：受控邮件翻译桥（ADR-0050）。 */
+  translation?: import("../bridge/translation").TranslationBridge;
 }

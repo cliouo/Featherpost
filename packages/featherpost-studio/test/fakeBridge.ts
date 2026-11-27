@@ -70,6 +70,9 @@ export class FakeBridge implements MailBridge {
   settings=new FakeSettings();
   compose=new FakeCompose();
   mailbox=new FakeMailbox();
+  get translation() {
+    return this.settings.translation;
+  }
   available = true;
   snapshotHandler: ((snapshot: UiSnapshot) => void) | null = null;
   intentHandler: ((intent: OpenIntent) => void) | null = null;

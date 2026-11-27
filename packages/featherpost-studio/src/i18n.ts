@@ -257,6 +257,7 @@ export const permissionLabels: Readonly<Record<string, () => string>> = {
   notifications_read: m.extensions_permission_notifications_read,
   frontend_open: m.extensions_permission_frontend_open,
   transport_provider: m.extensions_permission_transport_provider,
+  translation_provider: m.extensions_permission_translation_provider,
   events_stream: m.extensions_permission_events_stream,
   inbox: m.extensions_permission_inbox,
   message: m.extensions_permission_message,

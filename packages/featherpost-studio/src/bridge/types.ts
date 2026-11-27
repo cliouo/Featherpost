@@ -1,5 +1,32 @@
 import type { MailboxBridge, ServerSearchOptions } from '../mailbox/types';
 import type { ComposeBridge } from '../compose/types';
+import type { TranslationBridge } from './translation';
+export type {
+  DetectedLanguage,
+  OpenAiConfigUpdate,
+  OpenAiConfigView,
+  PlainTextBlockView,
+  TranslationBridge,
+  TranslationCacheClearReport,
+  TranslationCacheStats,
+  TranslationDisplayMode,
+  TranslationEndpointTransport,
+  TranslationPreferenceUpdate,
+  TranslationPreferenceView,
+  TranslationProbeResult,
+  TranslationProbeStage,
+  TranslationProviderKind,
+  UiDetectLanguageRequest,
+  UiHtmlTranslationResult,
+  UiLanguageDetection,
+  UiPlainTranslationResult,
+  UiTestTranslationProviderRequest,
+  UiTranslateHtmlRequest,
+  UiTranslatePlainRequest,
+  UiTranslationProgress,
+  UiTranslationProviderEntry,
+  UiTranslationProvidersResponse,
+} from './translation';
 import type {
   CustomProxyConfig,
   CustomProxyUpdate,
@@ -295,6 +322,8 @@ export interface MailBridge {
   locale?: LocaleBridge;
   /** 可选：全局代理偏好通道。 */
   proxy?: ProxyBridge;
+  /** 可选：受控邮件翻译桥（ADR-0050）。 */
+  translation?: TranslationBridge;
 }
 
 export function isUiError(value: unknown): value is UiError {
