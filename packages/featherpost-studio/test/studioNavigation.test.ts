@@ -2,8 +2,10 @@ import { afterEach, expect, it } from "vitest";
 import { applyEffectiveLocales } from "@featherpost/i18n";
 import { MailboxController } from "../src/mailbox/controller";
 import {
+  applySearchQuery,
   filterUnread,
   searchMail,
+  scopeContext,
   folderTree,
   folderNavigationLabels,
   matchingFolderNames,
@@ -29,12 +31,9 @@ async function ready(folders = [folder("INBOX", "inbox", 12), folder("Archive", 
   const bridge = new FakeBridge();
   const query = bridge.mailbox.query.bind(bridge.mailbox);
   bridge.mailbox.query = (q, offset) => {
-    if (
-      q.search &&
-      (q.role !== undefined || q.seen !== undefined || q.flagged !== undefined)
-    )
+    if (q.search && q.role !== undefined)
       throw new Error(
-        "Native bridge: full-text search does not accept list filters",
+        "Native bridge: full-text search does not accept list role filters",
       );
     return query(q, offset);
   };
@@ -315,4 +314,43 @@ it("calls the system Drafts 草稿箱 while preserving a custom 草稿 folder an
   } finally {
     applyEffectiveLocales([]);
   }
+});
+
+it("supports 3-tier search scopes (folder / account / all) and pure structured filter searches without keyword", async () => {
+  const { bridge, controller: c } = await ready();
+  c.selectFolder(c.foldersOf("demo")[1]!);
+  const source = c.state.scope;
+
+  searchMail(c, "invoice", "folder", source);
+  expect(bridge.mailbox.queries.at(-1)!.query).toEqual({
+    search: true,
+    account: "demo",
+    folder: "Archive",
+    query: "invoice",
+  });
+
+  searchMail(c, "invoice", "account", source);
+  expect(bridge.mailbox.queries.at(-1)!.query).toEqual({
+    search: true,
+    account: "demo",
+    query: "invoice",
+  });
+
+  searchMail(c, "invoice", "all", source);
+  expect(bridge.mailbox.queries.at(-1)!.query).toEqual({
+    search: true,
+    query: "invoice",
+  });
+
+  // Pure structured filter (seen: false, no keyword) stays in search scope and does not label flagged search as Starred smart folder.
+  applySearchQuery(c, { account: "demo", seen: false, flagged: true });
+  expect(c.state.scope).toEqual({
+    kind: "search",
+    query: { search: true, account: "demo", seen: false, flagged: true },
+  });
+  expect(scopeContext(c).name).not.toBe("星标邮件");
+
+  // Clearing all active search terms exits back to the previous folder scope.
+  applySearchQuery(c, { account: "demo" });
+  expect(c.state.scope).toMatchObject({ kind: "folder", account: "demo", folder: "Archive" });
 });

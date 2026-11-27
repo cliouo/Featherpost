@@ -3,8 +3,14 @@ import { folderLabel, uiLocale } from "./i18n";
 import type { UiFolder } from "./bridge/types";
 import type { MailboxController } from "./mailbox/controller";
 import { queryOf } from "./mailbox/controller";
-import type { Scope } from "./mailbox/types";
+import type { MailboxQuery, Scope } from "./mailbox/types";
 import type { IconName } from "./host/types";
+import {
+  hasActiveSearch,
+  scopeFieldsForTier,
+  type SearchFilterMeta,
+  type SearchScopeTier,
+} from "./searchFilters";
 
 export interface FolderNode {
   folder: UiFolder;
@@ -142,7 +148,7 @@ export function scopeContext(
         ? query.account
           ? m.studio_scope_inbox()
           : m.studio_scope_all_inboxes()
-        : query.flagged
+        : !query.search && query.flagged
           ? m.studio_scope_starred()
           : m.studio_scope_all_mail());
   return {
@@ -150,36 +156,53 @@ export function scopeContext(
     accounts: query.accounts,
     group: group?.name,
     folder,
+    folderName: query.folder,
     name,
     label: query.account
       ? `${controller.label(query.account)} / ${name}`
       : m.studio_scope_all_accounts_path({ name }),
   };
 }
+export function applySearchQuery(
+  controller: MailboxController,
+  query: MailboxQuery,
+  meta?: SearchFilterMeta,
+) {
+  if (hasActiveSearch(query)) {
+    controller.search(query, meta);
+  } else if (controller.store.getSnapshot().scope.kind === "search") {
+    controller.exitSearch();
+  }
+}
 export function searchMail(
   controller: MailboxController,
   text: string,
-  all = false,
+  all: boolean | SearchScopeTier = false,
   source?: Scope,
 ) {
   const scope = controller.store.getSnapshot().scope;
   const query = text.trim();
-  if (query)
-    controller.search({
-      // The installed native bridge separates full-text queries from list filters.
-      // The Studio bridge expands account sets before invoking either native protocol.
-      ...(all
-        ? {}
+  const baseQuery = queryOf(source ?? scope);
+  const scopeFields =
+    all === true || all === "all"
+      ? {}
+      : typeof all === "string"
+        ? scopeFieldsForTier(all, {
+            account: baseQuery.account,
+            accounts: baseQuery.accounts,
+            folderName: baseQuery.folder,
+          })
         : {
-            account: queryOf(source ?? scope).account,
-            ...(queryOf(source ?? scope).accounts
-              ? { accounts: queryOf(source ?? scope).accounts }
-              : {}),
-            folder: queryOf(source ?? scope).folder,
-          }),
-      query,
-    });
-  else if (scope.kind === "search") controller.exitSearch();
+            ...(baseQuery.account ? { account: baseQuery.account } : {}),
+            ...(baseQuery.accounts ? { accounts: baseQuery.accounts } : {}),
+            ...(baseQuery.folder ? { folder: baseQuery.folder } : {}),
+          };
+  applySearchQuery(controller, {
+    // The installed native bridge separates full-text queries from list filters.
+    // The Studio bridge expands account sets before invoking either native protocol.
+    ...scopeFields,
+    ...(query ? { query } : {}),
+  });
 }
 export function filterUnread(controller: MailboxController, unread: boolean) {
   controller.setUnreadFilter(unread);

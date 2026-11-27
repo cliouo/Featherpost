@@ -22,6 +22,7 @@ import "./settings/settings.css";
 import "./select.css";
 import "./contextmenu.css";
 import "./command-palette.css";
+import "./search-filters.css";
 
 const host = new Host(tauriBridge);
 const composer = new ComposeController(

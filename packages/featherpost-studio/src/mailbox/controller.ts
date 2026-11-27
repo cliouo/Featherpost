@@ -13,6 +13,12 @@ import type {
 import { compatBlocksWrites } from "../bridge/types";
 import { errorCode } from "../bridge/errors";
 import { Store } from "../host/store";
+import {
+  canonicalScopeKey,
+  canonicalSearchQuery,
+  hasStructuredFilters,
+  type SearchFilterMeta,
+} from "../searchFilters";
 import type {
   BatchReport,
   IndexStatus,
@@ -33,7 +39,7 @@ export const folderKey = ({ account, folder }: FolderIdentity) =>
   JSON.stringify([account, folder]);
 export const messageKey = ({ account, folder, uid }: MessageIdentity) =>
   JSON.stringify([account, folder, uid]);
-const scopeKey = (scope: Scope) => JSON.stringify(scope);
+const scopeKey = canonicalScopeKey;
 export class RequestGeneration {
   private generation = 0;
   begin() {
@@ -153,7 +159,7 @@ function boundedSet<K, V>(cache: Map<K, V>, key: K, value: V, limit: number) {
 }
 export function queryOf(scope: Scope): MailboxQuery {
   if (scope.kind === "unread") return { ...queryOf(scope.base), seen: false };
-  if (scope.kind === "search") return { ...scope.query, search: true };
+  if (scope.kind === "search") return canonicalSearchQuery(scope.query);
   if (scope.kind === "folder")
     return { account: scope.account, folder: scope.folder };
   const filters = scope.name === "inbox"
@@ -525,13 +531,18 @@ export class MailboxController {
     });
     if (this.state.snapshot.phase === "online") void this.refreshRows(false);
   }
-  search(query: MailboxQuery) {
+  search(query: MailboxQuery, meta?: SearchFilterMeta) {
     if (this.state.scope.kind !== "search")
       this.previousSearch = {
         scope: this.state.scope,
         selection: this.state.selectedRow,
       };
-    this.changeScope({ kind: "search", query: { ...query, search: true } });
+    const nextQuery = canonicalSearchQuery(query);
+    this.changeScope(
+      meta
+        ? { kind: "search", query: nextQuery, meta }
+        : { kind: "search", query: nextQuery },
+    );
   }
   exitSearch() {
     const previous = this.previousSearch;
@@ -1009,6 +1020,7 @@ export class MailboxController {
       this.serverSearchSupported &&
       s.scope.kind === "search" &&
       !!s.scope.query.query?.trim() &&
+      !hasStructuredFilters(s.scope.query) &&
       s.snapshot.phase === "online" &&
       s.remote.status !== "loading" &&
       this.serverTargets().length > 0

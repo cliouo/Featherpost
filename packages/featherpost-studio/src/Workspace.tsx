@@ -8,6 +8,7 @@ import {
   messageKey,
   type MailboxController,
 } from "./mailbox/controller";
+import type { MailboxQuery } from "./mailbox/types";
 import { createMessageListActions } from "./mailbox/listActions";
 import { useSelectedRowScroll } from "./mailbox/listScroll";
 import { displayName, shortDate } from "./mailbox/format";
@@ -15,7 +16,15 @@ import { Actions } from "./mailbox/Actions";
 import type { DocumentController } from "./mailbox/document";
 import type { ComposeController } from "./compose/controller";
 import { ReadingPane } from "./ReadingPane";
-import { scopeContext, filterUnread } from "./navigation";
+import { applySearchQuery, scopeContext, filterUnread } from "./navigation";
+import {
+  activeFilterChips,
+  canonicalScopeKey,
+  clearStructuredFilters,
+  hasActiveSearch,
+  removeFilterChip,
+  type SearchFilterMeta,
+} from "./searchFilters";
 import { ACTIVITY } from "./views";
 import { useContextMenu } from "./ContextMenu";
 import { messageMenu, type MailMenuDeps } from "./menus";
@@ -45,7 +54,10 @@ export function useMailMenu(
       void composer.reply(row, mode);
     },
     copy: actions.copy,
-    findSender: (address) => actions.search(address, true),
+    findSender: (address) =>
+      actions.findFromSender
+        ? actions.findFromSender(address)
+        : actions.search(address, true),
   };
 }
 
@@ -64,14 +76,29 @@ export function Workspace({
 }) {
   useUiLocale();
   const s = useStore(controller.store);
+  const actions = useStudioActions();
   const context = scopeContext(controller);
-  const searching = s.scope.kind === "search" && !!s.scope.query.query?.trim();
+  const searching = s.scope.kind === "search" && hasActiveSearch(s.scope.query);
   const unread =
     s.scope.kind === "unread" ||
     (s.scope.kind === "smart" && s.scope.name === "unread");
   const folderUnread = context.folder?.unseen;
   const title = searching ? m.studio_list_search_results() : context.name;
-  const scopeKey = JSON.stringify(s.scope);
+  const scopeKey = canonicalScopeKey(s.scope);
+  const chips =
+    s.scope.kind === "search"
+      ? activeFilterChips(s.scope.query, s.scope.meta)
+      : [];
+  const applyNextFilterQuery = (
+    nextQuery: MailboxQuery,
+    nextMeta?: SearchFilterMeta,
+  ) => {
+    if (actions.updateSearchFilters) {
+      actions.updateSearchFilters(nextQuery, nextMeta);
+    } else {
+      applySearchQuery(controller, nextQuery, nextMeta);
+    }
+  };
   const menu = useContextMenu(),
     menuDeps = useMailMenu(controller, composer);
   const listActions = useMemo(
@@ -87,7 +114,7 @@ export function Workspace({
     cancelScroll,
   } = useSelectedRowScroll<HTMLDivElement, HTMLElement>(
     selectedKey,
-    s.scope,
+    scopeKey,
     s.rows,
     s.remote.rows,
   );
@@ -199,6 +226,60 @@ export function Workspace({
                 {m.studio_list_order()}
               </span>
             </div>
+            {s.scope.kind === "search" && chips.length > 0 && (
+              <div
+                className="search-filter-chips"
+                role="group"
+                aria-label={m.studio_search_chips_label()}
+              >
+                {chips.map((chip) => (
+                  <span className="search-filter-chip" key={chip.id}>
+                    <button
+                      type="button"
+                      className="search-filter-chip-body"
+                      title={chip.label}
+                      aria-label={m.studio_search_chip_edit({
+                        label: chip.label,
+                      })}
+                      onClick={() => actions.openSearchFilters?.()}
+                    >
+                      <span>{chip.label}</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="search-filter-chip-remove"
+                      title={m.studio_search_chip_remove({
+                        label: chip.label,
+                      })}
+                      aria-label={m.studio_search_chip_remove({
+                        label: chip.label,
+                      })}
+                      onClick={() => {
+                        if (s.scope.kind !== "search") return;
+                        const next = removeFilterChip(
+                          s.scope.query,
+                          s.scope.meta,
+                          chip.id,
+                        );
+                        applyNextFilterQuery(next.query, next.meta);
+                      }}
+                    >
+                      ×
+                    </button>
+                  </span>
+                ))}
+                <button
+                  type="button"
+                  className="search-filter-chips-clear"
+                  onClick={() => {
+                    if (s.scope.kind !== "search") return;
+                    applyNextFilterQuery(clearStructuredFilters(s.scope.query));
+                  }}
+                >
+                  {m.studio_search_chips_clear()}
+                </button>
+              </div>
+            )}
           </header>
           <div
             ref={listRef}

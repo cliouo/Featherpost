@@ -2,6 +2,7 @@ import type { IconName } from '../host/types';
 
 const paths: Record<IconName, string> = {
   search: 'M10 3a7 7 0 100 14 7 7 0 000-14M15 15l6 6',
+  sliders: 'M4 6h4M12 6h8M4 12h10M18 12h2M4 18h2M10 18h10M8 4v4M14 10v4M6 16v4',
   activity: 'M3 12h4l3-7 4 14 3-7h4',
   mail: 'M3 5h18v14H3zM3 5l9 8 9-8',
   reply: 'M9 5L3 11l6 6M3 11h10c5 0 7 3 7 8',

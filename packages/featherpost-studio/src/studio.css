@@ -766,7 +766,8 @@ kbd {
   background: var(--studio-canvas);
 }
 .list-heading {
-  height: 130px;
+  min-height: 130px;
+  height: auto;
   flex: none;
   padding: 18px 20px 0;
 }

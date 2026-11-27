@@ -1,0 +1,359 @@
+/* Search Bar Advanced Filter Popover & Active Filter Chips Bar.
+ * Uses only shared Studio light/dark tokens and shared motion variables. */
+
+.studio-search > .search-filter-trigger {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 24px;
+  min-width: 24px;
+  padding: 0 5px;
+  border-radius: 5px;
+  font-size: 11px;
+  color: var(--studio-muted);
+  flex: none;
+  transition:
+    background-color var(--motion-fast) var(--ease-standard),
+    color var(--motion-fast) var(--ease-standard),
+    transform var(--motion-instant) var(--ease-standard);
+}
+.studio-search > .search-filter-trigger .icon {
+  width: 13px;
+  height: 13px;
+}
+.studio-search > .search-filter-trigger.is-active,
+.studio-search > .search-filter-trigger[aria-expanded="true"],
+.studio-search > .search-filter-trigger[data-open] {
+  background: var(--studio-tint);
+  color: var(--studio-text);
+}
+.studio-search > .search-filter-trigger:active:not(:disabled) {
+  background: var(--active-bg);
+  transform: scale(0.96);
+}
+@media (hover: hover) {
+  .studio-search > .search-filter-trigger:hover:not(:disabled) {
+    background: var(--hover-bg);
+    color: var(--studio-text);
+  }
+  .studio-search > .search-filter-trigger.is-active:hover:not(:disabled) {
+    background: var(--hover-bg-strong);
+  }
+}
+
+.search-filter-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--studio-primary);
+  color: var(--studio-on-primary);
+  font-size: 9.5px;
+  font-weight: 600;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.studio-popover.search-filter-popover {
+  position: relative;
+  width: min(368px, var(--available-width, calc(100vw - 24px)));
+  max-width: min(380px, var(--available-width, calc(100vw - 24px)));
+  max-height: min(560px, var(--available-height, calc(100vh - 24px)));
+  overflow-y: scroll;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  padding: 14px calc(16px - var(--scrollbar-size, 10px) + 6px) 14px 16px;
+  border-radius: 10px;
+}
+
+.search-filter-popover .studio-popover-title {
+  margin: 0 28px 12px 0;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--studio-text);
+}
+
+.search-filter-close {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 5px;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--studio-muted);
+}
+@media (hover: hover) {
+  .search-filter-close:hover:not(:disabled) {
+    background: var(--hover-bg);
+    color: var(--studio-text);
+  }
+}
+
+.search-filter-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.search-filter-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.search-filter-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.search-filter-field label {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--studio-secondary);
+  line-height: 1.3;
+}
+.search-filter-field input {
+  width: 100%;
+  min-width: 0;
+  height: 30px;
+  padding: 0 9px;
+  border: 1px solid var(--studio-border);
+  border-radius: 6px;
+  background: var(--studio-canvas);
+  color: var(--studio-text);
+  font-size: 12px;
+  color-scheme: inherit;
+}
+.search-filter-field input::placeholder {
+  color: var(--studio-muted);
+}
+.search-filter-field input[aria-invalid="true"] {
+  border-color: var(--studio-danger);
+}
+@media (hover: hover) {
+  .search-filter-field input:hover:not(:disabled) {
+    border-color: var(--hover-border);
+  }
+}
+
+.search-filter-toggles {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 0;
+  border-top: 1px solid var(--studio-soft-border);
+  border-bottom: 1px solid var(--studio-soft-border);
+}
+
+.search-filter-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 30px;
+}
+.search-filter-toggle-row label {
+  font-size: 12px;
+  color: var(--studio-text);
+  cursor: pointer;
+}
+.search-filter-toggle-row .toggle {
+  padding: 4px 0;
+}
+
+.search-filter-section {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.search-filter-section legend {
+  padding: 0;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--studio-secondary);
+}
+
+.search-filter-segmented {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid var(--studio-border);
+  border-radius: 7px;
+  background: var(--studio-canvas);
+}
+.search-filter-segmented button {
+  flex: 1 1 auto;
+  min-height: 24px;
+  padding: 3px 7px;
+  border-radius: 5px;
+  font-size: 11px;
+  line-height: 1.3;
+  color: var(--studio-secondary);
+  white-space: nowrap;
+}
+.search-filter-segmented button.is-selected,
+.search-filter-segmented button[aria-pressed="true"] {
+  background: var(--studio-surface);
+  color: var(--studio-text);
+  font-weight: 550;
+  box-shadow: 0 1px 2px #0001;
+}
+:root[data-studio-theme="dark"] .search-filter-segmented button.is-selected,
+:root[data-studio-theme="dark"] .search-filter-segmented button[aria-pressed="true"] {
+  background: var(--studio-tint);
+  box-shadow: none;
+}
+@media (hover: hover) {
+  .search-filter-segmented button:not(.is-selected):hover:not(:disabled) {
+    background: var(--hover-bg);
+    color: var(--studio-text);
+  }
+}
+
+.search-filter-date-inputs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.search-filter-error {
+  padding: 7px 10px;
+  border: 1px solid var(--hover-danger-border);
+  border-radius: 6px;
+  background: var(--hover-danger-bg);
+  color: var(--hover-danger-ink);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.search-filter-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--studio-soft-border);
+}
+.search-filter-reset {
+  padding: 5px 6px;
+  font-size: 11px;
+  color: var(--studio-muted);
+}
+.search-filter-footer-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.search-filter-footer-actions .secondary-button,
+.search-filter-footer-actions .primary-button {
+  padding: 6px 12px;
+  font-size: 11.5px;
+}
+
+/* Active filter chips bar inside .list-heading (never hangs data-shortcuts-off). */
+.search-filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  padding-bottom: 10px;
+  max-height: 92px;
+  overflow-y: scroll;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+}
+
+.search-filter-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  border: 1px solid var(--studio-border);
+  border-radius: 999px;
+  background: var(--studio-surface);
+  color: var(--studio-text);
+  font-size: 11px;
+  line-height: 1.25;
+}
+
+.search-filter-chip-body {
+  display: inline-flex;
+  align-items: center;
+  max-width: 180px;
+  min-width: 0;
+  height: 22px;
+  padding: 0 6px 0 9px;
+  border-radius: 999px 0 0 999px;
+  color: var(--studio-secondary);
+  text-align: left;
+}
+.search-filter-chip-body > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+@media (hover: hover) {
+  .search-filter-chip-body:hover:not(:disabled) {
+    background: var(--hover-bg);
+    color: var(--studio-text);
+  }
+}
+
+.search-filter-chip-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 22px;
+  padding: 0 4px 0 1px;
+  border-radius: 0 999px 999px 0;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--studio-muted);
+  flex: none;
+}
+@media (hover: hover) {
+  .search-filter-chip-remove:hover:not(:disabled) {
+    background: var(--hover-bg-strong);
+    color: var(--studio-text);
+  }
+}
+
+.search-filter-chips-clear {
+  height: 22px;
+  padding: 0 7px;
+  border-radius: 5px;
+  font-size: 10.5px;
+  color: var(--studio-muted);
+  white-space: nowrap;
+}
+@media (hover: hover) {
+  .search-filter-chips-clear:hover:not(:disabled) {
+    background: var(--hover-bg);
+    color: var(--studio-text);
+  }
+}
+
+@media (max-width: 1120px) {
+  .search-filter-chip-body {
+    max-width: 144px;
+  }
+}

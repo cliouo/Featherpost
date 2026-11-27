@@ -197,9 +197,12 @@ describe("PR 1：脏设置离开守卫（先获准离开再产生副作用）", 
           typeof (el.props.value as { search?: unknown }).search === "function",
       );
       expect(actionsProvider).toBeDefined();
-      (
-        actionsProvider!.props.value as { search(text: string, all?: boolean): void }
-      ).search("invoice", true);
+      const actionsVal = actionsProvider!.props.value as {
+        search(text: string, all?: boolean): void;
+        findFromSender?(address: string): void;
+        updateSearchFilters?(query: Record<string, unknown>): void;
+      };
+      actionsVal.search("invoice", true);
       expect(app.settings.store.getSnapshot().confirm).not.toBeNull();
       expect(app.bridge.mailbox.queries.length).toBe(queriesBefore);
       app.settings.cancelConfirmation();
@@ -207,6 +210,23 @@ describe("PR 1：脏设置离开守卫（先获准离开再产生副作用）", 
       expect(app.bridge.mailbox.queries.length).toBe(queriesBefore);
       expect(app.mailbox.state.scope.kind).not.toBe("search");
       expect(app.settings.store.getSnapshot().proxyDraft?.host).toBe("127.0.0.1");
+
+      // findFromSender and updateSearchFilters must ALSO honor dirty-settings leave-guard on Stay.
+      actionsVal.findFromSender?.("alice@example.com");
+      expect(app.settings.store.getSnapshot().confirm).not.toBeNull();
+      expect(app.bridge.mailbox.queries.length).toBe(queriesBefore);
+      app.settings.cancelConfirmation();
+      await flush();
+      expect(app.bridge.mailbox.queries.length).toBe(queriesBefore);
+      expect(app.mailbox.state.scope.kind).not.toBe("search");
+
+      actionsVal.updateSearchFilters?.({ has_attachments: true });
+      expect(app.settings.store.getSnapshot().confirm).not.toBeNull();
+      expect(app.bridge.mailbox.queries.length).toBe(queriesBefore);
+      app.settings.cancelConfirmation();
+      await flush();
+      expect(app.bridge.mailbox.queries.length).toBe(queriesBefore);
+      expect(app.mailbox.state.scope.kind).not.toBe("search");
 
       // Also test mailbox command open-starred while dirty -> Stay -> zero queries.
       app.host.execute("maild.mailbox.open-starred");

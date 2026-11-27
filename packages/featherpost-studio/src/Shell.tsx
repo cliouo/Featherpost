@@ -1,12 +1,13 @@
 import { m } from "@featherpost/i18n/messages";
 import { useUiLocale } from "./i18n";
 import { Choice } from "./settings/Choice";
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { Host } from "./host/host";
 import { useExternal, useStore } from "./host/hooks";
 import { Icon } from "./app/Icon";
 import { applyTheme, useDarkShell } from "./app/theme";
 import type { MailboxController } from "./mailbox/controller";
+import type { MailboxQuery } from "./mailbox/types";
 import type { ComposeController } from "./compose/controller";
 import { DRAFTS_VIEW } from "./compose/controller";
 import { MAIL, ACTIVITY } from "./views";
@@ -14,11 +15,25 @@ import { MailboxNavigation, type NavigationHandle } from "./MailboxNavigation";
 import { readStudioView, saveStudioView, type StudioView } from "./layout";
 import { ContextMenuHost, useContextMenu } from "./ContextMenu";
 import { CommandPalette } from "./CommandPalette";
+import { SearchFilterPopover } from "./SearchFilterPopover";
 import { folderMenu, selectionMenu } from "./menus";
 import type { LanguageController } from "./settings/language";
 import { SyncCount } from "./SyncCount";
 import { usePersistentOverlay } from "./ui";
 import { isShortcutBlockedTarget } from "./Workspace";
+import {
+  activeFilterCount,
+  availableScopeTiers,
+  defaultScopeTier,
+  hasActiveSearch,
+  scopeFieldsForTier,
+  scopeTierFromQuery,
+  toMailboxQuery,
+  type SearchFilterDraft,
+  type SearchFilterMeta,
+  type SearchScopeContext,
+  type SearchScopeTier,
+} from "./searchFilters";
 import {
   StudioActionsContext,
   clipboardCopier,
@@ -26,6 +41,7 @@ import {
   type StudioActions,
 } from "./studioActions";
 import {
+  applySearchQuery,
   folderTree,
   folderIcon,
   folderNavigationLabels,
@@ -106,8 +122,17 @@ export function Studio({
   const online = state.snapshot.phase === "online";
   const [view, setView] = useState(readStudioView);
   const [search, setSearch] = useState("");
-  const [allMail, setAllMail] = useState(false);
   const [searchScope, setSearchScope] = useState(mail.scope);
+  const [scopeTier, setScopeTier] = useState<SearchScopeTier>(() => {
+    const ctx = scopeContext(mailbox, mail.scope);
+    return defaultScopeTier({
+      account: ctx.account,
+      accounts: ctx.accounts,
+      folderName: ctx.folderName,
+    });
+  });
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [filterFocusHandoff, setFilterFocusHandoff] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [toastText, setToastText] = useState<string | null>(null);
   useEffect(() => {
@@ -118,17 +143,44 @@ export function Studio({
     toastRef = useRef<HTMLDivElement>(null);
   usePersistentOverlay(toastRef);
   const searchContext = scopeContext(mailbox, searchScope);
-  const searchText =
-    mail.scope.kind === "search" ? (mail.scope.query.query ?? "") : "";
+  const searchScopeContext: SearchScopeContext = useMemo(
+    () => ({
+      account: searchContext.account,
+      accounts: searchContext.accounts,
+      folderName: searchContext.folderName,
+    }),
+    [searchContext.account, searchContext.accounts, searchContext.folderName],
+  );
+  const availableTiers = availableScopeTiers(searchScopeContext);
+  const effectiveScopeTier: SearchScopeTier = availableTiers.includes(scopeTier)
+    ? scopeTier
+    : defaultScopeTier(searchScopeContext);
+  const appliedSearchQuery =
+    mail.scope.kind === "search" ? mail.scope.query : undefined;
+  const appliedSearchMeta =
+    mail.scope.kind === "search" ? mail.scope.meta : undefined;
+  const searchText = appliedSearchQuery?.query ?? "";
+  const isSearching =
+    mail.scope.kind === "search" && hasActiveSearch(mail.scope.query);
+  const filterCount = activeFilterCount(appliedSearchQuery);
   useEffect(() => {
     setSearch(searchText);
   }, [searchText]);
   useEffect(() => {
     if (mail.scope.kind !== "search") {
-      setAllMail(false);
       setSearchScope(mail.scope);
+      const nextCtx = scopeContext(mailbox, mail.scope);
+      setScopeTier(
+        defaultScopeTier({
+          account: nextCtx.account,
+          accounts: nextCtx.accounts,
+          folderName: nextCtx.folderName,
+        }),
+      );
+    } else {
+      setScopeTier(scopeTierFromQuery(mail.scope.query, searchScopeContext));
     }
-  }, [mail.scope]);
+  }, [mail.scope, mailbox, searchScopeContext]);
   useEffect(() => applyTheme(state.preferences), [state.preferences]);
   useEffect(() => {
     document.documentElement.dataset.studioTheme = dark ? "dark" : "light";
@@ -191,14 +243,67 @@ export function Studio({
     },
     [host, openSettingsSection],
   );
-  const runPaletteMailSearch = useCallback(
-    (query: string) => {
+  const openSearchFilters = useCallback(() => {
+    setFilterFocusHandoff(false);
+    setFiltersOpen(true);
+  }, []);
+  const handleFiltersOpenChange = useCallback((next: boolean) => {
+    if (next) setFilterFocusHandoff(false);
+    setFiltersOpen(next);
+  }, []);
+  const buildPreservedSearch = useCallback(
+    (
+      keyword: string,
+      tier: SearchScopeTier,
+    ): { query: MailboxQuery; meta?: SearchFilterMeta } => {
+      const currentScope = mailbox.store.getSnapshot().scope;
+      const existing =
+        currentScope.kind === "search" ? currentScope.query : undefined;
+      const existingMeta =
+        currentScope.kind === "search" ? currentScope.meta : undefined;
+      const scopeFields = scopeFieldsForTier(tier, searchScopeContext);
+      const nextQuery: MailboxQuery = { ...scopeFields };
+      const trimmed = keyword.trim();
+      if (trimmed) nextQuery.query = trimmed;
+      if (existing) {
+        if (existing.from) nextQuery.from = existing.from;
+        if (existing.to) nextQuery.to = existing.to;
+        if (existing.subject) nextQuery.subject = existing.subject;
+        if (existing.seen !== undefined) nextQuery.seen = existing.seen;
+        if (existing.flagged !== undefined) nextQuery.flagged = existing.flagged;
+        if (existing.has_attachments !== undefined) {
+          nextQuery.has_attachments = existing.has_attachments;
+        }
+        if (existing.since !== undefined) nextQuery.since = existing.since;
+        if (existing.until !== undefined) nextQuery.until = existing.until;
+      }
+      return existingMeta ? { query: nextQuery, meta: existingMeta } : { query: nextQuery };
+    },
+    [mailbox, searchScopeContext],
+  );
+  const applyFilterDraft = useCallback(
+    (draft: SearchFilterDraft) => {
+      setFilterFocusHandoff(true);
+      setFiltersOpen(false);
       void openMailbox(() => {
-        setSearch(query);
-        searchMail(mailbox, query, allMail, searchScope);
+        const result = toMailboxQuery(draft, search, searchScopeContext);
+        setScopeTier(draft.scope);
+        applySearchQuery(mailbox, result.query, result.meta);
       });
     },
-    [allMail, mailbox, openMailbox, searchScope],
+    [mailbox, openMailbox, search, searchScopeContext],
+  );
+  const runPaletteMailSearch = useCallback(
+    (query: string) => {
+      setFilterFocusHandoff(true);
+      setFiltersOpen(false);
+      void openMailbox(() => {
+        setSearch(query);
+        const next = buildPreservedSearch(query, effectiveScopeTier);
+        applySearchQuery(mailbox, next.query, next.meta);
+      });
+    },
+    [buildPreservedSearch, effectiveScopeTier, mailbox, openMailbox],
   );
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
@@ -250,10 +355,30 @@ export function Studio({
   }, [focusSearch, focusSidebarFilter, host]);
   const actions: StudioActions = {
     search(text, all = false) {
+      setFilterFocusHandoff(true);
+      setFiltersOpen(false);
       void openMailbox(() => {
-        if (all) setAllMail(true);
+        const nextTier: SearchScopeTier = all ? "all" : effectiveScopeTier;
+        setScopeTier(nextTier);
         setSearch(text);
-        searchMail(mailbox, text, all || allMail, searchScope);
+        searchMail(mailbox, text, nextTier, searchScope);
+      });
+    },
+    findFromSender(address) {
+      setFilterFocusHandoff(true);
+      setFiltersOpen(false);
+      void openMailbox(() => {
+        setScopeTier("all");
+        setSearch("");
+        applySearchQuery(mailbox, { from: address });
+      });
+    },
+    openSearchFilters,
+    updateSearchFilters(nextQuery, nextMeta) {
+      setFilterFocusHandoff(true);
+      setFiltersOpen(false);
+      void openMailbox(() => {
+        applySearchQuery(mailbox, nextQuery, nextMeta);
       });
     },
     copy: clipboardCopier((text) => host.notify(text)),
@@ -268,7 +393,7 @@ export function Studio({
     searchIn: (folder) =>
       void openMailbox(() => {
         mailbox.selectFolder(folder);
-        setAllMail(false);
+        setScopeTier("folder");
         searchInput.current?.focus();
         searchInput.current?.select();
       }),
@@ -317,9 +442,12 @@ export function Studio({
           role="search"
           onSubmit={(e) => {
             e.preventDefault();
-            void openMailbox(() =>
-              searchMail(mailbox, search, allMail, searchScope),
-            );
+            setFilterFocusHandoff(true);
+            setFiltersOpen(false);
+            void openMailbox(() => {
+              const next = buildPreservedSearch(search, effectiveScopeTier);
+              applySearchQuery(mailbox, next.query, next.meta);
+            });
           }}
         >
           <Icon name="search" />
@@ -333,44 +461,74 @@ export function Studio({
           />
           <Choice
             aria-label={m.studio_search_scope_label()}
-            value={
-              allMail || (!searchContext.account && !searchContext.accounts)
-                ? "all"
-                : "current"
-            }
+            value={effectiveScopeTier}
             onValueChange={(value) => {
-              const all = value === "all";
-              if (search.trim()) {
+              const nextTier = value as SearchScopeTier;
+              if (isSearching || search.trim()) {
+                setFilterFocusHandoff(true);
+                setFiltersOpen(false);
                 void openMailbox(() => {
-                  setAllMail(all);
-                  searchMail(mailbox, search, all, searchScope);
+                  setScopeTier(nextTier);
+                  const next = buildPreservedSearch(search, nextTier);
+                  applySearchQuery(mailbox, next.query, next.meta);
                 });
               } else {
-                setAllMail(all);
+                setScopeTier(nextTier);
               }
             }}
           >
-            {(searchContext.account || searchContext.accounts) && (
-              <option value="current">
-                {searchContext.accounts
-                  ? m.studio_search_scope_group({
-                      group:
-                        searchContext.group ?? m.studio_scope_selected_group(),
-                    })
-                  : searchContext.label}
+            {availableTiers.includes("folder") && (
+              <option value="folder">{searchContext.label}</option>
+            )}
+            {availableTiers.includes("account") && searchContext.account && (
+              <option value="account">
+                {m.studio_search_scope_account({
+                  account: mailbox.label(searchContext.account),
+                })}
+              </option>
+            )}
+            {availableTiers.includes("group") && (
+              <option value="group">
+                {m.studio_search_scope_group({
+                  group:
+                    searchContext.group ?? m.studio_scope_selected_group(),
+                })}
               </option>
             )}
             <option value="all">{m.studio_search_scope_all()}</option>
           </Choice>
-          {searchText ? (
+          <SearchFilterPopover
+            open={filtersOpen}
+            onOpenChange={handleFiltersOpenChange}
+            appliedQuery={appliedSearchQuery}
+            appliedMeta={appliedSearchMeta}
+            scopeTier={effectiveScopeTier}
+            scopeContext={searchScopeContext}
+            scopeHints={{
+              folder: searchContext.label,
+              account: searchContext.account
+                ? mailbox.label(searchContext.account)
+                : undefined,
+              group: searchContext.group ?? m.studio_scope_selected_group(),
+              all: m.studio_search_scope_all(),
+            }}
+            activeCount={filterCount}
+            focusHandoff={filterFocusHandoff}
+            onApply={applyFilterDraft}
+          />
+          {isSearching ? (
             <button
               type="button"
               title={m.studio_search_clear()}
               aria-label={m.studio_search_clear()}
               onClick={() => {
+                setFilterFocusHandoff(true);
+                setFiltersOpen(false);
                 void openMailbox(() => {
                   setSearch("");
-                  searchMail(mailbox, "");
+                  if (mailbox.store.getSnapshot().scope.kind === "search") {
+                    mailbox.exitSearch();
+                  }
                 });
               }}
             >
@@ -515,6 +673,7 @@ export function Studio({
         view={view}
         language={language}
         focusSearch={focusSearch}
+        openSearchFilters={openSearchFilters}
         focusSidebarFilter={focusSidebarFilter}
         changeView={changeView}
         openMailbox={openMailbox}
