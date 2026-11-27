@@ -34,6 +34,7 @@ const studioNavigationCss = readSource("../src/navigation.css");
 const studioActivityCss = readSource("../src/activity.css");
 const studioFormsCss = readSource("../src/settings/forms.css");
 const studioCommandPaletteCss = readSource("../src/command-palette.css");
+const studioSearchFiltersCss = readSource("../src/search-filters.css");
 
 describe("Shared scrollbar styling and layout stability (#29)", () => {
   it("loads the shared scrollbars.css stylesheet in Studio entry", () => {
@@ -112,6 +113,8 @@ describe("Shared scrollbar styling and layout stability (#29)", () => {
       ["studio .group-manager", studioNavigationCss, ".group-manager"],
       ["studio .activity-scroll", studioActivityCss, ".studio-activity .activity-scroll"],
       ["studio .command-palette-list", studioCommandPaletteCss, ".command-palette-list"],
+      ["studio .search-filter-popover", studioSearchFiltersCss, ".studio-popover.search-filter-popover"],
+      ["studio .search-filter-chips", studioSearchFiltersCss, ".search-filter-chips"],
       ["studio .settings-field textarea", studioFormsCss, ".settings-field textarea"],
       // Shared compose
       ["compose .compose-scroll", composeCss, ".compose-scroll"],

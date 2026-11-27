@@ -329,7 +329,7 @@ describe("服务器历史搜索与按需拉取", () => {
     expect(await c.toggleSelected("flagged")).toBeNull();
   });
 
-  it("searchServer 透传 since/until 日期筛选，并对忽略参数的桥做纵深后置过滤", async () => {
+  it("P0：含任意结构化筛选（含 since/until）时禁用服务器搜索，仅纯关键词搜索可调用 serverSearch", async () => {
     const { bridge, c } = await ready();
     const receivedCalls: Array<{
       account: string;
@@ -337,32 +337,45 @@ describe("服务器历史搜索与按需拉取", () => {
       query: string;
       options?: ServerSearchOptions;
     }> = [];
-    // 假桥故意忽略 options 返回越界与无日期（sort_at = 0）摘要，验证 controller 纵深过滤
     bridge.mailbox.serverSearch = async (account, folderName, query, options) => {
       receivedCalls.push({ account, folder: folderName, query, options });
-      return [
-        { ...remote("101"), sort_at: 999 }, // 早于 since
-        { ...remote("102"), sort_at: 1000 }, // 恰好等于 since
-        { ...remote("103"), sort_at: 1500 }, // 区间内
-        { ...remote("104"), sort_at: 2000 }, // 恰好等于 until
-        { ...remote("105"), sort_at: 2001 }, // 晚于 until
-        { ...remote("106"), sort_at: 0 }, // 缺失日期兜底 0
-      ];
+      return [remote("103")];
     };
-    c.search({ query: "报销", since: 1000, until: 2000 });
+
+    for (const structured of [
+      { query: "报销", since: 1000, until: 2000 },
+      { query: "报销", from: "alice@example.com" },
+      { query: "报销", to: "bob@example.com" },
+      { query: "报销", subject: "发票" },
+      { query: "报销", seen: false },
+      { query: "报销", flagged: true },
+      { query: "报销", has_attachments: true },
+      { from: "alice@example.com" },
+    ]) {
+      c.search(structured);
+      bridge.mailbox.queries.at(-1)!.d.resolve({ messages: [], total: 0 });
+      await flush();
+      expect(c.canSearchServer).toBe(false);
+      await c.searchServer();
+    }
+    expect(receivedCalls).toEqual([]);
+
+    // Pure keyword search still enables server search.
+    c.search({ query: "报销" });
     bridge.mailbox.queries.at(-1)!.d.resolve({ messages: [], total: 0 });
     await flush();
+    expect(c.canSearchServer).toBe(true);
     await c.searchServer();
     expect(receivedCalls).toEqual([
       {
         account: "demo",
         folder: "INBOX",
         query: "报销",
-        options: { since: 1000, until: 2000 },
+        options: { since: undefined, until: undefined },
       },
     ]);
     expect(c.state.remote.status).toBe("ready");
-    expect(c.state.remote.rows.map((r) => r.uid)).toEqual(["104", "103", "102"]);
+    expect(c.state.remote.rows.map((r) => r.uid)).toEqual(["103"]);
   });
 });
 

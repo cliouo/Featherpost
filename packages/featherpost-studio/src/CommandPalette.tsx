@@ -28,6 +28,7 @@ export interface CommandPaletteProps {
   view: StudioView;
   language?: LanguageController;
   focusSearch: () => void;
+  openSearchFilters?: () => void;
   focusSidebarFilter: () => void;
   changeView: (next: StudioView) => void;
   openMailbox: (action: () => void) => void | Promise<unknown>;
@@ -92,6 +93,7 @@ export function CommandPalette({
   view,
   language: externalLanguage,
   focusSearch,
+  openSearchFilters,
   focusSidebarFilter,
   changeView,
   openMailbox,
@@ -143,6 +145,7 @@ export function CommandPalette({
       view,
       language,
       focusSearch,
+      openSearchFilters,
       focusSidebarFilter,
       changeView,
       openMailbox,
@@ -161,6 +164,7 @@ export function CommandPalette({
     language,
     langState,
     focusSearch,
+    openSearchFilters,
     focusSidebarFilter,
     changeView,
     openMailbox,

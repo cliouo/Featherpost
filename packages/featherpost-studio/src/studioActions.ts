@@ -1,10 +1,18 @@
 import { m } from "@featherpost/i18n/messages";
 import { createContext, useContext } from "react";
+import type { MailboxQuery } from "./mailbox/types";
+import type { SearchFilterMeta } from "./searchFilters";
 
 /** Shell-owned actions that menus deep in the view tree need. */
 export interface StudioActions {
   /** Runs a mail search through the top bar so its input and scope stay in sync. */
   search(text: string, all?: boolean): void;
+  /** Runs a clean all-accounts sender filter (`from: address`), clearing old filters. */
+  findFromSender?(address: string): void;
+  /** Opens the advanced search filters popover anchored to the search bar. */
+  openSearchFilters?(): void;
+  /** Updates or clears structured search filters through the single guarded submit path. */
+  updateSearchFilters?(query: MailboxQuery, meta?: SearchFilterMeta): void;
   copy(text: string, what: string): void;
 }
 

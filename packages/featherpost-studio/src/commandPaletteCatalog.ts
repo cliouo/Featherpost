@@ -70,6 +70,7 @@ export interface BuildCatalogDeps {
   view: StudioView;
   language?: LanguageController;
   focusSearch: () => void;
+  openSearchFilters?: () => void;
   focusSidebarFilter: () => void;
   changeView: (next: StudioView) => void;
   openMailbox: (action: () => void) => void | Promise<unknown>;
@@ -252,6 +253,7 @@ export function buildCommandPaletteCatalog(
     view,
     language,
     focusSearch,
+    openSearchFilters,
     focusSidebarFilter,
     changeView,
     openMailbox,
@@ -390,6 +392,20 @@ export function buildCommandPaletteCatalog(
     focusHandoff: true,
     onSelect: focusSearch,
   });
+
+  if (openSearchFilters) {
+    actionItems.push({
+      id: "studio.palette.action.search-filters",
+      label: m.studio_palette_action_search_filters(),
+      keywords: bilingualKeywords(
+        m.studio_palette_action_search_filters,
+        m.studio_palette_action_search_filters_keywords,
+      ),
+      icon: "sliders",
+      focusHandoff: true,
+      onSelect: openSearchFilters,
+    });
+  }
 
   actionItems.push({
     id: "studio.palette.action.focus-sidebar",

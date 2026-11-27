@@ -4,6 +4,7 @@ import type {
   UiMessage,
   UiPage,
 } from "../bridge/types";
+import type { SearchFilterMeta } from "../searchFilters";
 export interface MailboxQuery {
   /** Client-side scope. Studio expands it into ordinary single-account queries before IPC. */
   accounts?: string[];
@@ -15,6 +16,8 @@ export interface MailboxQuery {
   flagged?: boolean;
   query?: string;
   from?: string;
+  to?: string;
+  subject?: string;
   since?: number;
   until?: number;
   has_attachments?: boolean;
@@ -109,7 +112,7 @@ export type ListScope =
 export type Scope =
   | ListScope
   | { kind: "unread"; base: ListScope }
-  | { kind: "search"; query: MailboxQuery };
+  | { kind: "search"; query: MailboxQuery; meta?: SearchFilterMeta };
 export type MailAction =
   | { action: "mark"; flag: "seen" | "flagged"; value: boolean }
   | { action: "move"; target: string }
