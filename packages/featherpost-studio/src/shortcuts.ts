@@ -30,6 +30,7 @@ export const STUDIO_SHORTCUT_KEYS = {
   previousMessageArrow: "arrowup",
   clearSelection: "escape",
   copySelection: "mod+c",
+  translateMessage: "shift+t",
 } as const;
 
 export type StudioShortcutKeyName = keyof typeof STUDIO_SHORTCUT_KEYS;
@@ -508,6 +509,14 @@ const EXPLICIT_SHORTCUT_BINDINGS: readonly ExplicitShortcutBinding[] = [
     keys: [STUDIO_SHORTCUT_KEYS.copySelection],
     fallbackLabel: m.studio_shortcuts_item_copy_selection,
     scope: m.studio_shortcuts_scope_text_selection,
+  },
+  {
+    id: "mail.translate",
+    group: "mail",
+    keys: [STUDIO_SHORTCUT_KEYS.translateMessage],
+    commandId: "maild.mailbox.translate",
+    fallbackLabel: m.mailbox_command_translate,
+    scope: m.studio_shortcuts_scope_mail_view,
   },
   // Search
   {

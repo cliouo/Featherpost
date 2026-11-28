@@ -287,7 +287,8 @@ provider 插件的 API key 等完全在自己的域内保管（同用户可读�
 
 声明 `translation_provider` 的 external 插件（支持 `schema_version = 2` 与 `[l10n.<tag>]`、
 `lifecycle = "supervised" | "independent"` 以及可选 `ui_executable`）可在运行时热插拔接入
-Featherpost Studio 邮件翻译总线。最小可运行示例见 `plugins/example-translator/`。
+Featherpost Studio 邮件翻译总线。完整分步开发指南（含 Rust / Python 骨架与安装调试流程）见
+[第三方热插拔翻译插件开发者指南](translation-provider.md)，最小可运行参考实现见 `plugins/example-translator/`。
 
 1. **连接与注册**：插件通过同 UID 本地流式 IPC（Unix socket / Windows named pipe）连接，先以
    `FEATHERPOST_PLUGIN_TOKEN` 调用 `authenticate`，再调用 `translationProviderRegister` 注册动态能力：

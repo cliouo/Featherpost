@@ -23,6 +23,7 @@ const paths: Record<IconName, string> = {
   back: 'M15 6l-6 6 6 6',
   puzzle: 'M10 4h4v3a2 2 0 104 0v3h3v4h-3a2 2 0 100 4v3h-4v-3a2 2 0 10-4 0v3H7v-3a2 2 0 100-4H4v-4h3a2 2 0 100-4z',
   keyboard: 'M3 6h18v12H3zM7 10h.01M10.3 10h.01M13.7 10h.01M17 10h.01M8 14h8',
+  translate: 'M4 6h10M9 4v2m0 0c0 4-2 7-5 9m2-6c1.2 2.2 3 4 5 5.2M13 20l3.5-9 3.5 9m-5.8-3h4.6',
 };
 
 export function Icon({ name }: { name: IconName }) {

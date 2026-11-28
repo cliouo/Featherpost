@@ -630,7 +630,10 @@ export function translationProbeReasonText(reason: string): string {
 
 const LANGUAGE_LABELS: Readonly<Record<string, () => string>> = {
   auto: m.settings_translation_lang_auto,
+  zh: m.settings_translation_lang_zh_cn,
+  "zh-hans": m.settings_translation_lang_zh_cn,
   "zh-cn": m.settings_translation_lang_zh_cn,
+  "zh-hant": m.settings_translation_lang_zh_tw,
   "zh-tw": m.settings_translation_lang_zh_tw,
   en: m.settings_translation_lang_en,
   ja: m.settings_translation_lang_ja,
@@ -642,7 +645,12 @@ const LANGUAGE_LABELS: Readonly<Record<string, () => string>> = {
   it: m.settings_translation_lang_it,
   nl: m.settings_translation_lang_nl,
   ru: m.settings_translation_lang_ru,
+  uk: m.settings_translation_lang_uk,
   ar: m.settings_translation_lang_ar,
+  th: m.settings_translation_lang_th,
+  el: m.settings_translation_lang_el,
+  he: m.settings_translation_lang_he,
+  hi: m.settings_translation_lang_hi,
 };
 
 export function languageTagLabel(tag: string): string {

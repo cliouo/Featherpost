@@ -11,6 +11,13 @@ import type { DocumentController, DocumentState } from './document';
 import { messageKey } from './controller';
 import { BRAND } from '../brand';
 import { StudioTooltip } from '../ui';
+import { languageTagLabel } from '../settings/translation';
+import {
+  resolveEffectiveTargetLanguage,
+  shouldShowDetectionBanner,
+  type TranslationController,
+  type TranslationState,
+} from './translationController';
 
 /** 发件人地址的域名（信任「整个域」的选项用）。 */
 export function senderDomain(sender: string): string | null {
@@ -97,6 +104,185 @@ export function RemoteBanner({ host, detail, state, documents, onPolicyChanged }
           </button>
         </StudioTooltip>
       )}
+    </div>
+  );
+}
+
+interface TranslationBannerProps {
+  state: TranslationState;
+  controller: TranslationController;
+  openTranslationSettings: () => void;
+}
+
+/**
+ * Compact single-line translation banner in `.letter-heading` reusing `.remote-banner` visual
+ * grammar (ADR-0050). Hidden completely when no provider is configured; never includes a
+ * foreground display-mode dropdown.
+ */
+export function TranslationBanner({
+  state,
+  controller,
+  openTranslationSettings,
+}: TranslationBannerProps) {
+  useUiLocale();
+  if (!state.available) return null;
+
+  if (state.phase === "translating") {
+    const progress = state.progress;
+    const text =
+      progress && progress.totalBatches > 0
+        ? m.studio_reader_translate_banner_progress({
+            completed: progress.completedBatches,
+            total: progress.totalBatches,
+          })
+        : m.studio_reader_translate_banner_progress_pending();
+    return (
+      <div
+        className="remote-banner translation-banner translating"
+        role="status"
+        aria-label={m.studio_reader_translate_banner_label()}
+      >
+        <span>{text}</span>
+        <button
+          type="button"
+          className="text-button"
+          onClick={() => controller.cancel()}
+        >
+          {m.studio_reader_translate_cancel_short()}
+        </button>
+      </div>
+    );
+  }
+
+  if (state.phase === "translated") {
+    const activeResult = state.htmlResult ?? state.plainResult;
+    if (!activeResult) return null;
+    const rawSource = activeResult.source_lang?.trim() ?? "";
+    const resolvedTarget = resolveEffectiveTargetLanguage(activeResult.target_lang);
+    const targetLabel = languageTagLabel(resolvedTarget);
+    const hasKnownSource =
+      rawSource.length > 0 &&
+      rawSource.toLowerCase() !== "unknown" &&
+      rawSource.toLowerCase() !== "auto";
+    const statusText = hasKnownSource
+      ? m.studio_reader_translate_banner_translated({
+          source: languageTagLabel(rawSource),
+          target: targetLabel,
+        })
+      : m.studio_reader_translate_banner_translated_to({
+          target: targetLabel,
+        });
+    return (
+      <div
+        className="remote-banner translation-banner translated"
+        role="status"
+        aria-label={m.studio_reader_translate_banner_label()}
+      >
+        <span>{statusText}</span>
+        <button
+          type="button"
+          className="text-button"
+          onClick={() => controller.showOriginal()}
+        >
+          {m.studio_reader_translate_original()}
+        </button>
+        <button
+          type="button"
+          className="text-button"
+          onClick={() => void controller.retranslate(openTranslationSettings)}
+        >
+          {m.studio_reader_translate_retranslate()}
+        </button>
+      </div>
+    );
+  }
+
+  if (state.phase === "error" && state.error) {
+    return (
+      <div
+        className="remote-banner translation-banner error"
+        role="alert"
+        aria-label={m.studio_reader_translate_banner_label()}
+      >
+        <span>{state.error.message}</span>
+        {state.error.action === "open_settings" ? (
+          <button
+            type="button"
+            className="text-button"
+            onClick={openTranslationSettings}
+          >
+            {m.studio_reader_translate_open_settings()}
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="text-button"
+            onClick={() => void controller.translate(false, openTranslationSettings)}
+          >
+            {m.studio_reader_translate_retry()}
+          </button>
+        )}
+        <StudioTooltip
+          label={m.studio_reader_translate_banner_dismiss()}
+          roleType="label"
+          side="bottom"
+        >
+          <button
+            type="button"
+            className="translation-banner-dismiss"
+            aria-label={m.studio_reader_translate_banner_dismiss()}
+            onClick={() => controller.dismissBanner()}
+          >
+            ×
+          </button>
+        </StudioTooltip>
+      </div>
+    );
+  }
+
+  if (!shouldShowDetectionBanner(state) || !state.detection) {
+    return null;
+  }
+
+  const detectedLabel = languageTagLabel(state.detection.language);
+  return (
+    <div
+      className="remote-banner translation-banner detected"
+      role="status"
+      aria-label={m.studio_reader_translate_banner_label()}
+    >
+      <span>
+        {m.studio_reader_translate_banner_detected({ language: detectedLabel })}
+      </span>
+      <button
+        type="button"
+        className="text-button translation-banner-primary"
+        onClick={() => void controller.translate(false, openTranslationSettings)}
+      >
+        {m.studio_reader_translate_action()}
+      </button>
+      <button
+        type="button"
+        className="text-button"
+        disabled={state.ignoringLanguage}
+        onClick={() => void controller.ignoreDetectedLanguage()}
+      >
+        {m.studio_reader_translate_banner_never({ language: detectedLabel })}
+      </button>
+      <StudioTooltip
+        label={m.studio_reader_translate_banner_dismiss()}
+        roleType="label"
+        side="bottom"
+      >
+        <button
+          type="button"
+          className="translation-banner-dismiss"
+          aria-label={m.studio_reader_translate_banner_dismiss()}
+          onClick={() => controller.dismissBanner()}
+        >
+          ×
+        </button>
+      </StudioTooltip>
     </div>
   );
 }

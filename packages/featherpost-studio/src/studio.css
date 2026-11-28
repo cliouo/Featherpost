@@ -1279,6 +1279,22 @@ kbd {
 .icon-button.starred .icon {
   fill: var(--studio-tint);
 }
+.icon-button.translate-button.translating {
+  background: var(--studio-tint);
+  color: var(--studio-primary);
+}
+.icon-button.translate-button.translating .icon {
+  animation: fp-translate-pulse 1.2s ease-in-out infinite;
+}
+@keyframes fp-translate-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.42;
+  }
+}
 .reader-menu {
   position: relative;
 }
@@ -1508,6 +1524,17 @@ kbd {
   overflow-wrap: anywhere;
   margin-bottom: 24px;
 }
+.letter-subject-translation {
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 1.45;
+  color: var(--studio-secondary);
+  overflow-wrap: anywhere;
+  margin: -14px 0 22px;
+  padding-left: 10px;
+  border-left: 2px solid var(--studio-primary);
+  animation: fp-fade-in var(--motion-fast) var(--ease-standard);
+}
 .letter-sender {
   display: flex;
   align-items: flex-start;
@@ -1591,6 +1618,63 @@ kbd {
 }
 .remote-banner.allowed {
   font-size: 10px;
+}
+.translation-banner .translation-banner-primary {
+  color: var(--studio-primary);
+  font-weight: 550;
+}
+.translation-banner.error > span {
+  color: var(--studio-danger);
+}
+.translation-banner-dismiss {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border-radius: 4px;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--studio-muted);
+  flex: none;
+  transition:
+    background-color var(--motion-instant) var(--ease-standard),
+    color var(--motion-instant) var(--ease-standard);
+}
+.translation-banner-dismiss:active:not(:disabled) {
+  background: var(--active-bg);
+}
+@media (hover: hover) {
+  .translation-banner-dismiss:hover:not(:disabled) {
+    background: var(--hover-bg);
+    color: var(--studio-text);
+  }
+}
+.studio-letter-translated {
+  white-space: normal;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.letter-plain-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.letter-plain-original,
+.letter-plain-translation {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.studio-letter-translated.bilingual .letter-plain-translation {
+  padding-left: 10px;
+  border-left: 2px solid var(--studio-primary);
+  color: var(--studio-text);
+}
+.studio-letter-translated.translated-only .letter-plain-translation {
+  color: var(--studio-secondary);
 }
 .body-note {
   font-size: 10px;
