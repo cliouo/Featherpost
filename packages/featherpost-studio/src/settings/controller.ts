@@ -2,8 +2,29 @@ import { m } from "@featherpost/i18n/messages";
 import { BridgeError } from "../bridge/errors";
 import { accountLabel } from "./accountLabel";
 
-import type { UiSnapshot } from "../bridge/types";
+import type {
+  TranslationCacheStats,
+  TranslationPreferenceView,
+  TranslationProbeResult,
+  UiTranslationProviderEntry,
+  UiTranslationProvidersResponse,
+  UiSnapshot,
+} from "../bridge/types";
 import { Store } from "../host/store";
+import {
+  BUILTIN_OPENAI_PROVIDER_ID,
+  applyOpenAiPreset,
+  buildOpenAiUpdate,
+  buildTranslationUpdate,
+  draftFromTranslationPreference,
+  resolveProbeTargetLang,
+  serializeTranslationDraft,
+  validateLanguageTag,
+  validateOpenAiDraft,
+  validateTranslationDraft,
+  type OpenAiPresetId,
+  type TranslationDraft,
+} from "./translation";
 import type {
   AccountDraft,
   AccountEdit,
@@ -143,6 +164,18 @@ export interface SettingsState {
   proxyTestResult: TestProxyResult | null;
   proxyTesting: boolean;
   proxyUrlNotice: string | null;
+  translationPreference: TranslationPreferenceView | null;
+  translationDraft: TranslationDraft | null;
+  translationBaseline: string;
+  translationProviders: UiTranslationProviderEntry[];
+  translationExternalSupported: boolean;
+  translationCatalogGeneration: number;
+  translationProvidersLoaded: boolean;
+  translationProvidersError: string | null;
+  translationCacheStats: TranslationCacheStats | null;
+  translationTestResult: TranslationProbeResult | null;
+  translationTesting: boolean;
+  translationAutoSwitchNotice: boolean;
   confirm: {
     title: string;
     body: string;
@@ -185,6 +218,18 @@ export class SettingsController {
     proxyTestResult: null,
     proxyTesting: false,
     proxyUrlNotice: null,
+    translationPreference: null,
+    translationDraft: null,
+    translationBaseline: "",
+    translationProviders: [],
+    translationExternalSupported: true,
+    translationCatalogGeneration: 0,
+    translationProvidersLoaded: false,
+    translationProvidersError: null,
+    translationCacheStats: null,
+    translationTestResult: null,
+    translationTesting: false,
+    translationAutoSwitchNotice: false,
     confirm: null,
   });
   private epoch = -1;
@@ -194,6 +239,12 @@ export class SettingsController {
   private proxyEventGeneration = 0;
   private proxyTestSeq = 0;
   private stopProxy: (() => void) | null = null;
+  private translationCatalogGen = 0;
+  private translationCatalogSynced = false;
+  private translationTestSeq = 0;
+  private translationTestProviderId: string | null = null;
+  private translationTestProviderGen = 0;
+  private stopTranslationProviders: (() => void) | null = null;
   private disposed = false;
   private confirmation: (() => void) | null = null;
   private confirmationCancel: (() => void) | null = null;
@@ -211,6 +262,17 @@ export class SettingsController {
         })
         .catch(() => {});
     }
+    if (bridge.translation?.onProvidersChanged) {
+      void bridge.translation
+        .onProvidersChanged((event) =>
+          this.applyTranslationProvidersEvent(event),
+        )
+        .then((stop) => {
+          if (this.disposed) stop();
+          else this.stopTranslationProviders = stop;
+        })
+        .catch(() => {});
+    }
   }
   get proxyDirty() {
     const s = this.store.getSnapshot();
@@ -219,12 +281,20 @@ export class SettingsController {
       serializeProxyDraft(s.proxyDraft) !== s.proxyBaseline
     );
   }
+  get translationDirty() {
+    const s = this.store.getSnapshot();
+    return !!(
+      s.translationDraft &&
+      serializeTranslationDraft(s.translationDraft) !== s.translationBaseline
+    );
+  }
   get dirty() {
     const s = this.store.getSnapshot();
     return !!(
       (s.editor && JSON.stringify(s.editor) !== s.editorBaseline) ||
       (s.rules && JSON.stringify(s.rules) !== s.rulesBaseline) ||
       this.proxyDirty ||
+      this.translationDirty ||
       s.addressForm ||
       s.choice ||
       s.rollback
@@ -234,11 +304,16 @@ export class SettingsController {
     const s = this.store.getSnapshot(),
       online = snapshot.phase === "online";
     if (this.epoch === snapshot.connection_epoch && s.online === online) return;
+    const cameOnline = online && !s.online;
     this.epoch = snapshot.connection_epoch;
     this.generation++;
     this.query++;
     this.action++;
     this.proxyTestSeq++;
+    this.translationTestSeq++;
+    this.translationTestProviderId = null;
+    this.translationCatalogGen = 0;
+    this.translationCatalogSynced = false;
     this.cancelConfirmation();
     this.store.patch({
       online,
@@ -250,9 +325,19 @@ export class SettingsController {
       proxyTesting: false,
       proxyTestResult: null,
       proxyUrlNotice: null,
+      translationTesting: false,
+      translationTestResult: null,
       ...(s.editor ? { editor: { ...s.editor, secrets: {} } } : {}),
       ...(s.proxyDraft && s.proxyDraft.password !== ""
         ? { proxyDraft: { ...s.proxyDraft, password: "" } }
+        : {}),
+      ...(s.translationDraft && s.translationDraft.openaiApiKey !== ""
+        ? {
+            translationDraft: {
+              ...s.translationDraft,
+              openaiApiKey: "",
+            },
+          }
         : {}),
       ...(s.busy
         ? {
@@ -262,6 +347,9 @@ export class SettingsController {
     });
     if (s.choice)
       void this.bridge.cancelPackage(s.choice.token).catch(() => {});
+    if (cameOnline && s.section === "maild.settings.translation") {
+      void this.refreshTranslationProviders();
+    }
   }
   activate(section: string) {
     this.store.patch({ section, error: null, notice: null });
@@ -295,7 +383,12 @@ export class SettingsController {
   }
   async load() {
     const s = this.store.getSnapshot();
-    if (!s.online || s.busy || s.closeLocked) return;
+    if (s.busy || s.closeLocked) return;
+    if (s.section === "maild.settings.translation") {
+      await this.loadTranslation();
+      return;
+    }
+    if (!s.online) return;
     const query = ++this.query,
       generation = this.generation,
       section = s.section;
@@ -963,6 +1056,467 @@ export class SettingsController {
         this.store.patch({ proxyTesting: false });
     }
   }
+  private async loadTranslation() {
+    const tr = this.bridge.translation;
+    if (!tr) return;
+    const query = ++this.query;
+    const generation = this.generation;
+    this.store.patch({ loading: true, error: null });
+    try {
+      // 1. Local translation preference & cache stats load independently from daemon status.
+      const [prefResult, cacheResult, providersResult] =
+        await Promise.allSettled([
+          tr.getTranslationPreferences(),
+          tr.getTranslationCacheStats(),
+          tr.listTranslationProviders(),
+        ]);
+      if (query !== this.query || generation !== this.generation) return;
+
+      if (prefResult.status === "fulfilled") {
+        this.applyTranslationPreferenceSnapshot(prefResult.value);
+      } else {
+        this.store.patch({ error: failure(prefResult.reason) });
+      }
+
+      if (cacheResult.status === "fulfilled") {
+        this.store.patch({ translationCacheStats: cacheResult.value });
+      }
+
+      if (providersResult.status === "fulfilled") {
+        this.applyTranslationProvidersSnapshot(providersResult.value);
+      } else {
+        this.store.patch({
+          translationProvidersLoaded: true,
+          translationProvidersError: failure(providersResult.reason),
+        });
+      }
+    } finally {
+      if (query === this.query && generation === this.generation) {
+        this.store.patch({ loading: false });
+      }
+    }
+  }
+  async refreshTranslationProviders() {
+    const tr = this.bridge.translation;
+    if (!tr || this.disposed) return;
+    const generation = this.generation;
+    try {
+      const response = await tr.listTranslationProviders();
+      if (this.disposed || generation !== this.generation) return;
+      this.applyTranslationProvidersSnapshot(response);
+    } catch (e) {
+      if (this.disposed || generation !== this.generation) return;
+      this.store.patch({
+        translationProvidersLoaded: true,
+        translationProvidersError: failure(e),
+      });
+    }
+  }
+  private applyTranslationPreferenceSnapshot(pref: TranslationPreferenceView) {
+    const nextDraft = draftFromTranslationPreference(pref);
+    const nextBaseline = serializeTranslationDraft(nextDraft);
+    const keepDraft = this.translationDirty;
+    this.store.patch({
+      translationPreference: pref,
+      translationBaseline: nextBaseline,
+      ...(keepDraft
+        ? {}
+        : {
+            translationDraft: nextDraft,
+            translationAutoSwitchNotice: false,
+          }),
+    });
+  }
+  private applyTranslationProvidersSnapshot(
+    response: UiTranslationProvidersResponse,
+  ) {
+    if (
+      this.translationCatalogSynced &&
+      response.catalog_generation < this.translationCatalogGen
+    ) {
+      return;
+    }
+    this.translationCatalogGen = response.catalog_generation;
+    this.translationCatalogSynced = true;
+
+    const s = this.store.getSnapshot();
+    let cancelStaleProbe = false;
+    if (
+      s.translationTesting &&
+      this.translationTestProviderId &&
+      this.translationTestProviderId !== BUILTIN_OPENAI_PROVIDER_ID
+    ) {
+      const active = response.providers.find(
+        (p) => p.id === this.translationTestProviderId,
+      );
+      if (
+        !response.external_supported ||
+        !active ||
+        !active.enabled ||
+        !active.registered ||
+        active.generation !== this.translationTestProviderGen
+      ) {
+        cancelStaleProbe = true;
+        this.translationTestSeq++;
+        this.translationTestProviderId = null;
+      }
+    }
+
+    // NEVER overwrite unsaved form drafts on hot provider updates.
+    this.store.patch({
+      translationProviders: response.providers,
+      translationExternalSupported: response.external_supported,
+      translationCatalogGeneration: response.catalog_generation,
+      translationProvidersLoaded: true,
+      translationProvidersError: null,
+      ...(cancelStaleProbe
+        ? { translationTesting: false, translationTestResult: null }
+        : {}),
+    });
+  }
+  applyTranslationProvidersEvent(event: UiTranslationProvidersResponse) {
+    if (this.disposed) return;
+    this.applyTranslationProvidersSnapshot(event);
+  }
+  editTranslation(patch: Partial<TranslationDraft>) {
+    const s = this.store.getSnapshot();
+    if (
+      !s.translationDraft ||
+      s.busy ||
+      s.closeLocked ||
+      s.translationPreference?.state_healthy === false
+    ) {
+      return;
+    }
+    const next: TranslationDraft = { ...s.translationDraft, ...patch };
+    if (patch.openaiApiKey !== undefined && patch.openaiApiKey.length > 0) {
+      next.openaiClearApiKey = false;
+    }
+    const providerChanged =
+      patch.activeProviderId !== undefined &&
+      patch.activeProviderId !== s.translationDraft.activeProviderId;
+    if (providerChanged) {
+      this.translationTestSeq++;
+      this.translationTestProviderId = null;
+    }
+    this.store.patch({
+      translationDraft: next,
+      translationTestResult: null,
+      ...(providerChanged ? { translationTesting: false } : {}),
+      error: null,
+    });
+  }
+  selectTranslationProvider(providerId: string) {
+    const s = this.store.getSnapshot();
+    const draft = s.translationDraft;
+    if (
+      !draft ||
+      s.busy ||
+      s.closeLocked ||
+      s.translationPreference?.state_healthy === false
+    ) {
+      return;
+    }
+    if (draft.activeProviderId === providerId) return;
+    this.translationTestSeq++;
+    this.translationTestProviderId = null;
+    const hadAuto =
+      draft.autoTranslate ||
+      Boolean(
+        s.translationPreference?.auto_translate &&
+          s.translationPreference.auto_translate_provider_id &&
+          s.translationPreference.auto_translate_provider_id !== providerId,
+      );
+    const next: TranslationDraft = {
+      ...draft,
+      activeProviderId: providerId,
+      autoTranslate: false,
+      autoTranslateProviderId: null,
+    };
+    this.store.patch({
+      translationDraft: next,
+      translationTesting: false,
+      translationTestResult: null,
+      translationAutoSwitchNotice: hadAuto && providerId !== "",
+      error: null,
+    });
+  }
+  applyTranslationPreset(presetId: OpenAiPresetId) {
+    const s = this.store.getSnapshot();
+    if (
+      !s.translationDraft ||
+      s.busy ||
+      s.closeLocked ||
+      s.translationPreference?.state_healthy === false
+    ) {
+      return;
+    }
+    const next = applyOpenAiPreset(s.translationDraft, presetId);
+    this.store.patch({
+      translationDraft: next,
+      translationTestResult: null,
+      error: null,
+    });
+  }
+  clearSavedTranslationApiKey() {
+    this.editTranslation({ openaiApiKey: "", openaiClearApiKey: true });
+  }
+  undoClearSavedTranslationApiKey() {
+    this.editTranslation({ openaiClearApiKey: false });
+  }
+  toggleTranslationAutoTranslate(enabled: boolean) {
+    const s = this.store.getSnapshot();
+    const draft = s.translationDraft;
+    if (
+      !draft ||
+      s.busy ||
+      s.closeLocked ||
+      s.translationPreference?.state_healthy === false
+    ) {
+      return;
+    }
+    const active = draft.activeProviderId.trim();
+    const nextEnabled = enabled && active.length > 0;
+    this.store.patch({
+      translationDraft: {
+        ...draft,
+        autoTranslate: nextEnabled,
+        autoTranslateProviderId: nextEnabled ? active : null,
+      },
+      translationAutoSwitchNotice: false,
+      error: null,
+    });
+  }
+  addIgnoredTranslationLanguage(rawTag: string): boolean {
+    const s = this.store.getSnapshot();
+    const draft = s.translationDraft;
+    if (
+      !draft ||
+      s.busy ||
+      s.closeLocked ||
+      s.translationPreference?.state_healthy === false
+    ) {
+      return false;
+    }
+    const tag = validateLanguageTag(rawTag);
+    if (!tag || tag.toLowerCase() === "auto") {
+      this.store.patch({ error: m.settings_translation_error_ignored_invalid() });
+      return false;
+    }
+    if (
+      draft.ignoredLanguages.some(
+        (existing) => existing.toLowerCase() === tag.toLowerCase(),
+      )
+    ) {
+      this.store.patch({ error: null });
+      return true;
+    }
+    if (draft.ignoredLanguages.length >= 64) {
+      this.store.patch({ error: m.settings_translation_error_ignored_too_many() });
+      return false;
+    }
+    this.editTranslation({
+      ignoredLanguages: [...draft.ignoredLanguages, tag],
+    });
+    return true;
+  }
+  removeIgnoredTranslationLanguage(tag: string) {
+    const s = this.store.getSnapshot();
+    const draft = s.translationDraft;
+    if (
+      !draft ||
+      s.busy ||
+      s.closeLocked ||
+      s.translationPreference?.state_healthy === false
+    ) {
+      return;
+    }
+    this.editTranslation({
+      ignoredLanguages: draft.ignoredLanguages.filter((entry) => entry !== tag),
+    });
+  }
+  async saveTranslation() {
+    const tr = this.bridge.translation;
+    const s = this.store.getSnapshot();
+    const draft = s.translationDraft;
+    if (
+      !tr ||
+      !draft ||
+      s.busy ||
+      s.closeLocked ||
+      s.translationPreference?.state_healthy === false
+    ) {
+      return;
+    }
+    const validation = validateTranslationDraft(draft, s.translationPreference);
+    if (validation) {
+      this.store.patch({ error: validation });
+      return;
+    }
+    const update = buildTranslationUpdate(draft, s.translationPreference);
+    const generation = this.generation;
+    const action = ++this.action;
+    this.query++;
+    this.store.patch({ busy: true, loading: false, error: null, notice: null });
+    try {
+      const saved = await tr.saveTranslationPreferences(update);
+      if (generation !== this.generation || action !== this.action) return;
+      const nextDraft = draftFromTranslationPreference(saved);
+      this.store.patch({
+        translationPreference: saved,
+        translationDraft: nextDraft,
+        translationBaseline: serializeTranslationDraft(nextDraft),
+        translationTestResult: null,
+        translationAutoSwitchNotice: false,
+        notice: m.settings_translation_saved(),
+      });
+      this.changed();
+      void this.refreshTranslationProviders();
+    } catch (e) {
+      if (generation !== this.generation || action !== this.action) return;
+      const now = this.store.getSnapshot().translationDraft;
+      const clearMemoryKey =
+        now && now.openaiApiKey !== ""
+          ? { translationDraft: { ...now, openaiApiKey: "" } }
+          : {};
+      this.store.patch({
+        ...clearMemoryKey,
+        error: failure(e),
+      });
+    } finally {
+      if (generation === this.generation && action === this.action) {
+        this.store.patch({ busy: false });
+      }
+    }
+  }
+  async testTranslationProvider() {
+    const tr = this.bridge.translation;
+    const s = this.store.getSnapshot();
+    const draft = s.translationDraft;
+    if (
+      !tr ||
+      !draft ||
+      s.busy ||
+      s.translationTesting ||
+      s.closeLocked ||
+      s.translationPreference?.state_healthy === false
+    ) {
+      return;
+    }
+    const providerId = draft.activeProviderId.trim();
+    if (!providerId) {
+      this.store.patch({
+        error: m.common_bridge_reason_translation_provider_not_configured(),
+      });
+      return;
+    }
+    const targetLang = resolveProbeTargetLang(draft.targetLang);
+    let draftOpenAi = null;
+    let providerGeneration = 0;
+
+    if (providerId === BUILTIN_OPENAI_PROVIDER_ID) {
+      const validation = validateOpenAiDraft(draft, s.translationPreference);
+      if (validation) {
+        this.store.patch({ error: validation });
+        return;
+      }
+      draftOpenAi = buildOpenAiUpdate(draft);
+    } else {
+      if (!s.online) {
+        this.store.patch({ error: m.common_bridge_reason_offline() });
+        return;
+      }
+      if (!s.translationExternalSupported) {
+        this.store.patch({
+          error: m.common_bridge_reason_translation_external_unsupported(),
+        });
+        return;
+      }
+      const entry = s.translationProviders.find((p) => p.id === providerId);
+      if (!entry || !entry.enabled || !entry.registered) {
+        this.store.patch({
+          error: m.common_bridge_reason_translation_provider_unavailable(),
+        });
+        return;
+      }
+      providerGeneration = entry.generation;
+    }
+
+    const generation = this.generation;
+    const seq = ++this.translationTestSeq;
+    this.translationTestProviderId = providerId;
+    this.translationTestProviderGen = providerGeneration;
+    this.store.patch({
+      translationTesting: true,
+      translationTestResult: null,
+      error: null,
+    });
+    try {
+      const result = await tr.testTranslationProvider({
+        provider_id: providerId,
+        target_lang: targetLang,
+        ...(draftOpenAi ? { draft_openai: draftOpenAi } : {}),
+      });
+      if (generation !== this.generation || seq !== this.translationTestSeq) {
+        return;
+      }
+      this.store.patch({ translationTestResult: result });
+    } catch (e) {
+      if (generation !== this.generation || seq !== this.translationTestSeq) {
+        return;
+      }
+      this.store.patch({ error: failure(e) });
+    } finally {
+      if (generation === this.generation && seq === this.translationTestSeq) {
+        this.translationTestProviderId = null;
+        this.store.patch({ translationTesting: false });
+      }
+    }
+  }
+  confirmClearTranslationCache() {
+    const s = this.store.getSnapshot();
+    if (!this.bridge.translation || s.busy || s.closeLocked) return;
+    this.ask(
+      m.settings_translation_cache_clear_confirm_title(),
+      m.settings_translation_cache_clear_confirm_body(),
+      m.settings_translation_cache_clear_action(),
+      true,
+      () => {
+        void this.clearTranslationCache();
+      },
+    );
+  }
+  async clearTranslationCache() {
+    const tr = this.bridge.translation;
+    const s = this.store.getSnapshot();
+    if (!tr || s.busy || s.closeLocked) return;
+    const generation = this.generation;
+    const action = ++this.action;
+    this.query++;
+    this.store.patch({ busy: true, loading: false, error: null, notice: null });
+    try {
+      const report = await tr.clearTranslationCache();
+      if (generation !== this.generation || action !== this.action) return;
+      this.store.patch({
+        translationCacheStats: report.stats_after,
+        notice: report.physical_reclaim_succeeded
+          ? m.settings_translation_cache_cleared({
+              count: report.cleared_entries,
+            })
+          : m.settings_translation_cache_cleared_deferred({
+              count: report.cleared_entries,
+            }),
+      });
+    } catch (e) {
+      if (generation === this.generation && action === this.action) {
+        this.store.patch({ error: failure(e) });
+      }
+    } finally {
+      if (generation === this.generation && action === this.action) {
+        this.store.patch({ busy: false });
+      }
+    }
+  }
   private async write<T>(
     work: () => Promise<T>,
     success: (value: T) => void,
@@ -1446,6 +2000,8 @@ export class SettingsController {
   }
   discard() {
     this.cancelPackage();
+    this.translationTestSeq++;
+    this.translationTestProviderId = null;
     const s = this.store.getSnapshot();
     const restoredProxy = s.proxyBaseline
       ? {
@@ -1456,6 +2012,19 @@ export class SettingsController {
       : s.proxyDraft
         ? { ...s.proxyDraft, password: "", clearPassword: false }
         : null;
+    const restoredTranslation = s.translationBaseline
+      ? {
+          ...(JSON.parse(s.translationBaseline) as TranslationDraft),
+          openaiApiKey: "",
+          openaiClearApiKey: false,
+        }
+      : s.translationDraft
+        ? {
+            ...s.translationDraft,
+            openaiApiKey: "",
+            openaiClearApiKey: false,
+          }
+        : null;
     this.store.patch({
       editor: null,
       probe: null,
@@ -1465,8 +2034,14 @@ export class SettingsController {
         ? { rules: JSON.parse(s.rulesBaseline) as Rules }
         : {}),
       ...(restoredProxy ? { proxyDraft: restoredProxy } : {}),
+      ...(restoredTranslation
+        ? { translationDraft: restoredTranslation }
+        : {}),
       proxyTestResult: null,
       proxyUrlNotice: null,
+      translationTesting: false,
+      translationTestResult: null,
+      translationAutoSwitchNotice: false,
       error: null,
     });
   }
@@ -1477,9 +2052,15 @@ export class SettingsController {
     this.disposed = true;
     this.stopProxy?.();
     this.stopProxy = null;
+    this.stopTranslationProviders?.();
+    this.stopTranslationProviders = null;
     this.generation++;
     this.query++;
     this.proxyTestSeq++;
+    this.translationTestSeq++;
+    this.translationTestProviderId = null;
+    this.translationCatalogGen = 0;
+    this.translationCatalogSynced = false;
     this.cancelConfirmation();
     this.discard();
   }

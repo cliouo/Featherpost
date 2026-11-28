@@ -21,6 +21,7 @@ import type {
   TestProxyResult,
 } from "../src/settings/types";
 import { BRAND } from "../src/brand";
+import { FakeTranslation } from "./fakeTranslation";
 export const account = (): AccountProfile => ({
   id: "acct-a",
   revision: 2,
@@ -114,6 +115,7 @@ export class FakeSettings implements SettingsBridge {
   discoverProvider?: SettingsBridge["discoverProvider"];
   openExternalUrl?: SettingsBridge["openExternalUrl"];
   openRecovery?: SettingsBridge["openRecovery"];
+  translation: FakeTranslation = new FakeTranslation();
   async profiles() {
     return structuredClone(this.profileRows);
   }

@@ -161,6 +161,10 @@ const SETTINGS_SECTION_KEYWORDS: Readonly<
     title: m.studio_settings_section_network,
     aliases: m.studio_palette_nav_settings_network_keywords,
   },
+  "maild.settings.translation": {
+    title: m.studio_settings_section_translation,
+    aliases: m.studio_palette_nav_settings_translation_keywords,
+  },
   "maild.settings.connection": {
     title: m.studio_settings_section_connection,
     aliases: m.studio_palette_nav_settings_connection_keywords,

@@ -68,6 +68,7 @@
   "extensions_permission_settings": "Settings (reads and writes settings)",
   "extensions_permission_settings_read": "Read app settings",
   "extensions_permission_settings_write": "Change app settings",
+  "extensions_permission_translation_provider": "Provide email translation",
   "extensions_permission_transport_provider": "Provide mail sending and receiving",
   "extensions_permission_unknown": "Unrecognized capability or permission",
   "extensions_permissions_none": "No mail API permissions declared",

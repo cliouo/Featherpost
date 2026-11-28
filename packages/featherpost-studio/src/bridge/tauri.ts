@@ -4,6 +4,20 @@ import { listen } from '@tauri-apps/api/event';
 
 import { BridgeError, errorCode } from './errors';
 import { followDaemonLocale, startupLocale } from './locale';
+import {
+  TRANSLATION_PROGRESS_EVENT,
+  TRANSLATION_PROVIDERS_EVENT,
+  type TranslationBridge,
+  type TranslationCacheClearReport,
+  type TranslationCacheStats,
+  type TranslationPreferenceView,
+  type TranslationProbeResult,
+  type UiHtmlTranslationResult,
+  type UiLanguageDetection,
+  type UiPlainTranslationResult,
+  type UiTranslationProgress,
+  type UiTranslationProvidersResponse,
+} from './translation';
 import type {
   LocaleBridge,
   MailBridge,
@@ -71,6 +85,41 @@ const tauriProxy: ProxyBridge = {
   },
 };
 
+const tauriTranslation: TranslationBridge = {
+  getTranslationPreferences: () =>
+    call<TranslationPreferenceView>('ui_translation_get_preference'),
+  saveTranslationPreferences: (update) =>
+    call<TranslationPreferenceView>('ui_translation_save_preference', { update }),
+  listTranslationProviders: () =>
+    call<UiTranslationProvidersResponse>('ui_translation_list_providers'),
+  testTranslationProvider: (request) =>
+    call<TranslationProbeResult>('ui_translation_test_provider', { request }),
+  detectEmailLanguage: (request) =>
+    call<UiLanguageDetection>('ui_translation_detect_language', { request }),
+  translateHtmlDocument: (request) =>
+    call<UiHtmlTranslationResult>('ui_translation_translate_html', { request }),
+  translatePlainTextMessage: (request) =>
+    call<UiPlainTranslationResult>('ui_translation_translate_plain', { request }),
+  cancelTranslation: (jobId) =>
+    call<boolean>('ui_translation_cancel', { job_id: jobId }),
+  getTranslationCacheStats: () =>
+    call<TranslationCacheStats>('ui_translation_cache_stats'),
+  clearTranslationCache: () =>
+    call<TranslationCacheClearReport>('ui_translation_clear_cache'),
+  onProvidersChanged: async (handler) => {
+    if (!isTauri()) return () => {};
+    return listen<UiTranslationProvidersResponse>(TRANSLATION_PROVIDERS_EVENT, (event) =>
+      handler(event.payload),
+    );
+  },
+  onProgress: async (handler) => {
+    if (!isTauri()) return () => {};
+    return listen<UiTranslationProgress>(TRANSLATION_PROGRESS_EVENT, (event) =>
+      handler(event.payload),
+    );
+  },
+};
+
 export const tauriBridge: MailBridge = {
   settings: {
     profiles:()=>call('ui_settings_profiles'),probe:request=>call('ui_settings_probe',{request}),
@@ -90,6 +139,7 @@ export const tauriBridge: MailBridge = {
     discoverProvider:async address=>{ try { return await call('ui_settings_discover_provider',{address}); } catch { return null; } },
     openExternalUrl:url=>openExternalUrl(url),
     openRecovery:()=>call('ui_open_native_recovery'),
+    translation: tauriTranslation,
   },
   mailbox: {
     profiles:()=>call('ui_mailbox_profiles'), query:(query,offset)=>call('ui_mailbox_query',{query,offset}),
@@ -159,6 +209,7 @@ export const tauriBridge: MailBridge = {
   openExternalUrl,
   locale: tauriLocale,
   proxy: tauriProxy,
+  translation: tauriTranslation,
 };
 
 // 默认前端与 Studio 都从这里取桥：导入即开始跟随 daemon 的语言偏好（启动值 + `maild://locale`）。

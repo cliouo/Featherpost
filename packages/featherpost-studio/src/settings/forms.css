@@ -566,6 +566,131 @@ body[data-studio-settings] .mail-dialog .setting-copy {
 .proxy-test-section > h3:first-child {
   margin-top: 0;
 }
+/* Translation settings */
+.translation-provider-card {
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: default;
+}
+.translation-provider-radio {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+}
+.translation-provider-copy {
+  flex: 1;
+}
+.translation-provider-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.translation-provider-actions {
+  flex-shrink: 0;
+}
+.translation-provider-footer {
+  margin: -6px 0 8px;
+}
+.translation-provider-footer .text-button {
+  padding-inline: 0;
+}
+.translation-notice-copy {
+  margin: 0 0 8px;
+}
+.translation-lan-check {
+  margin: 4px 0 0;
+  color: var(--ink);
+}
+.translation-test-block {
+  margin-top: 8px;
+}
+.translation-ignored-section {
+  margin-top: 16px;
+}
+.translation-lang-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 10px 0 12px;
+}
+.translation-lang-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--ink);
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+.translation-lang-chip-remove {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  min-height: 0;
+  padding: 0;
+  border-radius: 999px;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--muted);
+  background: transparent;
+  transition: background-color var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard);
+}
+@media (hover: hover) {
+  .translation-lang-chip-remove:hover:not(:disabled) {
+    background: var(--hover-bg);
+    color: var(--ink);
+  }
+}
+.translation-ignored-add {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0 18px;
+}
+.translation-ignored-add > input {
+  font: inherit;
+  color: var(--ink);
+  background: var(--canvas);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  padding: 8px 10px;
+  width: 140px;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+.translation-cache-section > h3:first-child {
+  margin-top: 0;
+}
+.translation-cache-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 16px;
+}
+.translation-cache-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.translation-cache-metric span {
+  font-size: 11px;
+  color: var(--muted);
+}
+.translation-cache-metric strong {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
 @media (max-width: 1000px) {
   .settings-field-pair {
     grid-template-columns: 1fr;

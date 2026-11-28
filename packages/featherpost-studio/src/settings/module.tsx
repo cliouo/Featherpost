@@ -14,6 +14,7 @@ import { Accounts } from "./Accounts";
 import { Addresses } from "./Addresses";
 import { NetworkProxy } from "./NetworkProxy";
 import { Notifications } from "./Notifications";
+import { Translation } from "./Translation.tsx";
 import { Extensions as ManagedExtensions } from "./Extensions";
 import { Dialog } from "../mailbox/Dialog";
 
@@ -46,6 +47,7 @@ const descriptions: Record<string, () => string> = {
   "maild.settings.addresses": m.studio_settings_description_addresses,
   "maild.settings.extensions": m.studio_settings_description_extensions,
   "maild.settings.network": m.studio_settings_description_network,
+  "maild.settings.translation": m.studio_settings_description_translation,
   "maild.settings.connection": m.studio_settings_description_connection,
 };
 
@@ -287,7 +289,7 @@ export function settingsModule(
     };
     const Section = active?.render;
     const accounts = active?.id === "maild.settings.accounts";
-    const refreshDisabled = state.busy || state.loading || state.closeLocked || !state.online || controller.dirty;
+    const refreshDisabled = state.busy || state.loading || state.closeLocked || (!state.online && active?.id !== "maild.settings.translation") || controller.dirty;
     const refresh = () => void (state.section === "maild.settings.extensions" ? controller.reconcilePackages() : controller.load());
     return (
       <div className="page settings-page studio-settings">
@@ -527,6 +529,14 @@ export function settingsModule(
         },
         order: 80,
         render: () => <NetworkProxy controller={controller} />,
+      },
+      {
+        id: "maild.settings.translation",
+        get title() {
+          return m.studio_settings_section_translation();
+        },
+        order: 85,
+        render: () => <Translation controller={controller} />,
       },
       {
         id: "maild.settings.connection",

@@ -90,6 +90,7 @@ it("registers every built-in settings section with Studio theme preview", () => 
     "maild.settings.extensions",
     "maild.settings.network",
     "maild.settings.notifications",
+    "maild.settings.translation",
   ]);
   const appearanceHtml = renderToStaticMarkup(
     createElement(

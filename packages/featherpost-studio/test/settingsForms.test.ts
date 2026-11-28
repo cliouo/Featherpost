@@ -329,7 +329,7 @@ it("settings module titles and pages follow the UI language without re-registeri
   host.registerBuiltin(bundle);
   try {
     const titles = () => host.registry.getSnapshot().settings.map(({ value }) => value.title);
-    expect(titles()).toEqual(["账户", "外观与操作", "通知与规则", "地址与别名", "扩展", "网络与代理", "后台与存储"]);
+    expect(titles()).toEqual(["账户", "外观与操作", "通知与规则", "地址与别名", "扩展", "网络与代理", "翻译", "后台与存储"]);
     applyEffectiveLocales(["en"]);
     expect(titles()).toEqual([
       "Accounts",
@@ -338,6 +338,7 @@ it("settings module titles and pages follow the UI language without re-registeri
       "Addresses & aliases",
       "Extensions",
       "Network & proxy",
+      "Translation",
       "Background & storage",
     ]);
     expect(host.registry.findView("maild.settings.page")?.title).toBe("Settings");

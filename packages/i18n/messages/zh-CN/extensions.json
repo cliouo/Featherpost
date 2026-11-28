@@ -68,6 +68,7 @@
   "extensions_permission_settings": "设置（读写设置）",
   "extensions_permission_settings_read": "读取应用设置",
   "extensions_permission_settings_write": "修改应用设置",
+  "extensions_permission_translation_provider": "提供邮件翻译服务",
   "extensions_permission_transport_provider": "提供邮件收发服务",
   "extensions_permission_unknown": "未识别的功能或权限",
   "extensions_permissions_none": "未声明邮件 API 权限",
