@@ -5,8 +5,12 @@ import {
   StudioDropdownMenuItem,
 } from "./app/DropdownMenu";
 import type { Host } from "./host/host";
+import { Store } from "./host/store";
 import { useDarkShell } from "./app/theme";
-import { readingDocumentUrl } from "./readingTheme";
+import {
+  readingDocumentUrl,
+  translatedReadingDocumentUrl,
+} from "./readingTheme";
 import { useStore } from "./host/hooks";
 import { useUiLocale } from "./i18n";
 import { Icon } from "./app/Icon";
@@ -20,6 +24,10 @@ import {
   type DocumentController,
 } from "./mailbox/document";
 import {
+  type TranslationController,
+  type TranslationState,
+} from "./mailbox/translationController";
+import {
   displayName,
   addressOnly,
   fullDate,
@@ -29,6 +37,7 @@ import {
   LinkSheet,
   OtpBar,
   RemoteBanner,
+  TranslationBanner,
 } from "./mailbox/ReaderParts";
 import { Thread } from "./mailbox/Thread";
 import { detectOtpCode } from "./mailbox/otp";
@@ -42,8 +51,50 @@ import { addressMenu, messageMenu } from "./menus";
 import { useStudioActions } from "./studioActions";
 import { useMailMenu } from "./Workspace";
 import { ShortcutKeys } from "./ShortcutKeys";
-import { STUDIO_SHORTCUT_KEYS } from "./shortcuts";
+import { formatAriaKeyShortcuts, STUDIO_SHORTCUT_KEYS } from "./shortcuts";
 import { StudioTooltip } from "./ui";
+
+const EMPTY_TRANSLATION_STORE = new Store<TranslationState>({
+  available: false,
+  messageKey: null,
+  contentKind: null,
+  documentToken: null,
+  preference: null,
+  providers: [],
+  providersCatalogGeneration: 0,
+  externalSupported: true,
+  availability: { ready: false, reason: "bridge_unavailable", providerId: "" },
+  phase: "idle",
+  detection: null,
+  bannerDismissed: false,
+  progress: null,
+  htmlResult: null,
+  plainResult: null,
+  error: null,
+  ignoringLanguage: false,
+});
+
+function translateButtonTooltip(t: TranslationState): string {
+  if (t.phase === "translating") return m.studio_reader_translate_cancel();
+  if (t.phase === "translated") return m.studio_reader_translate_original();
+  if (!t.availability.ready) {
+    switch (t.availability.reason) {
+      case "disabled":
+        return m.studio_reader_translate_tooltip_disabled();
+      case "offline":
+        return m.studio_reader_translate_tooltip_offline();
+      case "unregistered":
+        return m.studio_reader_translate_tooltip_unregistered();
+      case "unconfigured":
+      case "config_unhealthy":
+      case "external_unsupported":
+        return m.studio_reader_translate_tooltip_unconfigured();
+      default:
+        return m.studio_reader_translate();
+    }
+  }
+  return m.studio_reader_translate();
+}
 
 export function ReaderMoreMenu({
   seen,
@@ -99,16 +150,19 @@ export function ReadingPane({
   controller,
   documents,
   composer,
+  translation,
 }: {
   host: Host;
   controller: MailboxController;
   documents: DocumentController;
   composer: ComposeController;
+  translation?: TranslationController;
 }) {
   useUiLocale();
   const s = useStore(controller.store),
     d = useStore(documents.store),
-    compose = useStore(composer.store);
+    compose = useStore(composer.store),
+    t = useStore(translation ? translation.store : EMPTY_TRANSLATION_STORE);
   const row = s.selectedRow,
     detail = s.detail,
     body = presentation(detail, d);
@@ -133,6 +187,30 @@ export function ReadingPane({
   const menu = useContextMenu(),
     actions = useStudioActions(),
     menuDeps = useMailMenu(controller, composer);
+  const openTranslationSettings = () => {
+    if (actions.openSettingsSection) {
+      actions.openSettingsSection("maild.settings.translation");
+      return;
+    }
+    host.openRole("settings");
+  };
+  const translateLabel = translateButtonTooltip(t);
+  const displayMode =
+    t.preference?.display_mode === "translated_only"
+      ? "translated_only"
+      : "bilingual";
+  const showingTranslated =
+    Boolean(translation?.available) &&
+    t.phase === "translated" &&
+    (body.mode === "html"
+      ? Boolean(t.htmlResult && t.htmlResult.token === body.token)
+      : Boolean(t.plainResult));
+  const translatedSubject = showingTranslated
+    ? ((body.mode === "html"
+        ? t.htmlResult?.translated_subject
+        : t.plainResult?.translated_subject) ?? null)
+    : null;
+  const originalSubject = row?.subject || m.studio_message_no_subject();
   return (
     <section className="reader-column" aria-label={m.studio_reader_label()}>
       <div className="reader-actions">
@@ -209,6 +287,31 @@ export function ReadingPane({
             <Icon name="star" />
           </button>
         </StudioTooltip>
+        {translation?.available && (
+          <StudioTooltip
+            label={translateLabel}
+            shortcut={STUDIO_SHORTCUT_KEYS.translateMessage}
+            roleType="label"
+            side="bottom"
+          >
+            <button
+              type="button"
+              className={`icon-button translate-button${t.phase === "translated" ? " active" : ""}${t.phase === "translating" ? " translating" : ""}`}
+              aria-label={translateLabel}
+              aria-pressed={t.phase === "translated"}
+              aria-busy={t.phase === "translating" || undefined}
+              aria-keyshortcuts={formatAriaKeyShortcuts(
+                STUDIO_SHORTCUT_KEYS.translateMessage,
+              )}
+              disabled={!row || !detail}
+              onClick={() =>
+                void translation.toggleTranslate(openTranslationSettings)
+              }
+            >
+              <Icon name="translate" />
+            </button>
+          </StudioTooltip>
+        )}
         <ReaderMoreMenu
           key={row ? messageKey(row) : "empty"}
           seen={row?.seen}
@@ -337,7 +440,20 @@ export function ReadingPane({
           >
             <div className="letter-view" key={messageKey(row)}>
             <header className="letter-heading">
-              <h2>{row.subject || m.studio_message_no_subject()}</h2>
+              <h2>
+                {showingTranslated &&
+                displayMode === "translated_only" &&
+                translatedSubject
+                  ? translatedSubject
+                  : originalSubject}
+              </h2>
+              {showingTranslated &&
+                displayMode === "bilingual" &&
+                translatedSubject && (
+                  <p className="letter-subject-translation">
+                    {translatedSubject}
+                  </p>
+                )}
               <div className="letter-sender">
                 <div
                   onContextMenu={(e) =>
@@ -389,6 +505,13 @@ export function ReadingPane({
                   onPolicyChanged={() => controller.reloadSelected()}
                 />
               )}
+              {detail && translation && (
+                <TranslationBanner
+                  state={t}
+                  controller={translation}
+                  openTranslationSettings={openTranslationSettings}
+                />
+              )}
             </header>
             {s.loadingDetail || body.mode === "loading" ? (
               <div className="body-loading" role="status">
@@ -398,7 +521,18 @@ export function ReadingPane({
               <iframe
                 className="studio-mail-frame"
                 key={body.token}
-                src={readingDocumentUrl(body.url, dark && !originalColors)}
+                src={
+                  showingTranslated &&
+                  t.htmlResult &&
+                  t.htmlResult.token === body.token
+                    ? translatedReadingDocumentUrl(
+                        body.url,
+                        t.htmlResult,
+                        displayMode,
+                        dark && !originalColors,
+                      )
+                    : readingDocumentUrl(body.url, dark && !originalColors)
+                }
                 sandbox=""
                 referrerPolicy="no-referrer"
                 title={m.studio_reader_frame_title()}
@@ -406,9 +540,30 @@ export function ReadingPane({
             ) : (
               detail && (
                 <>
-                  <pre className="studio-letter">
-                    {detail.body || m.studio_reader_body_empty()}
-                  </pre>
+                  {showingTranslated &&
+                  t.plainResult &&
+                  t.plainResult.blocks.length > 0 ? (
+                    <div
+                      className={`studio-letter studio-letter-translated ${displayMode === "translated_only" ? "translated-only" : "bilingual"}`}
+                    >
+                      {t.plainResult.blocks.map((block) => (
+                        <div className="letter-plain-block" key={block.id}>
+                          {displayMode === "bilingual" && (
+                            <p className="letter-plain-original">
+                              {block.original}
+                            </p>
+                          )}
+                          <p className="letter-plain-translation">
+                            {block.translated}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <pre className="studio-letter">
+                      {detail.body || m.studio_reader_body_empty()}
+                    </pre>
+                  )}
                   {body.mode === "text" && body.note && detail.has_html && (
                     <p className="body-note">{body.note}</p>
                   )}

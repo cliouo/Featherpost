@@ -20,6 +20,8 @@ Featherpost 的文档按“入口、架构、设计、状态、路线、运维�
 | [design/tauri/README.md](design/tauri/README.md) | Tauri 默认前端 UI/UX 评审稿、离线原型、视觉/交互规范与交付顺序 | 设计变更或切片落地时更新（03-A 已按此实现骨架） |
 | [protocol/README.md](protocol/README.md) | JSON-RPC v1、传输、通知和 CLI 契约 | 协议行为变化时同步实现和 e2e |
 | [plugins/README.md](plugins/README.md) | 外部 frontend package v1：受管目录、manifest、生命周期和安全边界 | manifest schema、安装规则或外部 capability 变化时更新 |
+| [plugins/translation-provider.md](plugins/translation-provider.md) | 第三方热插拔翻译插件（`translation_provider`）从零开发指南、JSON-RPC 契约与 Rust/Python 骨架 | 翻译插件协议、占位符规则、限额或安装流程变化时更新 |
+| [translation.md](translation.md) | 邮件翻译使用与隐私指南（内置 OpenAI 兼容/Ollama、第三方插件、本地缓存与自动外发边界） | 翻译配置、缓存策略或阅读区交互变化时更新 |
 | [operations/README.md](operations/README.md) | 启动、健康、关闭、恢复、资源边界、发布 workflow 仓库配置与可选国内 crates.io 镜像 | 运行行为或限制变化时更新 |
 | [BRANDING.md](BRANDING.md) | 品牌切换指南：`brand.toml` 字段、`scripts/sync-brand.sh` 派生文件、改名代价与 CI 门禁 | `brand.toml` 字段或派生文件集合变化时更新 |
 | [testing/README.md](testing/README.md) | 真实服务、平台兼容性、外部验证记录与 release 守护进程资源实测基线 | 每次真实环境验证或基准复测后追加证据 |
@@ -73,6 +75,7 @@ Featherpost 的文档按“入口、架构、设计、状态、路线、运维�
 | [decisions/0047-decoupled-brand-and-open-source-readiness.md](decisions/0047-decoupled-brand-and-open-source-readiness.md) | 品牌与代码解耦：`brand.toml` 单一事实来源、`sync-brand.sh` 派生与 `--check` 门禁、macOS 打包品牌中立模板与 `brand.env` 驱动、GitHub Actions 品牌无关产物名与 `MACOS_*` 仓库变量、MIT OR Apache-2.0、上游公开链接替代本地 `reference/` / `paper.pdf` / `vendor/cordis` | 品牌字段、派生文件、打包模板占位符、provisional 门禁或开源发布边界变化时更新 |
 | [decisions/0048-locale-preference-and-decoupled-i18n.md](decisions/0048-locale-preference-and-decoupled-i18n.md) | 语言偏好与解耦 i18n：用户语言选择持久化、前后端与系统菜单语言协商、`packages/i18n` 目录与构建期校验门禁 | 语言协商规则、catalog schema 或 i18n 门禁变化时更新 |
 | [decisions/0049-retire-legacy-ui-studio-sole-builtin.md](decisions/0049-retire-legacy-ui-studio-sole-builtin.md) | 退役原版 `dev.featherpost.ui`，以 `dev.featherpost.studio` 为唯一内置前端：workspace 升至 `0.4.0` 避免 `0.3.4` 降级陷阱、旧配置只读迁移且不静默删磁盘目录、移除 `studio` feature 与双前端打包脚本、前端收口为单一包 | 内置前端身份、退役前端迁移语义或单载荷打包布局变化时更新 |
+| [decisions/0050-email-translation-and-provider-plugins.md](decisions/0050-email-translation-and-provider-plugins.md) | 邮件翻译架构与热插拔外部翻译 Provider 插件总线：双层 Cordis 体系、`translation_provider` 可撤销代次、非阻塞可取消 IPC、凭据与端点绑定、防隐式闭合安全 HTML 重写与极简阅读区 UX | 翻译总线协议、权限边界、缓存或安全重写契约变化时更新 |
 | [rust-port-design.md](rust-port-design.md) | cordis 方法论到 Rust 的设计映射 | 内核语义或 API 变化时更新 |
 | [m0-spike.md](m0-spike.md) | TS M0 spike 的历史结果与规格对照 | 仅在重新验证 M0 时更新 |
 

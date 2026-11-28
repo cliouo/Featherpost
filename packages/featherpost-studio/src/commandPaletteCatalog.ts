@@ -87,6 +87,8 @@ const SELECTION_COMMAND_IDS = new Set([
   "maild.mailbox.archive",
   "maild.mailbox.move",
   "maild.mailbox.delete",
+  "maild.mailbox.translate",
+  "maild.mailbox.retranslate",
   "maild.mailbox.toggle-thread",
   "maild.mailbox.clear-checked",
 ]);

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { Store } from '../src/host/store';
+import { messageKey } from '../src/mailbox/controller';
 import { DocumentController, presentation, shouldAllowRemote, truncationNote } from '../src/mailbox/document';
 import type { UiMessage } from '../src/bridge/types';
 import { BRAND } from '../src/brand';
@@ -142,6 +143,41 @@ describe('DocumentController', () => {
     documents.stop();
     expect(bridge.linkHandler).toBeNull();
     expect(bridge.released).toEqual(['cur']);
+  });
+
+  it('advances generation when switching from preparing HTML mail to plain-text mail so stale HTML tokens are released and ignored', async () => {
+    const bridge = new FakeBridge();
+    const documents = new DocumentController(bridge);
+    const html = htmlMail('10');
+    const plain = message('INBOX', '11');
+
+    documents.show(html);
+    expect(bridge.prepareRequests).toHaveLength(1);
+    expect(documents.store.getSnapshot().status).toBe('preparing');
+
+    // Switch immediately to a plain-text message while HTML prepare is still in flight.
+    documents.show(plain);
+    expect(documents.store.getSnapshot()).toMatchObject({
+      key: messageKey(plain),
+      status: 'ready',
+      document: null,
+      error: null,
+    });
+
+    // Late HTML prepare resolves: must NOT overwrite the plain-text state and MUST release its token.
+    bridge.prepareRequests[0]!.d.resolve(doc('stale-html-token'));
+    await flush();
+    expect(documents.store.getSnapshot()).toMatchObject({
+      key: messageKey(plain),
+      status: 'ready',
+      document: null,
+      error: null,
+    });
+    expect(bridge.released).toEqual(['stale-html-token']);
+    expect(presentation(plain, documents.store.getSnapshot())).toEqual({
+      mode: 'text',
+      note: '此缓存中没有 HTML 版式，显示纯文本。',
+    });
   });
 
   it('keeps the no-html document shape honest', () => {

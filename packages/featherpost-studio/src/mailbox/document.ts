@@ -120,6 +120,7 @@ export class DocumentController {
   show(detail: UiMessage) {
     const key = messageKey(detail);
     const state = this.store.getSnapshot();
+    this.requests.invalidate();
     this.release();
     if (!detail.has_html) {
       this.store.patch({ key, status: 'ready', document: null, error: null, pendingLink: null });

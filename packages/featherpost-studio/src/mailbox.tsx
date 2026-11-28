@@ -6,6 +6,7 @@ import { bilingualKeywords } from "./i18n";
 import { MailboxController, messageKey } from "./mailbox/controller";
 import type { Scope } from "./mailbox/types";
 import { DocumentController } from "./mailbox/document";
+import { TranslationController } from "./mailbox/translationController";
 import { ActivityController } from "./mailbox/activityController";
 import { Activity } from "./Activity";
 import { ReadingPrivacySection } from "./mailbox/ReadingPrivacy";
@@ -14,6 +15,7 @@ import type { ComposeController } from "./compose/controller";
 import { Workspace } from "./Workspace";
 import { MAIL, ACTIVITY } from "./views";
 import { groupedBridge } from "./groupQuery";
+import { STUDIO_SHORTCUT_KEYS } from "./shortcuts";
 export { MAIL, ACTIVITY } from "./views";
 
 function summarizeScope(scope: Scope): HostScopeSummary {
@@ -62,6 +64,7 @@ export function studioMailbox(
   host: Host,
   composer: ComposeController,
   setup: () => void,
+  openSettingsSection?: (sectionId: string) => void,
 ) {
   const controller = new MailboxController(
     groupedBridge(host.bridge),
@@ -162,9 +165,33 @@ export function studioMailbox(
     };
   });
   const documents = new DocumentController(host.bridge);
+  const translation = new TranslationController(host.bridge);
   const activity = new ActivityController(host.bridge.mailbox);
   const stopDocuments = documents.bindTo(controller.store);
+  const stopTranslation = translation.bindTo(
+    controller.store,
+    documents.store,
+    host.state,
+  );
   void documents.start();
+  void translation.start();
+  const openTranslationSettings = () => {
+    if (openSettingsSection) {
+      openSettingsSection("maild.settings.translation");
+      return;
+    }
+    host.openRole("settings");
+  };
+  const canTranslateSelected = () => {
+    if (!isMailboxActive() || !translation.available) return false;
+    const s = controller.state;
+    return Boolean(
+      s.selectedRow &&
+        s.selected &&
+        s.detail &&
+        messageKey(s.selectedRow) === messageKey(s.selected),
+    );
+  };
   let seen = { revision: -2, epoch: -1 };
   let lastView = host.state.getSnapshot().activeViewId;
   const sync = () => {
@@ -521,6 +548,60 @@ export function studioMailbox(
         },
       },
       {
+        id: "maild.mailbox.translate",
+        get title() {
+          const phase = translation.store.getSnapshot().phase;
+          if (phase === "translating") return m.mailbox_command_translate_cancel();
+          if (phase === "translated") return m.mailbox_command_translate_original();
+          return m.mailbox_command_translate();
+        },
+        get description() {
+          return m.mailbox_command_translate_description();
+        },
+        get keywords() {
+          return bilingualKeywords(
+            m.mailbox_command_translate,
+            m.mailbox_command_translate_keywords,
+          );
+        },
+        shortcut: STUDIO_SHORTCUT_KEYS.translateMessage,
+        risk: "read",
+        icon: "translate",
+        locations: ["palette"],
+        order: 155,
+        enabledWhen: "message-selected",
+        canExecute: canTranslateSelected,
+        execute: () => {
+          if (!canTranslateSelected()) return;
+          void translation.toggleTranslate(openTranslationSettings);
+        },
+      },
+      {
+        id: "maild.mailbox.retranslate",
+        get title() {
+          return m.mailbox_command_retranslate();
+        },
+        get description() {
+          return m.mailbox_command_retranslate_description();
+        },
+        get keywords() {
+          return bilingualKeywords(
+            m.mailbox_command_retranslate,
+            m.mailbox_command_retranslate_keywords,
+          );
+        },
+        risk: "read",
+        icon: "translate",
+        locations: ["palette"],
+        order: 156,
+        enabledWhen: "message-selected",
+        canExecute: canTranslateSelected,
+        execute: () => {
+          if (!canTranslateSelected()) return;
+          void translation.retranslate(openTranslationSettings);
+        },
+      },
+      {
         id: "maild.mailbox.toggle-thread",
         get title() {
           return controller.state.threadOpen
@@ -595,6 +676,7 @@ export function studioMailbox(
             documents={documents}
             composer={composer}
             setup={setup}
+            translation={translation}
           />
         ),
       },
@@ -632,11 +714,13 @@ export function studioMailbox(
       stopContext();
       stopState();
       stopIntent();
+      stopTranslation();
       stopDocuments();
+      translation.stop();
       documents.stop();
       controller.stop();
       activity.hide();
     },
   };
-  return { controller, bundle, setup };
+  return { controller, translation, bundle, setup };
 }

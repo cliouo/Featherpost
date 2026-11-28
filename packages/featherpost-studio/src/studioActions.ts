@@ -15,6 +15,8 @@ export interface StudioActions {
   updateSearchFilters?(query: MailboxQuery, meta?: SearchFilterMeta): void;
   /** Opens the read-only keyboard shortcuts cheat sheet dialog without triggering view navigation. */
   openShortcuts?(): void;
+  /** Opens a specific Settings section through the shell's guarded navigation path. */
+  openSettingsSection?(sectionId: string): void;
   copy(text: string, what: string): void;
 }
 

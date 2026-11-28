@@ -448,6 +448,7 @@ export function Studio({
       });
     },
     openShortcuts: () => openShortcutsHelp(),
+    openSettingsSection: navigateSettingsSection,
     copy: clipboardCopier((text) => host.notify(text)),
   };
   const folderActions: FolderActions = {

@@ -14,6 +14,7 @@ import { useSelectedRowScroll } from "./mailbox/listScroll";
 import { displayName, shortDate } from "./mailbox/format";
 import { Actions } from "./mailbox/Actions";
 import type { DocumentController } from "./mailbox/document";
+import type { TranslationController } from "./mailbox/translationController";
 import type { ComposeController } from "./compose/controller";
 import { ReadingPane } from "./ReadingPane";
 import { applySearchQuery, scopeContext, filterUnread } from "./navigation";
@@ -67,12 +68,14 @@ export function Workspace({
   documents,
   composer,
   setup,
+  translation,
 }: {
   host: Host;
   controller: MailboxController;
   documents: DocumentController;
   composer: ComposeController;
   setup(): void;
+  translation?: TranslationController;
 }) {
   useUiLocale();
   const s = useStore(controller.store);
@@ -148,10 +151,27 @@ export function Workspace({
         stepList(-1, e.repeat);
       }
       if (e.key === "Escape") listActions.clearOpenSelection();
+      if (
+        e.shiftKey &&
+        !e.repeat &&
+        (e.key === "T" || e.key === "t") &&
+        translation?.available &&
+        controller.store.getSnapshot().selectedRow &&
+        controller.store.getSnapshot().detail
+      ) {
+        e.preventDefault();
+        void translation.toggleTranslate(() => {
+          if (actions.openSettingsSection) {
+            actions.openSettingsSection("maild.settings.translation");
+          } else {
+            host.openRole("settings");
+          }
+        });
+      }
     };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
-  }, [listActions, revealSelected, setPendingIntent]);
+  }, [actions, controller, host, listActions, revealSelected, setPendingIntent, translation]);
   const day = (at: number) =>
     new Date(at * 1000).toDateString() === new Date().toDateString()
       ? m.studio_list_day_today()
@@ -508,6 +528,7 @@ export function Workspace({
             controller={controller}
             documents={documents}
             composer={composer}
+            translation={translation}
           />
         )}
       </div>

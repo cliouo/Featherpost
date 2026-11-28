@@ -54,11 +54,16 @@ const openSettingsSection = (sectionId: string) => {
     settings.activate(sectionId);
   });
 };
-const mailbox = studioMailbox(host, composer, () => {
-  openSettingsWith(() => {
-    settings.openSetup();
-  });
-});
+const mailbox = studioMailbox(
+  host,
+  composer,
+  () => {
+    openSettingsWith(() => {
+      settings.openSetup();
+    });
+  },
+  openSettingsSection,
+);
 host.registerBuiltin(mailbox.bundle);
 host.registerBuiltin(composeModule(host, composer));
 host.registerBuiltin(settingsModule(host, settings, language));
